@@ -665,9 +665,9 @@ void PresetUpdater::priv::sync_vendor_config(const std::string& vendor_id)
     AppConfig *app_config = GUI::wxGetApp().app_config;
     std::string url = app_config->profile_update_url()
         + "?vendor=" + Http::url_encode(vendor_id)
-        + "&app_version=" + Http::url_encode(SLIC3R_VERSION);
+        + "&orca_version=" + Http::url_encode(SoftFever_VERSION);
 
-    std::string online_version_str;
+    std::string online_version_str; // this represents the PROFILE VERSION, not ORCA VERSION
     std::string download_url_str;
 
     Http::get(url)
@@ -681,8 +681,8 @@ void PresetUpdater::priv::sync_vendor_config(const std::string& vendor_id)
             if (http_status != 200) return;
             try {
                 json j = json::parse(body);
-                if (j.contains("version") && j.contains("download_url")) {
-                    online_version_str = j["version"].get<std::string>();
+                if (j.contains("vendor_version") && j.contains("download_url")) {
+                    online_version_str = j["vendor_version"].get<std::string>();
                     download_url_str = j["download_url"].get<std::string>();
                 }
             } catch (const std::exception& e) {
@@ -732,9 +732,10 @@ void PresetUpdater::priv::sync_vendor_config(const std::string& vendor_id)
 
     if (!download_ok || cancel || vendor_check_cancel) return;
 
-    // Extract to cache_path (zip contains profiles/ prefix internally)
+    // Extract vendor profile bundles under ota/profiles. The downloaded zip contains
+    // the vendor json/folder at its root.
     BOOST_LOG_TRIVIAL(info) << "[Orca Updater] extracting update for " << vendor_id;
-    if (!extract_file(download_file, cache_path)) {
+    if (!extract_file(download_file, cache_profile_path)) {
         BOOST_LOG_TRIVIAL(warning) << "[Orca Updater] extraction failed for " << vendor_id;
         return;
     }
@@ -1239,8 +1240,7 @@ Updates PresetUpdater::priv::get_config_updates(const Semver &old_slic3r_version
                     ifs.close();
                 }
 
-                bool version_match = ((vendor_ver.maj() == cache_ver.maj()) && (vendor_ver.min() == cache_ver.min()));
-                if (version_match && (vendor_ver < cache_ver)) {
+                if (vendor_ver < cache_ver) {
                     BOOST_LOG_TRIVIAL(info) << "[Orca Updater]:need to update settings from " << vendor_ver.to_string()
                                             << " to newer version " << cache_ver.to_string() << ", app version " << SLIC3R_VERSION;
                     Version version;
@@ -1250,6 +1250,10 @@ Updates PresetUpdater::priv::get_config_updates(const Semver &old_slic3r_version
                     updates.updates.emplace_back(std::move(file_path), std::move(path_in_vendor.string()), std::move(version), vendor_name, changelog, "", force_update, false);
                     //Orca: update vendor folder
                     updates.updates.emplace_back(cache_profile_path / vendor_name, vendor_path / vendor_name, Version(), vendor_name, "", "", force_update, true);
+                } else {
+                    BOOST_LOG_TRIVIAL(info) << "[Orca Updater]:cached settings for " << vendor_name
+                                            << " are not newer than installed version, installed " << vendor_ver.to_string()
+                                            << ", cached " << cache_ver.to_string();
                 }
             }
         }
