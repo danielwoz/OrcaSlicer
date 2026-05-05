@@ -16,6 +16,7 @@ add_executable(${_TEST_NAME}_tests
     test_toolordering_nozzle_group.cpp
     test_preset_bundle_loading.cpp
     test_preset_setting_id.cpp
+    test_preset_options.cpp
     test_elephant_foot_compensation.cpp
     test_label_ids_encoding.cpp
     test_geometry.cpp
