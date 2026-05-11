@@ -2635,6 +2635,9 @@ void TabPrint::build()
 
         optgroup = page->new_optgroup(L("Filament for Features"), L"param_filament_for_features");
         optgroup->append_single_option_line("wall_filament", "multimaterial_settings_filament_for_features#walls");
+        optgroup->append_single_option_line("surface_wall_override_filament", "multimaterial_settings_filament_for_features#walls");
+        optgroup->append_single_option_line("outer_wall_count", "multimaterial_settings_filament_for_features#walls");
+        optgroup->append_single_option_line("surface_wall_override_filament_target", "multimaterial_settings_filament_for_features#walls");
         optgroup->append_single_option_line("sparse_infill_filament", "multimaterial_settings_filament_for_features#infill");
         optgroup->append_single_option_line("solid_infill_filament", "multimaterial_settings_filament_for_features#solid-infill");
         optgroup->append_single_option_line("wipe_tower_filament", "multimaterial_settings_filament_for_features#wipe-tower");

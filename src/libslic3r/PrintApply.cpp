@@ -818,6 +818,9 @@ bool verify_update_print_object_regions(
             cfg.wall_filament.value    = region.extruder_id;
             cfg.solid_infill_filament.value = region.extruder_id;
             cfg.sparse_infill_filament.value       = region.extruder_id;
+            // Orca: surface_wall_override_filament is NOT reset here. The painted color sets the
+            // base filament for this region; surface_wall_override_filament still applies on top of
+            // it for the outermost N loops (so painted region + outer-wall accent work).
             if (cfg != region.region->config()) {
                 // Region configuration changed.
                 if (print_region_ref_cnt(*region.region) == 0) {
@@ -1063,6 +1066,8 @@ static PrintObjectRegions* generate_print_object_regions(
                     cfg.wall_filament.value    = painted_extruder_id;
                     cfg.solid_infill_filament.value = painted_extruder_id;
                     cfg.sparse_infill_filament.value       = painted_extruder_id;
+                    // Orca: surface_wall_override_filament is NOT reset here. See comment in
+                    // the other painted-region branch above.
                     layer_range.painted_regions.push_back({ painted_extruder_id, parent_region_id, get_create_region(std::move(cfg))});
                 }
         // Sort the regions by parent region::print_object_region_id() and extruder_id to help the slicing algorithm when applying MM segmentation.

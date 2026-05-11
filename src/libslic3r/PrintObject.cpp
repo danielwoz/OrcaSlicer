@@ -317,6 +317,7 @@ std::vector<std::set<int>> PrintObject::detect_extruder_geometric_unprintables()
             for (auto layerm : layer->regions()) {
                 auto region = layerm->region();
                 int wall_filament = region.config().wall_filament;
+                int surface_wall_override_filament = region.config().surface_wall_override_filament;
                 int solid_infill_filament = region.config().solid_infill_filament;
                 int sparse_infill_filament = region.config().sparse_infill_filament;
 
@@ -326,8 +327,13 @@ std::vector<std::set<int>> PrintObject::detect_extruder_geometric_unprintables()
                     if (sparse_infill_filament > 0)
                         geometric_unprintables[extruder_id].insert(sparse_infill_filament - 1);
                 }
-                if (!layerm->perimeters.entities.empty() && wall_filament > 0)
-                    geometric_unprintables[extruder_id].insert(wall_filament - 1);
+                if (!layerm->perimeters.entities.empty()) {
+                    if (wall_filament > 0)
+                        geometric_unprintables[extruder_id].insert(wall_filament - 1);
+                    // Orca: outer-wall filament participates when set and distinct from wall_filament.
+                    if (surface_wall_override_filament > 0 && surface_wall_override_filament != wall_filament)
+                        geometric_unprintables[extruder_id].insert(surface_wall_override_filament - 1);
+                }
             }
         }
     }
@@ -383,11 +389,18 @@ std::vector<std::set<int>> PrintObject::detect_extruder_geometric_unprintables()
                             }
                         }
 
-                        bool do_wall_filament_detect = wall_filament > 0 && tbb_geometric_unprintables[idx].count(wall_filament - 1) == 0;
+                        // Orca: outer-wall filament participates in printability detection when distinct.
+                        const int surface_wall_override_filament = region.config().surface_wall_override_filament;
+                        const bool outer_wall_active = surface_wall_override_filament > 0 && surface_wall_override_filament != wall_filament;
+                        bool do_wall_filament_detect = (wall_filament > 0 && tbb_geometric_unprintables[idx].count(wall_filament - 1) == 0)
+                                                    || (outer_wall_active && tbb_geometric_unprintables[idx].count(surface_wall_override_filament - 1) == 0);
                         if (!layerm->perimeters.entities.empty() && do_wall_filament_detect) {
                             // if infill is unprintable, no need to check wall since wall contour surrounds infill contour
                             if (infill_unprintable) {
-                                tbb_geometric_unprintables[idx].insert(wall_filament - 1);
+                                if (wall_filament > 0)
+                                    tbb_geometric_unprintables[idx].insert(wall_filament - 1);
+                                if (outer_wall_active)
+                                    tbb_geometric_unprintables[idx].insert(surface_wall_override_filament - 1);
                                 continue;
                             }
 
@@ -402,7 +415,10 @@ std::vector<std::set<int>> PrintObject::detect_extruder_geometric_unprintables()
 
                             if (wall_bbox.overlap(unprintable_area_bbox[idx]) &&
                                 !intersection(*wall_expolys, unprintable_area_in_obj_coord[idx]).empty()) {
-                                tbb_geometric_unprintables[idx].insert(wall_filament - 1);
+                                if (wall_filament > 0)
+                                    tbb_geometric_unprintables[idx].insert(wall_filament - 1);
+                                if (outer_wall_active)
+                                    tbb_geometric_unprintables[idx].insert(surface_wall_override_filament - 1);
                             }
                         }
                     }
@@ -1323,6 +1339,8 @@ bool PrintObject::invalidate_state_by_config_options(
         } else if (
                opt_key == "outer_wall_line_width"
             || opt_key == "wall_filament"
+            || opt_key == "surface_wall_override_filament"
+            || opt_key == "outer_wall_count"
             || opt_key == "fuzzy_skin"
             || opt_key == "fuzzy_skin_thickness"
             || opt_key == "fuzzy_skin_point_distance"
@@ -3392,7 +3410,7 @@ PrintObjectConfig PrintObject::object_config_from_model_object(const PrintObject
 }
 
 const std::string                                                    key_extruder { "extruder" };
-static constexpr const std::initializer_list<const std::string_view> keys_extruders { "sparse_infill_filament"sv, "solid_infill_filament"sv, "wall_filament"sv };
+static constexpr const std::initializer_list<const std::string_view> keys_extruders { "sparse_infill_filament"sv, "solid_infill_filament"sv, "wall_filament"sv, "surface_wall_override_filament"sv };
 
 static void apply_to_print_region_config(PrintRegionConfig &out, const DynamicPrintConfig &in)
 {
@@ -3404,6 +3422,10 @@ static void apply_to_print_region_config(PrintRegionConfig &out, const DynamicPr
             out.sparse_infill_filament.value = extruder;
             out.solid_infill_filament.value  = extruder;
             out.wall_filament.value          = extruder;
+            // Orca: do NOT reset surface_wall_override_filament here. The per-volume / layer-range
+            // extruder override sets the BASE filament; surface_wall_override_filament still applies
+            // on top of it for the outermost N loops. (Common SEMM/AMS use case: volume
+            // is filament 1, outer wall is filament 2 transparent shell.)
         }
     // 2) Copy the rest of the values.
     for (auto it = in.cbegin(); it != in.cend(); ++ it)
@@ -3504,6 +3526,7 @@ SlicingParameters PrintObject::slicing_parameters(const DynamicPrintConfig &full
 				object_extruders);
 			for (const std::pair<const t_layer_height_range, ModelConfig> &range_and_config : model_object.layer_config_ranges)
 				if (range_and_config.second.has("wall_filament") ||
+					range_and_config.second.has("surface_wall_override_filament") ||
 					range_and_config.second.has("sparse_infill_filament") ||
 					range_and_config.second.has("solid_infill_filament"))
 					PrintRegion::collect_object_printing_extruders(
