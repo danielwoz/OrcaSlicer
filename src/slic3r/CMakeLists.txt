@@ -391,8 +391,6 @@ set(SLIC3R_GUI_SOURCES
     GUI/Printer/MediaUrlBuilder.hpp
     GUI/Printer/PrinterFileSystem.cpp
     GUI/Printer/PrinterFileSystem.h
-    GUI/Printer/VirtualBambuTunnel.cpp
-    GUI/Printer/VirtualBambuTunnel.hpp
     GUI/PrinterWebView.cpp
     GUI/PrinterWebView.hpp
     GUI/PrintHostDialogs.cpp
@@ -608,18 +606,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/minilzo_extension.hpp
     Utils/MKS.cpp
     Utils/MKS.hpp
-    Utils/MqttFraming.cpp
-    Utils/MqttFraming.hpp
     Utils/NetworkAgent.cpp
     Utils/NetworkAgent.hpp
-    Utils/VirtualFtpsClient.cpp
-    Utils/VirtualFtpsClient.hpp
-    Utils/VirtualLanPrinterStore.cpp
-    Utils/VirtualLanPrinterStore.hpp
-    Utils/VirtualMqttClient.cpp
-    Utils/VirtualMqttClient.hpp
-    Utils/VirtualSsdpDiscovery.cpp
-    Utils/VirtualSsdpDiscovery.hpp
     Utils/NetworkAgentFactory.hpp
     Utils/NetworkAgentFactory.cpp
     Utils/ICloudServiceAgent.hpp
@@ -746,6 +734,29 @@ if (WIN32)
     target_include_directories(libslic3r_gui SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../deps/WebView2/include)
     target_link_libraries(libslic3r_gui Advapi32)
 endif()
+
+# ---- Shared virtual-printer client (git submodule) -------------------------
+# The client-side virtual-printer code (MQTT/FTPS/SSDP/Tunnel) is shared with
+# BambuStudio-bridge via the bambu-virtual-client repo, consumed here as a
+# git submodule under Utils/bambu_virtual_client/.
+set(BAMBU_VIRTUAL_CLIENT_SLIC3R_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}
+    CACHE PATH "src/slic3r path for bambu_virtual_client" FORCE)
+set(BAMBU_VIRTUAL_CLIENT_SLICER_SRC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/..
+    CACHE PATH "src path for bambu_virtual_client" FORCE)
+set(BAMBU_VIRTUAL_CLIENT_JSON_INCLUDE_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/../../deps_src
+    CACHE PATH "nlohmann/json include dir for bambu_virtual_client" FORCE)
+set(BAMBU_VIRTUAL_CLIENT_BOOST_INCLUDE_DIR  ${Boost_INCLUDE_DIRS}
+    CACHE PATH "Boost include dir for bambu_virtual_client" FORCE)
+# Generated headers (libslic3r_version.h, libslic3r/Config.hpp, etc.) and
+# headers libslic3r/Utils.hpp transitively pulls in (Eigen, dev-utils).
+set(BAMBU_VIRTUAL_CLIENT_EXTRA_INCLUDE_DIRS
+    "${CMAKE_BINARY_DIR}/src/libslic3r;${CMAKE_BINARY_DIR}/src/slic3r;${CMAKE_BINARY_DIR}/src/dev-utils/platform;${CMAKE_SOURCE_DIR}/src/eigen;${CMAKE_SOURCE_DIR}/deps_src/eigen"
+    CACHE STRING "extra include dirs (generated headers) for bambu_virtual_client" FORCE)
+# Built independently — don't double-build its CLI testbed in slicer trees.
+set(BAMBU_VIRTUAL_CLIENT_BUILD_CLI OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/Utils/bambu_virtual_client
+                 ${CMAKE_BINARY_DIR}/bambu_virtual_client)
+target_link_libraries(libslic3r_gui bambu_virtual_client)
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SLIC3R_GUI_SOURCES})
 

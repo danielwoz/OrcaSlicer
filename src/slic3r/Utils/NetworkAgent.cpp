@@ -7,9 +7,9 @@
 #include "libslic3r/Utils.hpp"
 #include "NetworkAgent.hpp"
 #include "BBLNetworkPlugin.hpp"
-#include "VirtualMqttClient.hpp"
-#include "VirtualFtpsClient.hpp"
-#include "VirtualLanPrinterStore.hpp"
+#include "bambu_virtual_client/VirtualMqttClient.hpp"
+#include "bambu_virtual_client/VirtualFtpsClient.hpp"
+#include "bambu_virtual_client/VirtualLanPrinterStore.hpp"
 
 namespace Slic3r {
 

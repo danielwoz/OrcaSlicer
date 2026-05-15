@@ -6,7 +6,7 @@
 #include "GUI_ObjectList.hpp"
 #include "slic3r/GUI/UserManager.hpp"
 #include "slic3r/GUI/TaskManager.hpp"
-#include "slic3r/Utils/VirtualSsdpDiscovery.hpp"
+#include "slic3r/Utils/bambu_virtual_client/VirtualSsdpDiscovery.hpp"
 #include "format.hpp"
 #include "libslic3r_version.h"
 #include "Downloader.hpp"
