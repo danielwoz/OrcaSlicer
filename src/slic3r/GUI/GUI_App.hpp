@@ -65,6 +65,7 @@ class UserManager;
 class DeviceManager;
 class NetworkAgent;
 class TaskManager;
+class VirtualSsdpDiscovery;
 
 namespace GUI{
 
@@ -294,6 +295,11 @@ private:
     Slic3r::DeviceManager* m_device_manager { nullptr };
     Slic3r::UserManager* m_user_manager { nullptr };
     Slic3r::TaskManager* m_task_manager { nullptr };
+    // SSDP listener for virtual (FFFF-prefix) printers served by a
+    // Bambu Bridge on the LAN. Constructed in on_init_inner once
+    // DeviceManager exists; destroyed in OnExit before DeviceManager
+    // dies (DeviceManager dispatches the alive callbacks).
+    std::unique_ptr<Slic3r::VirtualSsdpDiscovery> m_virtual_ssdp;
     NetworkAgent* m_agent { nullptr };
     std::map<std::string, std::string> need_delete_presets;   // store setting ids of preset
     std::vector<bool> m_create_preset_blocked { false, false, false, false, false, false }; // excceed limit

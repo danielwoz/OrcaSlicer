@@ -387,8 +387,12 @@ set(SLIC3R_GUI_SOURCES
     GUI/PresetHints.hpp
     GUI/PrinterCloudAuthDialog.cpp
     GUI/PrinterCloudAuthDialog.hpp
+    GUI/Printer/MediaUrlBuilder.cpp
+    GUI/Printer/MediaUrlBuilder.hpp
     GUI/Printer/PrinterFileSystem.cpp
     GUI/Printer/PrinterFileSystem.h
+    GUI/Printer/VirtualBambuTunnel.cpp
+    GUI/Printer/VirtualBambuTunnel.hpp
     GUI/PrinterWebView.cpp
     GUI/PrinterWebView.hpp
     GUI/PrintHostDialogs.cpp
@@ -604,8 +608,18 @@ set(SLIC3R_GUI_SOURCES
     Utils/minilzo_extension.hpp
     Utils/MKS.cpp
     Utils/MKS.hpp
+    Utils/MqttFraming.cpp
+    Utils/MqttFraming.hpp
     Utils/NetworkAgent.cpp
     Utils/NetworkAgent.hpp
+    Utils/VirtualFtpsClient.cpp
+    Utils/VirtualFtpsClient.hpp
+    Utils/VirtualLanPrinterStore.cpp
+    Utils/VirtualLanPrinterStore.hpp
+    Utils/VirtualMqttClient.cpp
+    Utils/VirtualMqttClient.hpp
+    Utils/VirtualSsdpDiscovery.cpp
+    Utils/VirtualSsdpDiscovery.hpp
     Utils/NetworkAgentFactory.hpp
     Utils/NetworkAgentFactory.cpp
     Utils/ICloudServiceAgent.hpp

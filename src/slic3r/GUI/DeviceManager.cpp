@@ -3119,17 +3119,28 @@ int MachineObject::parse_json(std::string tunnel, std::string payload, bool key_
                                 network_wired = (jj["net"]["conf"].get<int>() & (0x1)) != 0;
                             }
                             if (jj["net"].contains("info")) {
-                                for (auto info_item = jj["net"]["info"].begin(); info_item != jj["net"]["info"].end(); info_item++) {
+                                // For virtual (FFFF-prefix) dev-ids the
+                                // `net.info[].ip` field is the real
+                                // printer's WiFi IP; if we overwrite
+                                // `dev_ip` with it the slicer will
+                                // dial the real printer (and fail
+                                // because plugin-cert validation
+                                // refuses Bambu's CA chain anyway).
+                                // For virtual entries dev_ip must
+                                // stay pointed at the bridge.
+                                if (!NetworkAgent::is_virtual_dev_id(get_dev_id())) {
+                                    for (auto info_item = jj["net"]["info"].begin(); info_item != jj["net"]["info"].end(); info_item++) {
 
-                                    if (info_item->contains("ip")) {
-                                        auto tmp_dev_ip = (*info_item)["ip"].get<int64_t>();
-                                        if (tmp_dev_ip == 0)
-                                            continue ;
-                                        else {
-                                           set_dev_ip(DevUtil::convertToIp(tmp_dev_ip));
+                                        if (info_item->contains("ip")) {
+                                            auto tmp_dev_ip = (*info_item)["ip"].get<int64_t>();
+                                            if (tmp_dev_ip == 0)
+                                                continue ;
+                                            else {
+                                               set_dev_ip(DevUtil::convertToIp(tmp_dev_ip));
+                                            }
+                                        } else {
+                                            break;
                                         }
-                                    } else {
-                                        break;
                                     }
                                 }
                             }

@@ -7,6 +7,9 @@
 #include "libslic3r/Utils.hpp"
 #include "NetworkAgent.hpp"
 #include "BBLNetworkPlugin.hpp"
+#include "VirtualMqttClient.hpp"
+#include "VirtualFtpsClient.hpp"
+#include "VirtualLanPrinterStore.hpp"
 
 namespace Slic3r {
 
@@ -100,6 +103,22 @@ NetworkAgent::NetworkAgent(std::shared_ptr<ICloudServiceAgent> cloud_agent, std:
         return;
     }
     m_cloud_agents.emplace(cloud_agent->get_id(), std::move(cloud_agent));
+
+    // The bridge advertises one MQTT port per virtual printer. The
+    // slicer's MachineObject only knows `dev_ip`; the port comes from
+    // SSDP LOCATION headers persisted by VirtualLanPrinterStore. The
+    // VirtualMqttClient calls this resolver each connect_printer.
+    // Falls back to 8883 inside the client if 0 is returned (no entry
+    // or stale store).
+    Slic3r::VirtualMqttClient::instance().set_port_resolver(
+        [](const std::string& dev_id) -> uint16_t {
+            if (!is_virtual_dev_id(dev_id)) return 0;
+            Slic3r::VirtualLanPrinterStore store;
+            for (const auto& e : store.load()) {
+                if (e.dev_id == dev_id) return e.mqtt_port;
+            }
+            return 0;
+        });
 }
 
 NetworkAgent::~NetworkAgent()
@@ -724,6 +743,9 @@ int NetworkAgent::set_on_subscribe_failure_fn(GetSubscribeFailureFn fn)
 int NetworkAgent::set_on_message_fn(OnMessageFn fn)
 {
     m_printer_callbacks.on_message_fn = fn;
+    // No need to wire `on_message` into VirtualMqttClient — the
+    // virtual path uses set_on_local_*_fn (LAN-only). Keep it captured
+    // for the plugin path only.
     if (m_printer_agent)
         return m_printer_agent->set_on_message_fn(fn);
     return -1;
@@ -740,16 +762,44 @@ int NetworkAgent::set_on_user_message_fn(OnMessageFn fn)
 int NetworkAgent::set_on_local_connect_fn(OnLocalConnectedFn fn)
 {
     m_printer_callbacks.on_local_connect_fn = fn;
-    if (m_printer_agent)
-        return m_printer_agent->set_on_local_connect_fn(fn);
+    // Capture so VirtualMqttClient can fire it for FFFF dev-ids when
+    // their TLS+MQTT session reaches CONNACK. Wrap to filter virtual
+    // dev-ids out of the plugin's own callback — the plugin's SSDP
+    // scanner will otherwise fail the bridge's cert and report
+    // state=Failed for our virtual entries, yanking them out of the
+    // UI a few seconds after we add them.
+    if (m_printer_agent) {
+        OnLocalConnectedFn wrapped =
+            [fn](int state, std::string dev_id, std::string msg) {
+                if (is_virtual_dev_id(dev_id)) return;
+                if (fn) fn(state, dev_id, msg);
+            };
+        Slic3r::VirtualMqttClient::instance().set_on_local_connect(fn);
+        return m_printer_agent->set_on_local_connect_fn(std::move(wrapped));
+    }
+    // Plugin absent: still install the callback on VirtualMqttClient so
+    // the virtual flow works.
+    Slic3r::VirtualMqttClient::instance().set_on_local_connect(fn);
     return -1;
 }
 
 int NetworkAgent::set_on_local_message_fn(OnMessageFn fn)
 {
     m_printer_callbacks.on_local_message_fn = fn;
-    if (m_printer_agent)
-        return m_printer_agent->set_on_local_message_fn(fn);
+    // Same shape as set_on_local_connect_fn: filter plugin-originated
+    // messages for virtual dev-ids out (VirtualMqttClient owns those),
+    // and install the user's raw callback on VirtualMqttClient so
+    // device/<dev_id>/report frames flow through.
+    if (m_printer_agent) {
+        OnMessageFn wrapped =
+            [fn](std::string dev_id, std::string msg) {
+                if (is_virtual_dev_id(dev_id)) return;
+                if (fn) fn(dev_id, msg);
+            };
+        Slic3r::VirtualMqttClient::instance().set_on_message(fn);
+        return m_printer_agent->set_on_local_message_fn(std::move(wrapped));
+    }
+    Slic3r::VirtualMqttClient::instance().set_on_message(fn);
     return -1;
 }
 
@@ -770,20 +820,51 @@ int NetworkAgent::send_message(std::string dev_id, std::string json_str, int qos
 
 int NetworkAgent::connect_printer(std::string dev_id, std::string dev_ip, std::string username, std::string password, bool use_ssl)
 {
-    if (m_printer_agent)
-        return m_printer_agent->connect_printer(dev_id, dev_ip, username, password, use_ssl);
+    if (is_virtual_dev_id(dev_id)) {
+        auto& vc = Slic3r::VirtualMqttClient::instance();
+        // Make sure VirtualMqttClient knows the captured callbacks even
+        // if set_on_local_*_fn was called before NetworkAgent learned
+        // about a printer_agent.
+        if (m_printer_callbacks.on_local_connect_fn)
+            vc.set_on_local_connect(m_printer_callbacks.on_local_connect_fn);
+        if (m_printer_callbacks.on_local_message_fn)
+            vc.set_on_message(m_printer_callbacks.on_local_message_fn);
+        int rc = vc.connect_printer(dev_id, dev_ip, /*access_code=*/password);
+        if (rc == 0) m_current_local_dev_id = dev_id;
+        return rc;
+    }
+    if (m_printer_agent) {
+        int rc = m_printer_agent->connect_printer(dev_id, dev_ip, username, password, use_ssl);
+        if (rc == 0) m_current_local_dev_id = dev_id;
+        return rc;
+    }
     return -1;
 }
 
 int NetworkAgent::disconnect_printer()
 {
-    if (m_printer_agent)
-        return m_printer_agent->disconnect_printer();
+    // The dev-id-less disconnect API mirrors the plugin's one-session-
+    // at-a-time model. Route based on whatever connect_printer most
+    // recently registered.
+    if (is_virtual_dev_id(m_current_local_dev_id)) {
+        const std::string id = m_current_local_dev_id;
+        m_current_local_dev_id.clear();
+        return Slic3r::VirtualMqttClient::instance().disconnect_printer(id);
+    }
+    if (m_printer_agent) {
+        int rc = m_printer_agent->disconnect_printer();
+        if (rc == 0) m_current_local_dev_id.clear();
+        return rc;
+    }
     return -1;
 }
 
 int NetworkAgent::send_message_to_printer(std::string dev_id, std::string json_str, int qos, int flag)
 {
+    if (is_virtual_dev_id(dev_id)) {
+        return Slic3r::VirtualMqttClient::instance()
+            .send_message(dev_id, json_str, qos);
+    }
     if (m_printer_agent)
         return m_printer_agent->send_message_to_printer(dev_id, json_str, qos, flag);
     return -1;
@@ -896,6 +977,30 @@ int NetworkAgent::start_local_print_with_record(PrintParams params, OnUpdateStat
 
 int NetworkAgent::start_send_gcode_to_sdcard(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
+    if (is_virtual_dev_id(params.dev_id)) {
+        Slic3r::virtual_ftps::UploadParams up;
+        up.host        = params.dev_ip;
+        // Bridge's per-printer FTPS port — keep in sync with the
+        // BridgeAppConfig::ftps_port_base in BambuStudio-bridge.
+        up.port        = 39990;
+        up.user        = params.username.empty() ? std::string("bblp") : params.username;
+        up.pass        = params.password;
+        up.local_path  = params.filename;
+        up.remote_name = params.ftp_file.empty() ? params.dst_file : params.ftp_file;
+        Slic3r::virtual_ftps::ProgressFn  prog = nullptr;
+        Slic3r::virtual_ftps::CancelledFn canc = nullptr;
+        if (update_fn) {
+            prog = [update_fn](int pct, std::string msg) {
+                // Plugin signature is (status, code, msg). The slicer
+                // surfaces `status` as percent and `msg` as label.
+                update_fn(pct, /*code=*/0, msg);
+            };
+        }
+        if (cancel_fn) {
+            canc = [cancel_fn]() -> bool { return cancel_fn(); };
+        }
+        return Slic3r::virtual_ftps::upload(up, prog, canc);
+    }
     if (m_printer_agent)
         return m_printer_agent->start_send_gcode_to_sdcard(params, update_fn, cancel_fn, wait_fn);
     return -1;

@@ -1,4 +1,5 @@
 #include "PrinterFileSystem.h"
+#include "VirtualBambuTunnel.hpp"
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/Format/bbs_3mf.hpp"
 #include "libslic3r/Model.hpp"
@@ -1851,6 +1852,83 @@ StaticBambuLib &StaticBambuLib::get(BambuLib *copy)
         if (copy)
             lib.copies_.push_back(copy);
     }
+
+    // Wrap every Bambu_* entrypoint with a dispatcher that routes
+    // `bambu:///virtual/...` URLs (minted by MediaUrlBuilder for FFFF
+    // dev-ids) to our own VirtualBambuTunnel impl; real URLs fall
+    // through to libBambuSource. The sentinel magic at the head of
+    // every VirtualTunnel struct (see VirtualBambuTunnel.cpp) lets us
+    // tell virtual from real allocations at every other entrypoint.
+    static auto real_Bambu_Create        = lib.Bambu_Create;
+    static auto real_Bambu_Open          = lib.Bambu_Open;
+    static auto real_Bambu_StartStream   = lib.Bambu_StartStream;
+    static auto real_Bambu_StartStreamEx = lib.Bambu_StartStreamEx;
+    static auto real_Bambu_SendMessage   = lib.Bambu_SendMessage;
+    static auto real_Bambu_ReadSample    = lib.Bambu_ReadSample;
+    static auto real_Bambu_Close         = lib.Bambu_Close;
+    static auto real_Bambu_Destroy       = lib.Bambu_Destroy;
+    static auto real_Bambu_SetLogger     = lib.Bambu_SetLogger;
+
+    lib.Bambu_Create = [](Bambu_Tunnel* out, char const* url) -> int {
+        if (Slic3r::virtual_tunnel::url_is_virtual(url))
+            return Slic3r::virtual_tunnel::Bambu_Create_virtual(out, url);
+        return real_Bambu_Create
+            ? real_Bambu_Create(out, url)
+            : Fake_Bambu_Create(out, url);
+    };
+    lib.Bambu_Open = [](Bambu_Tunnel t) -> int {
+        if (Slic3r::virtual_tunnel::is_virtual_tunnel(t))
+            return Slic3r::virtual_tunnel::Bambu_Open_virtual(t);
+        return real_Bambu_Open ? real_Bambu_Open(t) : -1;
+    };
+    lib.Bambu_StartStream = [](Bambu_Tunnel t, bool video) -> int {
+        if (Slic3r::virtual_tunnel::is_virtual_tunnel(t))
+            return Slic3r::virtual_tunnel::Bambu_StartStream_virtual(t, video);
+        return real_Bambu_StartStream
+            ? real_Bambu_StartStream(t, video) : -1;
+    };
+    lib.Bambu_StartStreamEx = [](Bambu_Tunnel t, int type) -> int {
+        if (Slic3r::virtual_tunnel::is_virtual_tunnel(t))
+            return Slic3r::virtual_tunnel::Bambu_StartStreamEx_virtual(t, type);
+        return real_Bambu_StartStreamEx
+            ? real_Bambu_StartStreamEx(t, type) : -1;
+    };
+    lib.Bambu_SendMessage = [](Bambu_Tunnel t, int ctrl,
+                               char const* data, int len) -> int {
+        if (Slic3r::virtual_tunnel::is_virtual_tunnel(t))
+            return Slic3r::virtual_tunnel::Bambu_SendMessage_virtual(
+                t, ctrl, data, len);
+        return real_Bambu_SendMessage
+            ? real_Bambu_SendMessage(t, ctrl, data, len) : -1;
+    };
+    lib.Bambu_ReadSample = [](Bambu_Tunnel t, Bambu_Sample* s) -> int {
+        if (Slic3r::virtual_tunnel::is_virtual_tunnel(t))
+            return Slic3r::virtual_tunnel::Bambu_ReadSample_virtual(t, s);
+        return real_Bambu_ReadSample
+            ? real_Bambu_ReadSample(t, s) : Bambu_stream_end;
+    };
+    lib.Bambu_Close = [](Bambu_Tunnel t) {
+        if (Slic3r::virtual_tunnel::is_virtual_tunnel(t)) {
+            Slic3r::virtual_tunnel::Bambu_Close_virtual(t);
+            return;
+        }
+        if (real_Bambu_Close) real_Bambu_Close(t);
+    };
+    lib.Bambu_Destroy = [](Bambu_Tunnel t) {
+        if (Slic3r::virtual_tunnel::is_virtual_tunnel(t)) {
+            Slic3r::virtual_tunnel::Bambu_Destroy_virtual(t);
+            return;
+        }
+        if (real_Bambu_Destroy) real_Bambu_Destroy(t);
+    };
+    lib.Bambu_SetLogger = [](Bambu_Tunnel t, Logger logger, void* ctx) {
+        if (Slic3r::virtual_tunnel::is_virtual_tunnel(t)) {
+            Slic3r::virtual_tunnel::Bambu_SetLogger_virtual(t, logger, ctx);
+            return;
+        }
+        if (real_Bambu_SetLogger) real_Bambu_SetLogger(t, logger, ctx);
+    };
+
     return lib;
 }
 

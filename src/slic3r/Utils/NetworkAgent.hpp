@@ -52,6 +52,19 @@ public:
     std::shared_ptr<ICloudServiceAgent> get_cloud_agent(const std::string& provider = ORCA_CLOUD_PROVIDER) const;
     std::shared_ptr<IPrinterAgent> get_printer_agent() const { return m_printer_agent; }
 
+    // Virtual-printer detection. Any dev_id starting with "FFFF" is a
+    // virtual SN minted by a Bambu Bridge in front of a real printer.
+    // The slicer dispatches those through `VirtualMqttClient` /
+    // `VirtualFtpsClient` rather than the proprietary network plugin,
+    // because the bridge's self-signed certs would fail the plugin's
+    // CA-chain check. See `Utils/VirtualMqttClient.hpp` for the
+    // wire-level rationale.
+    static constexpr const char* kVirtualDevIdPrefix = "FFFF";
+    static bool is_virtual_dev_id(const std::string& dev_id) {
+        return dev_id.size() >= 4 &&
+               dev_id.compare(0, 4, kVirtualDevIdPrefix) == 0;
+    }
+
     // Shared agent management
     void add_cloud_agent(const std::string& provider, std::shared_ptr<ICloudServiceAgent> agent);
     void set_printer_agent(std::shared_ptr<IPrinterAgent> printer_agent);
@@ -184,6 +197,13 @@ private:
                                  const PrinterCallbacks& callbacks);
     PrinterCallbacks m_printer_callbacks;
     bool enable_track = false;
+
+    // Records the dev_id of the most-recent connect_printer call so the
+    // dev-id-less `disconnect_printer` API can route back to the right
+    // backend (plugin vs VirtualMqttClient). Mirrors the BambuStudio
+    // bridge-side behaviour; OrcaSlicer's plugin only holds one LAN
+    // session at a time, same constraint as Bambu's.
+    std::string m_current_local_dev_id;
 
     // Sub-agent composition
     // We support dynamic switching of printer agents (e.g. for different printer types), but the cloud agent is fixed at construction since

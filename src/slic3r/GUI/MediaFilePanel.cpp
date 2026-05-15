@@ -7,6 +7,10 @@
 #include "Widgets/SwitchButton.hpp"
 #include "Widgets/Label.hpp"
 #include "Printer/PrinterFileSystem.h"
+#include "Printer/MediaUrlBuilder.hpp"
+#include "DeviceManager.hpp"
+#include "DeviceCore/DevManager.h"
+#include "../Utils/NetworkAgent.hpp"
 #include "MsgDialog.hpp"
 #include "Widgets/ProgressDialog.hpp"
 #include <libslic3r/Model.hpp>
@@ -451,6 +455,30 @@ void MediaFilePanel::fetchUrl(boost::weak_ptr<PrinterFileSystem> wfs)
         return;
     }
     m_waiting_enable = false;
+
+    // Virtual (FFFF-prefixed) printers served by a Bambu Bridge: bypass
+    // the file_local/file_remote firmware-gating because the bridge
+    // always exposes the storage tunnel and the real printer's
+    // file.local/file.remote bitmasks may not propagate through the
+    // bridge's push_status relay.
+    if (Slic3r::NetworkAgent::is_virtual_dev_id(m_machine)) {
+        if (auto* dm = wxGetApp().getDeviceManager()) {
+            if (auto* obj = dm->get_my_machine(m_machine)) {
+                const std::string url = build_virtual_storage_url(obj);
+                if (!url.empty()) {
+                    BOOST_LOG_TRIVIAL(info)
+                        << "MediaFilePanel::fetchUrl: virtual url=" << url;
+                    fs->SetUrl(url);
+                    return;
+                }
+            }
+        }
+        m_image_grid->SetStatus(m_bmp_failed,
+            _L("Please confirm if the printer is connected."));
+        fs->SetUrl("0");
+        return;
+    }
+
     if (!m_local_proto && !m_remote_proto) {
         m_waiting_support = true;
         m_image_grid->SetStatus(m_bmp_failed, _L("Browsing file in storage is not supported in current firmware. Please update the printer firmware."));

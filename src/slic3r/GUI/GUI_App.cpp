@@ -6,6 +6,7 @@
 #include "GUI_ObjectList.hpp"
 #include "slic3r/GUI/UserManager.hpp"
 #include "slic3r/GUI/TaskManager.hpp"
+#include "slic3r/Utils/VirtualSsdpDiscovery.hpp"
 #include "format.hpp"
 #include "libslic3r_version.h"
 #include "Downloader.hpp"
@@ -971,6 +972,15 @@ void GUI_App::post_init()
            }
         }
     }
+    // Bring up the virtual-printer SSDP listener once DeviceManager
+    // exists. This is the bridge-aware discovery path; it runs in
+    // parallel with the plugin's own SSDP scanner (if loaded) and is
+    // the *only* discovery source when the plugin is absent.
+    if (m_device_manager && !m_virtual_ssdp) {
+        m_virtual_ssdp = std::make_unique<Slic3r::VirtualSsdpDiscovery>();
+        m_virtual_ssdp->start();
+    }
+
     BOOST_LOG_TRIVIAL(info) << "finished post_init";
 //BBS: remove the single instance currently
 #ifdef _WIN32
@@ -2450,6 +2460,14 @@ int GUI_App::OnExit()
 {
     stop_http_server();
     stop_sync_user_preset();
+
+    // Tear the SSDP listener down before DeviceManager so the I/O
+    // thread can't dispatch one last alive callback into a freed
+    // pointer.
+    if (m_virtual_ssdp) {
+        m_virtual_ssdp->stop();
+        m_virtual_ssdp.reset();
+    }
 
     if (m_device_manager) {
         delete m_device_manager;

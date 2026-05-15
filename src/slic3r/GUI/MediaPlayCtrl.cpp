@@ -8,6 +8,9 @@
 #include "MsgDialog.hpp"
 #include "DownloadProgressDialog.hpp"
 #include "slic3r/Utils/NetworkAgent.hpp"
+#include "Printer/MediaUrlBuilder.hpp"
+#include "DeviceManager.hpp"
+#include "DeviceCore/DevManager.h"
 
 
 #include <boost/lexical_cast.hpp>
@@ -285,6 +288,30 @@ void MediaPlayCtrl::Play()
     BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::Play: " << m_lan_proto << m_remote_proto << m_disable_lan;
     NetworkAgent *agent = wxGetApp().getAgent();
     std::string  agent_version = agent ? agent->get_version() : "";
+
+    // Virtual (FFFF-prefixed) printers — short-circuit the LVL_*
+    // gating; the bridge always serves live view through the LAN port.
+    if (Slic3r::NetworkAgent::is_virtual_dev_id(m_machine)) {
+        if (auto* dm = wxGetApp().getDeviceManager()) {
+            if (auto* obj = dm->get_my_machine(m_machine)) {
+                std::string url = build_virtual_live_url(obj);
+                if (!url.empty()) {
+                    url += "&net_ver=" + agent_version;
+                    url += "&dev_ver=" + m_dev_ver;
+                    url += "&cli_id=" + wxGetApp().app_config->get("slicer_uuid");
+                    url += "&cli_ver=" + std::string(SLIC3R_VERSION);
+                    BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl: virtual url";
+                    m_url = url;
+                    load();
+                    m_button_play->SetIcon("media_stop");
+                    return;
+                }
+            }
+        }
+        Stop(_L("Please confirm if the printer is connected."));
+        return;
+    }
+
     if (m_lan_proto > MachineObject::LVL_Disable && (m_lan_mode || !m_remote_proto) && !m_disable_lan && !m_lan_ip.empty()) {
         m_disable_lan = m_remote_proto && !m_lan_mode; // try remote next time
         std::string url;

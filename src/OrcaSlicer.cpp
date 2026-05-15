@@ -6511,7 +6511,10 @@ int CLI::run(int argc, char **argv)
                         }
                     }
 
-                    ThumbnailsParams thumbnail_params;
+                    // ThumbnailsParams' `sizes` member is `const`, which deletes the implicit
+                    // default constructor under newer clang. Aggregate-initialise with empty
+                    // defaults so we keep the original semantics.
+                    ThumbnailsParams thumbnail_params{{}, false, false, false, false, 0};
                     GLShaderProgram* shader = opengl_mgr.get_shader("thumbnail");
                     if (!shader) {
                         BOOST_LOG_TRIVIAL(error) << boost::format("can not get shader for rendering thumbnail");
