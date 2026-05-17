@@ -747,6 +747,10 @@ set(BAMBU_VIRTUAL_CLIENT_JSON_INCLUDE_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/../../de
     CACHE PATH "nlohmann/json include dir for bambu_virtual_client" FORCE)
 set(BAMBU_VIRTUAL_CLIENT_BOOST_INCLUDE_DIR  ${Boost_INCLUDE_DIRS}
     CACHE PATH "Boost include dir for bambu_virtual_client" FORCE)
+# wx include dirs — VirtualSsdpDiscovery.cpp uses wxGetApp/CallAfter,
+# and slicer headers it pulls in transitively #include <wx/setup.h>.
+set(BAMBU_VIRTUAL_CLIENT_WX_INCLUDE_DIRS    "${wxWidgets_INCLUDE_DIRS}"
+    CACHE STRING "wxWidgets include dirs for bambu_virtual_client" FORCE)
 # Generated headers (libslic3r_version.h, libslic3r/Config.hpp, etc.) and
 # headers libslic3r/Utils.hpp transitively pulls in (Eigen, dev-utils).
 set(BAMBU_VIRTUAL_CLIENT_EXTRA_INCLUDE_DIRS
