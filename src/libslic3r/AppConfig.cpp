@@ -166,6 +166,42 @@ void AppConfig::set_defaults()
         if (get("single_instance").empty())
             set_bool("single_instance", false);
 
+#ifdef __linux__
+        // bambu-virtual-shared change: pre-accept the system CA bundle on
+        // Linux so the TLS-store-confirmation dialog in
+        // GUI_App::on_init_inner doesn't fire on a fresh install. The
+        // probe list mirrors the one Slic3r::CurlGlobalInit uses
+        // (src/slic3r/Utils/Http.cpp); on any standard distro one of
+        // these paths exists and is the same one CurlGlobalInit will
+        // set SSL_CERT_FILE to, so the slicer's later
+        // `ssl_cert_store == Slic3r::Http::tls_system_cert_store()`
+        // equality check succeeds and ssl_accept becomes true silently.
+        //
+        // Diagnosed 2026-05-18: the dialog was blocking headless / Xvfb
+        // boots indefinitely (gtk_main polled for an event that never
+        // arrived, no user to click "Yes"). Defaulting to "yes" here
+        // only affects new installs — existing users who explicitly
+        // chose "no" keep that choice because the `.empty()` guard
+        // skips this block.
+        if (get("tls_cert_store_accepted").empty()) {
+            static const char* const ca_bundles[] = {
+                "/etc/pki/tls/certs/ca-bundle.crt",
+                "/etc/ssl/certs/ca-certificates.crt",
+                "/usr/share/ssl/certs/ca-bundle.crt",
+                "/usr/local/share/certs/ca-root-nss.crt",
+                "/etc/ssl/cert.pem",
+                "/etc/ssl/ca-bundle.pem",
+            };
+            for (const char* b : ca_bundles) {
+                if (boost::filesystem::exists(b)) {
+                    set("tls_cert_store_accepted", "yes");
+                    set("tls_accepted_cert_store_location", b);
+                    break;
+                }
+            }
+        }
+#endif
+
 #ifdef SUPPORT_REMEMBER_OUTPUT_PATH
         if (get("remember_output_path").empty())
             set_bool("remember_output_path", true);
