@@ -1007,9 +1007,28 @@ int NetworkAgent::start_send_gcode_to_sdcard(PrintParams params, OnUpdateStatusF
     if (is_virtual_dev_id(params.dev_id)) {
         Slic3r::virtual_ftps::UploadParams up;
         up.host        = params.dev_ip;
-        // Bridge's per-printer FTPS port — keep in sync with the
-        // BridgeAppConfig::ftps_port_base in BambuStudio-bridge.
-        up.port        = 39990;
+        // Per-printer FTPS port = ftps_base + index, the SAME index the bridge
+        // assigns for MQTT (mqtt_base + index). Resolve this dev's MQTT port
+        // the same way VirtualMqttClient does — live SSDP cache -> persisted
+        // store -> unicast probe of the bridge host — so a multi-printer send
+        // reaches THIS printer's FTPS server instead of always landing on the
+        // first printer's port (39990). Without this, sends to H2S/H2D upload
+        // to the A1's FTPS and the slicer re-prompts for IP/access code.
+        {
+            constexpr uint16_t kMqttBase = 8883, kFtpsBase = 39990;
+            uint16_t mqtt_port = Slic3r::VirtualSsdpDiscovery::advertised_port(params.dev_id);
+            if (mqtt_port == 0) {
+                Slic3r::VirtualLanPrinterStore store;
+                for (const auto& e : store.load())
+                    if (e.dev_id == params.dev_id && e.mqtt_port) { mqtt_port = e.mqtt_port; break; }
+            }
+            if (mqtt_port == 0)
+                mqtt_port = Slic3r::VirtualSsdpDiscovery::probe_port(params.dev_ip, params.dev_id);
+            if (mqtt_port == 0) mqtt_port = kMqttBase;
+            up.port = static_cast<uint16_t>(kFtpsBase + (int(mqtt_port) - int(kMqttBase)));
+            BOOST_LOG_TRIVIAL(info) << "virtual send: dev=" << params.dev_id
+                << " ftps_port=" << up.port << " (mqtt_port=" << mqtt_port << ")";
+        }
         up.user        = params.username.empty() ? std::string("bblp") : params.username;
         up.pass        = params.password;
         up.local_path  = params.filename;
