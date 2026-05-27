@@ -10,6 +10,7 @@
 #include "bambu_virtual_client/VirtualMqttClient.hpp"
 #include "bambu_virtual_client/VirtualFtpsClient.hpp"
 #include "bambu_virtual_client/VirtualLanPrinterStore.hpp"
+#include "bambu_virtual_client/VirtualSsdpDiscovery.hpp"
 
 namespace Slic3r {
 
@@ -121,10 +122,28 @@ NetworkAgent::NetworkAgent(std::shared_ptr<ICloudServiceAgent> cloud_agent, std:
     Slic3r::VirtualMqttClient::instance().set_port_resolver(
         [](const std::string& dev_id) -> uint16_t {
             if (!is_virtual_dev_id(dev_id)) return 0;
+            // 1. Live SSDP advertisement recorded by the running listener —
+            //    the freshest source, needs no persistence or manual config.
+            if (uint16_t p = Slic3r::VirtualSsdpDiscovery::advertised_port(dev_id))
+                return p;
+            // 2. Persisted store (survives restarts; may carry a 0/stale
+            //    port). Capture lan_ip for the unicast fallback en route.
+            std::string bridge_ip;
             Slic3r::VirtualLanPrinterStore store;
             for (const auto& e : store.load()) {
-                if (e.dev_id == dev_id) return e.mqtt_port;
+                if (e.dev_id == dev_id) {
+                    if (e.mqtt_port) return e.mqtt_port;
+                    bridge_ip = e.lan_ip;
+                    break;
+                }
             }
+            // 3. Cold cache + no persisted port: probe the bridge directly
+            //    via UNICAST M-SEARCH (reliable where multicast is dropped),
+            //    so even the first connect uses the advertised port instead
+            //    of the 8883 default. Falls through to 0 (→ 8883) on timeout.
+            if (!bridge_ip.empty())
+                if (uint16_t p = Slic3r::VirtualSsdpDiscovery::probe_port(bridge_ip, dev_id))
+                    return p;
             return 0;
         });
 }
