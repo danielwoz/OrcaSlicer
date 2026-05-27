@@ -8,6 +8,7 @@
 #include "../DeviceCore/DevManager.h"
 #include "../../Utils/NetworkAgent.hpp"
 #include "../../Utils/bambu_virtual_client/VirtualLanPrinterStore.hpp"
+#include "../../Utils/bambu_virtual_client/VirtualSsdpDiscovery.hpp"  // per-printer port resolver
 
 #include <boost/asio.hpp>
 #include <chrono>
@@ -76,8 +77,13 @@ std::string build_virtual_storage_url(MachineObject* mo) {
     const std::string lan_ip = mo->get_dev_ip();
     if (lan_ip.empty()) return {};
     const std::string passwd = mo->get_access_code();
+    // Per-printer vtun port (vtun_base + index), resolved the same way as
+    // MQTT/FTPS/RTSP — NOT hardcoded 39998, which would send every printer's
+    // storage to the first printer's (A1's) tunnel.
+    const uint16_t vtun_port =
+        Slic3r::VirtualSsdpDiscovery::port_for(dev_id, kBridgeVtunPort, lan_ip);
     return "bambu:///virtual/" + lan_ip + ":" +
-           std::to_string(kBridgeVtunPort) +
+           std::to_string(vtun_port) +
            "?dev_id=" + dev_id +
            "&access_code=" + passwd;
 }
@@ -93,16 +99,12 @@ std::string build_virtual_live_url(MachineObject* mo) {
     // external process). It re-packetises the printer's camera as standard
     // RTP (H.264/RFC6184 or MJPEG/RFC2435), which wxMediaCtrl2's GStreamer
     // rtspsrc backend plays directly — no libBambuSource, no bambu:///.
-    // Per-device port: rtsp_base + (mqtt_port - mqtt_base).
-    uint16_t rtsp_port = kBridgeRtspPort;  // fallback: child #0 / index 0
-    Slic3r::VirtualLanPrinterStore store;
-    for (const auto& e : store.load()) {
-        if (e.dev_id == dev_id && e.mqtt_port != 0) {
-            rtsp_port = static_cast<uint16_t>(
-                int(kBridgeRtspPort) + (int(e.mqtt_port) - int(kBridgeMqttPort)));
-            break;
-        }
-    }
+    // Per-device port (rtsp_base + index) via the shared resolver — live SSDP
+    // cache -> persisted store -> unicast probe of the bridge — matching
+    // MQTT/FTPS/vtun. (Was store-only, which silently defaulted to the A1's
+    // 38322 whenever the store hadn't captured this dev's mqtt_port yet.)
+    const uint16_t rtsp_port =
+        Slic3r::VirtualSsdpDiscovery::port_for(dev_id, kBridgeRtspPort, lan_ip);
     // Transport (rtsp vs rtsps) is detected by probing the bridge — no
     // slicer-side flag needed; the bridge's BAMBU_BRIDGE_RTSP_TLS is the
     // single source of truth.

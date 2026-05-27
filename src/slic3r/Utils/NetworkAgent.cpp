@@ -122,29 +122,9 @@ NetworkAgent::NetworkAgent(std::shared_ptr<ICloudServiceAgent> cloud_agent, std:
     Slic3r::VirtualMqttClient::instance().set_port_resolver(
         [](const std::string& dev_id) -> uint16_t {
             if (!is_virtual_dev_id(dev_id)) return 0;
-            // 1. Live SSDP advertisement recorded by the running listener —
-            //    the freshest source, needs no persistence or manual config.
-            if (uint16_t p = Slic3r::VirtualSsdpDiscovery::advertised_port(dev_id))
-                return p;
-            // 2. Persisted store (survives restarts; may carry a 0/stale
-            //    port). Capture lan_ip for the unicast fallback en route.
-            std::string bridge_ip;
-            Slic3r::VirtualLanPrinterStore store;
-            for (const auto& e : store.load()) {
-                if (e.dev_id == dev_id) {
-                    if (e.mqtt_port) return e.mqtt_port;
-                    bridge_ip = e.lan_ip;
-                    break;
-                }
-            }
-            // 3. Cold cache + no persisted port: probe the bridge directly
-            //    via UNICAST M-SEARCH (reliable where multicast is dropped),
-            //    so even the first connect uses the advertised port instead
-            //    of the 8883 default. Falls through to 0 (→ 8883) on timeout.
-            if (!bridge_ip.empty())
-                if (uint16_t p = Slic3r::VirtualSsdpDiscovery::probe_port(bridge_ip, dev_id))
-                    return p;
-            return 0;
+            // Shared chain: live SSDP cache -> persisted store -> unicast probe
+            // (the store's lan_ip seeds the probe). 0 -> client falls back to 8883.
+            return Slic3r::VirtualSsdpDiscovery::resolve_mqtt_port(dev_id);
         });
 }
 
@@ -1007,28 +987,14 @@ int NetworkAgent::start_send_gcode_to_sdcard(PrintParams params, OnUpdateStatusF
     if (is_virtual_dev_id(params.dev_id)) {
         Slic3r::virtual_ftps::UploadParams up;
         up.host        = params.dev_ip;
-        // Per-printer FTPS port = ftps_base + index, the SAME index the bridge
-        // assigns for MQTT (mqtt_base + index). Resolve this dev's MQTT port
-        // the same way VirtualMqttClient does — live SSDP cache -> persisted
-        // store -> unicast probe of the bridge host — so a multi-printer send
-        // reaches THIS printer's FTPS server instead of always landing on the
-        // first printer's port (39990). Without this, sends to H2S/H2D upload
-        // to the A1's FTPS and the slicer re-prompts for IP/access code.
-        {
-            constexpr uint16_t kMqttBase = 8883, kFtpsBase = 39990;
-            uint16_t mqtt_port = Slic3r::VirtualSsdpDiscovery::advertised_port(params.dev_id);
-            if (mqtt_port == 0) {
-                Slic3r::VirtualLanPrinterStore store;
-                for (const auto& e : store.load())
-                    if (e.dev_id == params.dev_id && e.mqtt_port) { mqtt_port = e.mqtt_port; break; }
-            }
-            if (mqtt_port == 0)
-                mqtt_port = Slic3r::VirtualSsdpDiscovery::probe_port(params.dev_ip, params.dev_id);
-            if (mqtt_port == 0) mqtt_port = kMqttBase;
-            up.port = static_cast<uint16_t>(kFtpsBase + (int(mqtt_port) - int(kMqttBase)));
-            BOOST_LOG_TRIVIAL(info) << "virtual send: dev=" << params.dev_id
-                << " ftps_port=" << up.port << " (mqtt_port=" << mqtt_port << ")";
-        }
+        // Per-printer FTPS port (ftps_base + index) via the shared resolver,
+        // so a multi-printer send reaches THIS printer's FTPS server instead
+        // of always landing on the first printer's port (39990) — which would
+        // upload to the A1 with the wrong access code and make the slicer
+        // re-prompt for IP/access code.
+        up.port = Slic3r::VirtualSsdpDiscovery::port_for(params.dev_id, 39990, params.dev_ip);
+        BOOST_LOG_TRIVIAL(info) << "virtual send: dev=" << params.dev_id
+                                << " ftps_port=" << up.port;
         up.user        = params.username.empty() ? std::string("bblp") : params.username;
         up.pass        = params.password;
         up.local_path  = params.filename;
