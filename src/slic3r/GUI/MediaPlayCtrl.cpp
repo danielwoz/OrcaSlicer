@@ -296,11 +296,14 @@ void MediaPlayCtrl::Play()
             if (auto* obj = dm->get_my_machine(m_machine)) {
                 std::string url = build_virtual_live_url(obj);
                 if (!url.empty()) {
-                    url += "&net_ver=" + agent_version;
-                    url += "&dev_ver=" + m_dev_ver;
-                    url += "&cli_id=" + wxGetApp().app_config->get("slicer_uuid");
-                    url += "&cli_ver=" + std::string(SLIC3R_VERSION);
-                    BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl: virtual url";
+                    // Standard RTSP from the bridge camera relay (see
+                    // MediaUrlBuilder). No bambu:/// session params: this
+                    // is a plain rtsp://<bridge>:8554/<dev_id> that
+                    // wxMediaCtrl2's GStreamer rtspsrc backend opens
+                    // directly — virtual printers use standard streaming,
+                    // no libBambuSource.
+                    BOOST_LOG_TRIVIAL(info)
+                        << "MediaPlayCtrl: virtual (standard rtsp) url " << url;
                     m_url = url;
                     load();
                     m_button_play->SetIcon("media_stop");

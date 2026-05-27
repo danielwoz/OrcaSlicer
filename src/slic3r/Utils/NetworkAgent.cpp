@@ -68,6 +68,14 @@ int NetworkAgent::unload_network_module() { return BBLNetworkPlugin::instance().
 
 bool NetworkAgent::is_network_module_loaded() { return BBLNetworkPlugin::instance().is_loaded(); }
 
+bool NetworkAgent::has_virtual_printer() {
+    try {
+        return !Slic3r::VirtualLanPrinterStore().load().empty();
+    } catch (...) {
+        return false;
+    }
+}
+
 #if defined(_MSC_VER) || defined(_WIN32)
 HMODULE NetworkAgent::get_bambu_source_entry() { return BBLNetworkPlugin::instance().get_bambu_source_entry(); }
 #else

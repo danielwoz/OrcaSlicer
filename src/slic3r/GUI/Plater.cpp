@@ -10213,7 +10213,12 @@ void Plater::priv::on_tab_selection_changing(wxBookCtrlEvent& e)
     update_sidebar();
     int old_sel = e.GetOldSelection();
     if (wxGetApp().preset_bundle && wxGetApp().preset_bundle->use_bbl_device_tab() && new_sel == MainFrame::tpMonitor) {
-        if (!Slic3r::NetworkAgent::is_network_module_loaded()) {
+        // The Bambu device tab normally requires the proprietary network
+        // plugin. In the virtual-only (bridge) build that plugin is never
+        // loaded, so also admit the tab when a bridge printer is known to
+        // the VirtualLanPrinterStore — the virtual client services it.
+        if (!Slic3r::NetworkAgent::is_network_module_loaded() &&
+            !Slic3r::NetworkAgent::has_virtual_printer()) {
             e.Veto();
             BOOST_LOG_TRIVIAL(info) << boost::format("skipped tab switch from %1% to %2%, lack of network plugins") % old_sel % new_sel;
             if (q) {

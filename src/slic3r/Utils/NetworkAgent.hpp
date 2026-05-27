@@ -29,6 +29,12 @@ public:
     static int initialize_network_module(bool using_backup = false, const std::string& version = "");
     static int unload_network_module();
     static bool is_network_module_loaded();
+    // True when at least one virtual (bridge) printer is known to the
+    // VirtualLanPrinterStore. The Bambu device tab is otherwise gated on
+    // the proprietary network plugin being loaded; in the virtual-only
+    // build that plugin is never present, so we also admit the tab when a
+    // bridge printer is configured (the virtual client services it).
+    static bool has_virtual_printer();
 #if defined(_MSC_VER) || defined(_WIN32)
     static HMODULE get_bambu_source_entry();
 #else
