@@ -968,8 +968,71 @@ int NetworkAgent::del_subscribe(std::vector<std::string> dev_list)
     return -1;
 }
 
+namespace {
+
+// Virtual-printer (FFFF) FTPS upload. Per-printer FTPS port (ftps_base+index)
+// via the shared resolver so a multi-printer send hits THIS printer's FTPS
+// server instead of always landing on the first printer's 39990 (otherwise
+// the slicer re-prompts for IP/access code).
+int virtual_ftps_upload_(const PrintParams& params,
+                         OnUpdateStatusFn  update_fn,
+                         WasCancelledFn    cancel_fn) {
+    Slic3r::virtual_ftps::UploadParams up;
+    up.host        = params.dev_ip;
+    up.port        = Slic3r::VirtualSsdpDiscovery::port_for(params.dev_id, 39990, params.dev_ip);
+    up.user        = params.username.empty() ? std::string("bblp") : params.username;
+    up.pass        = params.password;
+    up.local_path  = params.filename;
+    up.remote_name = params.ftp_file.empty() ? params.dst_file : params.ftp_file;
+    Slic3r::virtual_ftps::ProgressFn  prog = nullptr;
+    Slic3r::virtual_ftps::CancelledFn canc = nullptr;
+    if (update_fn) prog = [update_fn](int pct, std::string msg){ update_fn(pct, 0, msg); };
+    if (cancel_fn) canc = [cancel_fn]() -> bool { return cancel_fn(); };
+    BOOST_LOG_TRIVIAL(info) << "virtual_ftps_upload: dev=" << params.dev_id
+                            << " ftps_port=" << up.port
+                            << " remote=" << up.remote_name;
+    return Slic3r::virtual_ftps::upload(up, prog, canc);
+}
+
+// Virtual-printer (FFFF) LAN PRINT: upload + send the gcode_file MQTT command
+// telling the printer "print this file from your SD". Mirrors the OSS
+// BambuStudio LocalPrintOrchestrator exactly:
+//   {"print":{"command":"gcode_file","param":"<remote_path>","sequence_id":"<n>"}}
+// The MQTT publish goes through the FFFF branch of NetworkAgent::send_message
+// (-> VirtualMqttClient -> bridge broker -> printer, signed).
+int virtual_lan_print_(const PrintParams& params,
+                       OnUpdateStatusFn  update_fn,
+                       WasCancelledFn    cancel_fn) {
+    int rc = virtual_ftps_upload_(params, update_fn, cancel_fn);
+    if (rc != 0) {
+        BOOST_LOG_TRIVIAL(warning) << "virtual_lan_print: FTPS upload failed rc=" << rc;
+        return rc;
+    }
+    std::string folder = params.ftp_folder.empty() ? std::string("/") : params.ftp_folder;
+    if (folder.empty() || folder.back() != '/') folder += '/';
+    std::string fname = params.dst_file.empty() ? params.ftp_file : params.dst_file;
+    if (!fname.empty() && fname.front() == '/') fname.erase(0, 1);
+    const std::string remote_path = folder + fname;
+    static std::atomic<uint64_t> s_seq{1};
+    const std::string seq = std::to_string(s_seq.fetch_add(1));
+    const std::string cmd = "{\"print\":{\"command\":\"gcode_file\",\"param\":\""
+                          + remote_path + "\",\"sequence_id\":\"" + seq + "\"}}";
+    BOOST_LOG_TRIVIAL(info) << "virtual_lan_print: dev=" << params.dev_id
+                            << " gcode_file " << remote_path;
+    int pubrc = Slic3r::VirtualMqttClient::instance().send_message(params.dev_id, cmd, /*qos=*/0);
+    if (pubrc != 0) {
+        BOOST_LOG_TRIVIAL(warning) << "virtual_lan_print: MQTT send rc=" << pubrc;
+        return -1;
+    }
+    return 0;
+}
+
+} // namespace
+
 int NetworkAgent::start_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
+    if (is_virtual_dev_id(params.dev_id))
+        return virtual_lan_print_(params, update_fn, cancel_fn);
     if (m_printer_agent)
         return m_printer_agent->start_print(params, update_fn, cancel_fn, wait_fn);
     return -1;
@@ -977,6 +1040,8 @@ int NetworkAgent::start_print(PrintParams params, OnUpdateStatusFn update_fn, Wa
 
 int NetworkAgent::start_local_print_with_record(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
+    if (is_virtual_dev_id(params.dev_id))
+        return virtual_lan_print_(params, update_fn, cancel_fn);
     if (m_printer_agent)
         return m_printer_agent->start_local_print_with_record(params, update_fn, cancel_fn, wait_fn);
     return -1;
@@ -984,35 +1049,8 @@ int NetworkAgent::start_local_print_with_record(PrintParams params, OnUpdateStat
 
 int NetworkAgent::start_send_gcode_to_sdcard(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
-    if (is_virtual_dev_id(params.dev_id)) {
-        Slic3r::virtual_ftps::UploadParams up;
-        up.host        = params.dev_ip;
-        // Per-printer FTPS port (ftps_base + index) via the shared resolver,
-        // so a multi-printer send reaches THIS printer's FTPS server instead
-        // of always landing on the first printer's port (39990) — which would
-        // upload to the A1 with the wrong access code and make the slicer
-        // re-prompt for IP/access code.
-        up.port = Slic3r::VirtualSsdpDiscovery::port_for(params.dev_id, 39990, params.dev_ip);
-        BOOST_LOG_TRIVIAL(info) << "virtual send: dev=" << params.dev_id
-                                << " ftps_port=" << up.port;
-        up.user        = params.username.empty() ? std::string("bblp") : params.username;
-        up.pass        = params.password;
-        up.local_path  = params.filename;
-        up.remote_name = params.ftp_file.empty() ? params.dst_file : params.ftp_file;
-        Slic3r::virtual_ftps::ProgressFn  prog = nullptr;
-        Slic3r::virtual_ftps::CancelledFn canc = nullptr;
-        if (update_fn) {
-            prog = [update_fn](int pct, std::string msg) {
-                // Plugin signature is (status, code, msg). The slicer
-                // surfaces `status` as percent and `msg` as label.
-                update_fn(pct, /*code=*/0, msg);
-            };
-        }
-        if (cancel_fn) {
-            canc = [cancel_fn]() -> bool { return cancel_fn(); };
-        }
-        return Slic3r::virtual_ftps::upload(up, prog, canc);
-    }
+    if (is_virtual_dev_id(params.dev_id))
+        return virtual_ftps_upload_(params, update_fn, cancel_fn);
     if (m_printer_agent)
         return m_printer_agent->start_send_gcode_to_sdcard(params, update_fn, cancel_fn, wait_fn);
     return -1;
@@ -1020,6 +1058,8 @@ int NetworkAgent::start_send_gcode_to_sdcard(PrintParams params, OnUpdateStatusF
 
 int NetworkAgent::start_local_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn)
 {
+    if (is_virtual_dev_id(params.dev_id))
+        return virtual_lan_print_(params, update_fn, cancel_fn);
     if (m_printer_agent)
         return m_printer_agent->start_local_print(params, update_fn, cancel_fn);
     return -1;
