@@ -164,7 +164,21 @@ void ConnectPrinterDialog::on_button_confirm(wxCommandEvent &event)
         }
     }
     if (m_obj) {
-        m_obj->set_user_access_code(code.ToStdString());
+        // Persist to BOTH access_code and user_access_code.
+        //
+        // The pre-print gate at SelectMachine.cpp checks
+        //   has_access_right() == !get_access_code().empty()
+        // which reads `access_code`. Older code wrote only
+        // user_access_code here, so after the user typed the code the
+        // gate's check still saw an empty access_code and the dialog
+        // re-fired on every print attempt — even though other code
+        // paths (status / filament-set / camera) read user_access_code
+        // and worked fine.
+        // Setting both fields keeps every consumer happy and matches
+        // how the SSDP-add path populates the entry.
+        const std::string s = code.ToStdString();
+        m_obj->set_user_access_code(s);
+        m_obj->set_access_code(s);
     }
     EndModal(wxID_OK);
 }
