@@ -15644,6 +15644,32 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
     PresetBundle& preset_bundle = *wxGetApp().preset_bundle;
     std::vector<Preset*> project_presets = preset_bundle.get_current_project_embedded_presets();
 
+    // BBS: H2D (and likely future Bambu firmware) validates ams_mapping against the
+    // Metadata/filament_settings_<N>.config files embedded in the 3mf. When the user
+    // prints with stock vendor filament presets (no project-level override),
+    // get_current_project_embedded_presets() returns nothing for filaments and the
+    // exported 3mf carries no filament_settings_*.config, causing the printer to
+    // reject the job with HMS 0700700000020008 ("Failed to get AMS mapping table").
+    // Always embed the active filament presets so the firmware can validate.
+    {
+        std::set<std::string> embedded_filament_names;
+        for (Preset *p : project_presets) {
+            if (p && p->type == Preset::TYPE_FILAMENT)
+                embedded_filament_names.insert(p->name);
+        }
+        for (const std::string &filament_name : preset_bundle.filament_presets) {
+            if (filament_name.empty()) continue;
+            if (!embedded_filament_names.insert(filament_name).second) continue;
+            const Preset *src = preset_bundle.filaments.find_preset(filament_name, false);
+            if (!src) continue;
+            Preset *clone = new Preset(*src);
+            clone->is_project_embedded = true;
+            project_presets.push_back(clone);
+        }
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__
+            << boost::format(", project_presets after filament backfill, count %1%") % project_presets.size();
+    }
+
     StoreParams store_params;
     store_params.path  = path_u8.c_str();
     store_params.model = &p->model;
