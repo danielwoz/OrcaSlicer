@@ -818,6 +818,9 @@ bool verify_update_print_object_regions(
             cfg.wall_filament.value    = region.extruder_id;
             cfg.solid_infill_filament.value = region.extruder_id;
             cfg.sparse_infill_filament.value       = region.extruder_id;
+            // Orca: surface_wall_override_filament is NOT reset here. The painted color sets the
+            // base filament for this region; surface_wall_override_filament still applies on top of
+            // it for the outermost N loops (so painted region + outer-wall accent work).
             if (cfg != region.region->config()) {
                 // Region configuration changed.
                 if (print_region_ref_cnt(*region.region) == 0) {
@@ -1063,6 +1066,8 @@ static PrintObjectRegions* generate_print_object_regions(
                     cfg.wall_filament.value    = painted_extruder_id;
                     cfg.solid_infill_filament.value = painted_extruder_id;
                     cfg.sparse_infill_filament.value       = painted_extruder_id;
+                    // Orca: surface_wall_override_filament is NOT reset here. See comment in
+                    // the other painted-region branch above.
                     layer_range.painted_regions.push_back({ painted_extruder_id, parent_region_id, get_create_region(std::move(cfg))});
                 }
         // Sort the regions by parent region::print_object_region_id() and extruder_id to help the slicing algorithm when applying MM segmentation.
@@ -1254,6 +1259,8 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: found full_config_diff changed.")%__LINE__;
         update_apply_status(this->invalidate_step(psGCodeExport));
         m_placeholder_parser.clear_config();
+        // clear_config() wiped the constructor-set "version"; restore it for custom G-code.
+        m_placeholder_parser.set("version", std::string(SoftFever_VERSION));
         // Set the profile aliases for the PrintBase::output_filename()
 		m_placeholder_parser.set("print_preset",              new_full_config.option("print_settings_id")->clone());
 		m_placeholder_parser.set("filament_preset",           new_full_config.option("filament_settings_id")->clone());
@@ -1630,6 +1637,8 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: full_config_diff previous empty, need to apply now.")%__LINE__;
 
             m_placeholder_parser.clear_config();
+            // clear_config() wiped the constructor-set "version"; restore it for custom G-code.
+            m_placeholder_parser.set("version", std::string(SoftFever_VERSION));
             // Set the profile aliases for the PrintBase::output_filename()
             m_placeholder_parser.set("print_preset",              new_full_config.option("print_settings_id")->clone());
             m_placeholder_parser.set("filament_preset",           new_full_config.option("filament_settings_id")->clone());

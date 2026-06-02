@@ -72,10 +72,31 @@ void PrintRegion::collect_object_printing_extruders(const PrintConfig &print_con
     };
     if (region_config.wall_loops.value > 0 || has_brim)
     	emplace_extruder(region_config.wall_filament);
-    if (region_config.sparse_infill_density.value > 0)
-    	emplace_extruder(region_config.sparse_infill_filament);
-    if (region_config.top_shell_layers.value > 0 || region_config.bottom_shell_layers.value > 0)
-    	emplace_extruder(region_config.solid_infill_filament);
+    // Orca: outer-wall filament for the outermost N perimeter loops. Only enumerate when
+    // the dropdown is set to apply to walls (Walls or Both); 'Surfaces' uses the regular
+    // wall_filament for perimeters.
+    {
+        const auto target = region_config.surface_wall_override_filament_target.value;
+        const bool target_includes_walls    = target == SurfaceWallOverrideFilamentTarget::Walls    || target == SurfaceWallOverrideFilamentTarget::Both;
+        const bool target_includes_surfaces = target == SurfaceWallOverrideFilamentTarget::Surfaces || target == SurfaceWallOverrideFilamentTarget::Both;
+        if (region_config.wall_loops.value > 0
+            && region_config.surface_wall_override_filament.value > 0
+            && region_config.surface_wall_override_filament.value != region_config.wall_filament.value
+            && target_includes_walls)
+            emplace_extruder(region_config.surface_wall_override_filament);
+        if (region_config.sparse_infill_density.value > 0)
+            emplace_extruder(region_config.sparse_infill_filament);
+        if (region_config.top_shell_layers.value > 0 || region_config.bottom_shell_layers.value > 0) {
+            emplace_extruder(region_config.solid_infill_filament);
+            // Orca: when target ∈ {Surfaces, Both}, top/bottom solid infill is re-routed to
+            // surface_wall_override_filament. Ensure that filament is enumerated even when no walls
+            // would otherwise pull it in (wall_loops == 0, or target == Surfaces).
+            if (target_includes_surfaces
+                && region_config.surface_wall_override_filament.value > 0
+                && region_config.surface_wall_override_filament.value != region_config.solid_infill_filament.value)
+                emplace_extruder(region_config.surface_wall_override_filament);
+        }
+    }
 }
 
 void PrintRegion::collect_object_printing_extruders(const Print &print, std::vector<unsigned int> &object_extruders) const

@@ -57,6 +57,8 @@ namespace GUI {
 class TabPresetComboBox;
 class OG_CustomCtrl;
 
+std::vector<InputShaperType> input_shaper_types_for_flavor(GCodeFlavor flavor);
+
 // Single Tab page containing a{ vsizer } of{ optgroups }
 // package Slic3r::GUI::Tab::Page;
 using ConfigOptionsGroupShp = std::shared_ptr<ConfigOptionsGroup>;
@@ -144,7 +146,6 @@ protected:
 
 	//BBS: GUI refactor
 	wxPanel*			m_top_panel;
-	ScalableButton* m_mode_icon; // ORCA m_static_title replacement
 	wxBoxSizer* m_main_sizer;
 	wxBoxSizer* m_top_sizer;
 	wxBoxSizer* m_top_left_sizer;
@@ -305,6 +306,7 @@ public:
     int                 m_update_cnt = 0;
 
 	ModeSwitchButton *m_mode_view = nullptr;
+	ScalableButton* m_mode_icon = nullptr; // ORCA m_static_title replacement
     SwitchButton *m_extruder_switch = nullptr;
     MultiSwitchButton *m_variant_combo = nullptr;
 
@@ -600,6 +602,7 @@ private:
 	bool		m_use_silent_mode = false;
 	void		append_option_line(ConfigOptionsGroupShp optgroup, const std::string opt_key, const std::string& label_path = "");
 	bool		m_rebuild_kinematics_page = false;
+	void        update_input_shaper_menu(GCodeFlavor flavor);
 
 	ogStaticText*	m_fff_print_host_upload_description_line {nullptr};
 	ogStaticText*	m_sla_print_host_upload_description_line {nullptr};
@@ -637,6 +640,7 @@ public:
     void		update_fff();
     void		update_sla();
     void        update_pages(); // update m_pages according to printer technology
+	void        on_gcode_flavor_changed();
 	void		extruders_count_changed(size_t extruders_count);
 	PageShp		build_kinematics_page();
 	void		build_unregular_pages(bool from_initial_build = false);

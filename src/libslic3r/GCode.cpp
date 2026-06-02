@@ -1161,10 +1161,15 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         const bool is_ramming       = (gcodegen.config().single_extruder_multi_material) ||
                                 (!gcodegen.config().single_extruder_multi_material &&
                                  gcodegen.config().filament_multitool_ramming.get_at(tcr.initial_tool));
+        // Orca: user-facing override (Printer Settings > Wipe tower > "Tool change on wipe tower").
+        // Forces the toolhead to travel over the wipe tower before issuing Tx even on multi-toolhead
+        // printers without ramming, where Orca would otherwise emit Tx in place (potentially over the part).
+        const bool tool_change_on_wipe_tower = gcodegen.config().tool_change_on_wipe_tower.value;
         const bool should_travel_to_tower = !tcr.priming && (tcr.force_travel     // wipe tower says so
                                                              || !needs_toolchange // this is just finishing the tower with no toolchange
                                                              || will_go_down // Make sure to move to prime tower before moving down
-                                                             || is_ramming);
+                                                             || is_ramming
+                                                             || tool_change_on_wipe_tower);
 
         if (should_travel_to_tower || gcodegen.m_need_change_layer_lift_z) {
             // FIXME: It would be better if the wipe tower set the force_travel flag for all toolchanges,
@@ -2273,17 +2278,45 @@ namespace DoExport {
 	    ooze_prevention.enable = print.config().ooze_prevention.value && ! print.config().single_extruder_multi_material;
 	}
 
+    // Count tool/filament changes across the print from the tool ordering. Used as a fallback when no
+    // wipe tower populated WipeTowerData::number_of_toolchanges (left at -1). Covers non-sequential
+    // prints without a wipe tower (manual swaps, toolchanger/IDEX). Note: sequential (by-object) prints
+    // leave print.tool_ordering() empty, so total_toolchanges stays 0 there (unchanged from before).
+    static int total_toolchanges_from_ordering(const ToolOrdering &tool_ordering)
+    {
+        int changes = 0;
+        int last    = -1;
+        for (const LayerTools &lt : tool_ordering)
+            for (unsigned int extruder : lt.extruders) {
+                if (last >= 0 && int(extruder) != last)
+                    ++ changes;
+                last = int(extruder);
+            }
+        return changes;
+    }
+
+    // Total tool changes for the print, preferring the wipe-tower count and falling back to the tool
+    // ordering when no wipe tower populated it (number_of_toolchanges < 0).
+    static int resolve_total_toolchanges(const WipeTowerData &wipe_tower_data, const ToolOrdering &tool_ordering)
+    {
+        int changes = wipe_tower_data.number_of_toolchanges;
+        if (changes < 0)
+            changes = total_toolchanges_from_ordering(tool_ordering);
+        return std::max(0, changes);
+    }
+
 	// Fill in print_statistics and return formatted string containing filament statistics to be inserted into G-code comment section.
     static std::string update_print_stats_and_format_filament_stats(
         const bool                   has_wipe_tower,
 	    const WipeTowerData         &wipe_tower_data,
 	    const std::vector<Extruder> &extruders,
-		PrintStatistics 		    &print_statistics)
+		PrintStatistics 		    &print_statistics,
+        const ToolOrdering          &tool_ordering)
     {
 		std::string filament_stats_string_out;
 
 	    print_statistics.clear();
-        print_statistics.total_toolchanges = std::max(0, wipe_tower_data.number_of_toolchanges);
+        print_statistics.total_toolchanges = resolve_total_toolchanges(wipe_tower_data, tool_ordering);
 	    if (! extruders.empty()) {
 	        std::pair<std::string, unsigned int> out_filament_used_mm ("; filament used [mm] = ", 0);
 	        std::pair<std::string, unsigned int> out_filament_used_cm3("; filament used [cm3] = ", 0);
@@ -2516,6 +2549,9 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         std::string top_gcode_template = print.config().file_start_gcode.value;
         if (!top_gcode_template.empty()) {
             DynamicConfig top_config;
+            // file_start_gcode runs before the parser copy that normally restores these, so set them here.
+            PlaceholderParser::update_timestamp(top_config);
+            PlaceholderParser::update_user_name(top_config);
             top_config.set_key_value("print_time_sec", new ConfigOptionString(GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Print_Time_Sec_Placeholder)));
             top_config.set_key_value("used_filament_length", new ConfigOptionString(GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Used_Filament_Length_Placeholder)));
             std::string top_gcode = print.placeholder_parser().process(top_gcode_template, 0, &top_config);
@@ -2853,7 +2889,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     // For the start / end G-code to do the priming and final filament pull in case there is no wipe tower provided.
     this->placeholder_parser().set("has_wipe_tower", has_wipe_tower);
     this->placeholder_parser().set("has_single_extruder_multi_material_priming", wipe_tower_type == WipeTowerType::Type2 && has_wipe_tower && print.config().single_extruder_multi_material_priming);
-    this->placeholder_parser().set("total_toolchanges", std::max(0, print.wipe_tower_data().number_of_toolchanges)); // Check for negative toolchanges (single extruder mode) and set to 0 (no tool change).
+    this->placeholder_parser().set("total_toolchanges", DoExport::resolve_total_toolchanges(print.wipe_tower_data(), print.tool_ordering()));
     this->placeholder_parser().set("num_extruders", int(print.config().nozzle_diameter.values.size()));
     this->placeholder_parser().set("retract_length", new ConfigOptionFloats(print.config().retraction_length));
 
@@ -3136,18 +3172,24 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     if (is_bbl_printers) {
         this->_print_first_layer_extruder_temperatures(file, print, machine_start_gcode, initial_extruder_id, true);
     }
-    // Orca: when activate_air_filtration is set on any extruder, find and set the highest during_print_exhaust_fan_speed
-    bool activate_air_filtration_during_print = false;
-    int  during_print_exhaust_fan_speed = 0;
-    for (const auto &extruder : m_writer.extruders()) {
-        if (m_config.activate_air_filtration.get_at(extruder.id()) && m_config.activate_air_filtration_during_print.get_at(extruder.id())) {
-            activate_air_filtration_during_print = true;
-            during_print_exhaust_fan_speed = std::max(during_print_exhaust_fan_speed,
-                                                      m_config.during_print_exhaust_fan_speed.get_at(extruder.id()));
+
+    // Orca: when air filtration is supported, check if it needs to be activated during printing and set the exhaust fan speed accordingly
+    if (m_config.support_air_filtration.value) {
+        bool activate_air_filtration_during_print = false;
+        int  during_print_exhaust_fan_speed = 0;
+
+        // Orca: when activate_air_filtration is set on any extruder, find and set the highest during_print_exhaust_fan_speed
+        for (const auto &extruder : m_writer.extruders()) {
+            if (m_config.activate_air_filtration.get_at(extruder.id()) && m_config.activate_air_filtration_during_print.get_at(extruder.id())) {
+                activate_air_filtration_during_print = true;
+                during_print_exhaust_fan_speed = std::max(during_print_exhaust_fan_speed,
+                                                        m_config.during_print_exhaust_fan_speed.get_at(extruder.id()));
+            }
         }
+
+        if (activate_air_filtration_during_print)
+            file.write(m_writer.set_exhaust_fan(during_print_exhaust_fan_speed));
     }
-    if (activate_air_filtration_during_print)
-        file.write(m_writer.set_exhaust_fan(during_print_exhaust_fan_speed, true));
 
     print.throw_if_canceled();
 
@@ -3446,16 +3488,23 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     if (activate_chamber_temp_control && max_chamber_temp > 0)
         file.write(m_writer.set_chamber_temperature(0, false));  //close chamber_temperature
 
-    bool activate_air_filtration_on_completion = false;
-    int complete_print_exhaust_fan_speed = 0;
-    for (const auto& extruder : m_writer.extruders()) {
-        if (m_config.activate_air_filtration.get_at(extruder.id()) && m_config.activate_air_filtration_on_completion.get_at(extruder.id())) {
-            activate_air_filtration_on_completion = true;
-            complete_print_exhaust_fan_speed = std::max(complete_print_exhaust_fan_speed, m_config.complete_print_exhaust_fan_speed.get_at(extruder.id()));
+    // Orca: when air filtration is supported, check if it needs to be activated after print completion and set the exhaust fan speed accordingly
+    if (m_config.support_air_filtration.value) {
+        bool activate_air_filtration_on_completion = false;
+        int complete_print_exhaust_fan_speed = 0;
+
+        // Orca: when activate_air_filtration is set on any extruder, find and set the highest complete_print_exhaust_fan_speed
+        for (const auto& extruder : m_writer.extruders()) {
+            if (m_config.activate_air_filtration.get_at(extruder.id()) && m_config.activate_air_filtration_on_completion.get_at(extruder.id())) {
+                activate_air_filtration_on_completion = true;
+                complete_print_exhaust_fan_speed = std::max(complete_print_exhaust_fan_speed, m_config.complete_print_exhaust_fan_speed.get_at(extruder.id()));
+            }
         }
+
+        if (activate_air_filtration_on_completion)
+            file.write(m_writer.set_exhaust_fan(complete_print_exhaust_fan_speed));
     }
-    if (activate_air_filtration_on_completion)
-        file.write(m_writer.set_exhaust_fan(complete_print_exhaust_fan_speed, true));
+
     // adds tags for time estimators
     file.write_format(";%s\n", GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Last_Line_M73_Placeholder).c_str());
     file.write_format("; EXECUTABLE_BLOCK_END\n\n");
@@ -3468,7 +3517,9 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         has_wipe_tower, print.wipe_tower_data(),
         m_writer.extruders(),
         // Modifies
-        print.m_print_statistics));
+        print.m_print_statistics,
+        // Const input (tool-change fallback for non-wipe-tower prints)
+        print.tool_ordering()));
     print.m_print_statistics.initial_tool = initial_extruder_id;
     if (!is_bbl_printers) {
         file.write_format("; total filament used [g] = %.2lf\n",
@@ -3925,6 +3976,17 @@ void GCode::print_machine_envelope(GCodeOutputStream &file, Print &print)
 
         // New Marlin uses M205 J[mm] for junction deviation (only apply if it is > 0)
         file.write_format(writer().set_junction_deviation(config().machine_max_junction_deviation.values.front()).c_str());
+
+        // Orca: Override input shaping values
+        if (print.config().input_shaping_emit.value && flavor != gcfMarlinLegacy) {
+            const bool input_shaping_disable = print.config().input_shaping_type.value == InputShaperType::Disable;
+            file.write_format(writer().set_input_shaping('X', print.config().input_shaping_damp_x.value,
+                print.config().input_shaping_freq_x.value, print.config().opt_serialize("input_shaping_type")).c_str());
+            if (flavor != gcfRepRapFirmware && !input_shaping_disable) {
+                file.write_format(writer().set_input_shaping('Y', print.config().input_shaping_damp_y.value,
+                    print.config().input_shaping_freq_y.value, "").c_str());
+            }
+        }
     }
 }
 
@@ -4868,56 +4930,120 @@ LayerResult GCode::process_layer(
                         if (extrusions->entities.empty()) // This shouldn't happen but first_point() would fail.
                             continue;
 
-                        // This extrusion is part of certain Region, which tells us which extruder should be used for it:
-                        int correct_extruder_id = layer_tools.extruder(*extrusions, region);
+                        // Orca: scratch buffers used when the outer-wall filament feature is active and a per-island
+                        // collection contains heterogeneous extruder_override values. We split into two non-owning
+                        // sub-collections so the routing logic picks the right extruder per half.
+                        // Declared here so they go out of scope at end of each iteration, making the split-
+                        // collection handling exception-safe. We clear .entities before they go out of scope
+                        // so the destructors won't attempt to delete non-owned child pointers.
+                        ExtrusionEntityCollection split_outer_walls;
+                        ExtrusionEntityCollection split_inner_walls;
+                        split_outer_walls.no_sort = false;
+                        split_inner_walls.no_sort = false;
 
-                        // Let's recover vector of extruder overrides:
-                        const WipingExtrusions::ExtruderPerCopy *entity_overrides = nullptr;
-                        if (! layer_tools.has_extruder(correct_extruder_id)) {
-                            // this entity is not overridden, but its extruder is not in layer_tools - we'll print it
-                            // by last extruder on this layer (could happen e.g. when a wiping object is taller than others - dontcare extruders are eradicated from layer_tools)
-                            correct_extruder_id = layer_tools.extruders.back();
-                        }
-                        printing_extruders.clear();
-                        if (is_anything_overridden) {
-                            entity_overrides = const_cast<LayerTools&>(layer_tools).wiping_extrusions().get_extruder_overrides(extrusions, layer_to_print.original_object, correct_extruder_id, layer_to_print.object()->instances().size());
-                            if (entity_overrides == nullptr) {
-                                printing_extruders.emplace_back(correct_extruder_id);
-                            } else {
-                                printing_extruders.reserve(entity_overrides->size());
-                                for (int extruder : *entity_overrides)
-                                    printing_extruders.emplace_back(extruder >= 0 ?
-                                        // at least one copy is overridden to use this extruder
-                                        extruder :
-                                        // at least one copy would normally be printed with this extruder (see get_extruder_overrides function for explanation)
-                                        static_cast<unsigned int>(- extruder - 1));
-                                Slic3r::sort_remove_duplicates(printing_extruders);
+                        // Orca: detect heterogeneous extruder overrides in PERIMETERS *and* INFILL
+                        // collections. If found, build two non-owning sub-collections (outer-override
+                        // vs rest) and route each independently. Both halves are still located via the
+                        // original collection's first_point, so they end up in the same island_idx
+                        // under their respective extruders.
+                        // Skipped when the original requires preserved order (no_sort=true), so
+                        // we don't reorder a collection that callers expect to print as one unit.
+                        // Perimeters: split is gated on surface_wall_override_filament differing from wall_filament
+                        //             AND surface_wall_override_filament_target including walls (Walls or Both).
+                        // Infill:     split is gated on surface_wall_override_filament_target including surfaces
+                        //             (Surfaces or Both), which also drives the override being set
+                        //             during fill generation.
+                        const auto target = region.config().surface_wall_override_filament_target.value;
+                        const bool target_includes_walls    = target == SurfaceWallOverrideFilamentTarget::Walls    || target == SurfaceWallOverrideFilamentTarget::Both;
+                        const bool target_includes_surfaces = target == SurfaceWallOverrideFilamentTarget::Surfaces || target == SurfaceWallOverrideFilamentTarget::Both;
+                        const bool split_perimeters = entity_type == ObjectByExtruder::Island::Region::PERIMETERS
+                            && region.config().surface_wall_override_filament.value > 0
+                            && region.config().surface_wall_override_filament.value != region.config().wall_filament.value
+                            && target_includes_walls;
+                        const bool split_infill = entity_type == ObjectByExtruder::Island::Region::INFILL
+                            && target_includes_surfaces
+                            && region.config().surface_wall_override_filament.value > 0;
+                        std::vector<const ExtrusionEntityCollection*> sub_collections;
+                        if ((split_perimeters || split_infill) && !extrusions->no_sort) {
+                            const int8_t outer_filament = (int8_t)region.config().surface_wall_override_filament.value;
+                            for (ExtrusionEntity *child : extrusions->entities) {
+                                if (child->extruder_override == outer_filament)
+                                    split_outer_walls.entities.emplace_back(child);
+                                else
+                                    split_inner_walls.entities.emplace_back(child);
                             }
-                        } else
-                            printing_extruders.emplace_back(correct_extruder_id);
+                            if (!split_outer_walls.entities.empty() && !split_inner_walls.entities.empty()) {
+                                sub_collections.push_back(&split_outer_walls);
+                                sub_collections.push_back(&split_inner_walls);
+                            }
+                        }
+                        if (sub_collections.empty())
+                            sub_collections.push_back(extrusions);
 
-                        // Now we must add this extrusion into the by_extruder map, once for each extruder that will print it:
-                        for (unsigned int extruder : printing_extruders)
-                        {
-                            std::vector<ObjectByExtruder::Island> &islands = object_islands_by_extruder(
-                                by_extruder,
-                                extruder,
-                                &layer_to_print - layers.data(),
-                                layers.size(), n_slices+1);
-                            for (size_t i = 0; i <= n_slices; ++ i) {
-                                bool   last = i == n_slices;
-                                size_t island_idx = last ? n_slices : slices_test_order[i];
-                                if (// extrusions->first_point does not fit inside any slice
-                                    last ||
-                                    // extrusions->first_point fits inside ith slice
-                                    point_inside_surface(island_idx, extrusions->first_point())) {
-                                    if (islands[island_idx].by_region.empty())
-                                        islands[island_idx].by_region.assign(print.num_print_regions(), ObjectByExtruder::Island::Region());
-                                    islands[island_idx].by_region[region.print_region_id()].append(entity_type, extrusions, entity_overrides);
-                                    break;
+                        for (const ExtrusionEntityCollection *active : sub_collections) {
+                            // This extrusion is part of certain Region, which tells us which extruder should be used for it:
+                            int correct_extruder_id = layer_tools.extruder(*active, region);
+
+                            // Let's recover vector of extruder overrides:
+                            const WipingExtrusions::ExtruderPerCopy *entity_overrides = nullptr;
+                            if (! layer_tools.has_extruder(correct_extruder_id)) {
+                                // this entity is not overridden, but its extruder is not in layer_tools - we'll print it
+                                // by last extruder on this layer (could happen e.g. when a wiping object is taller than others - dontcare extruders are eradicated from layer_tools)
+                                correct_extruder_id = layer_tools.extruders.back();
+                            }
+                            printing_extruders.clear();
+                            if (is_anything_overridden) {
+                                // Look up overrides on the original 'extrusions' collection, not 'active'.
+                                // The entity_map is keyed on the ExtrusionEntityCollection pointer; the split
+                                // sub-collections (split_outer_walls, split_inner_walls) were never registered,
+                                // so looking them up would always miss. Both halves inherit the parent's override.
+                                entity_overrides = const_cast<LayerTools&>(layer_tools).wiping_extrusions().get_extruder_overrides(extrusions, layer_to_print.original_object, correct_extruder_id, layer_to_print.object()->instances().size());
+                                if (entity_overrides == nullptr) {
+                                    printing_extruders.emplace_back(correct_extruder_id);
+                                } else {
+                                    printing_extruders.reserve(entity_overrides->size());
+                                    for (int extruder : *entity_overrides)
+                                        printing_extruders.emplace_back(extruder >= 0 ?
+                                            // at least one copy is overridden to use this extruder
+                                            extruder :
+                                            // at least one copy would normally be printed with this extruder (see get_extruder_overrides function for explanation)
+                                            static_cast<unsigned int>(- extruder - 1));
+                                    Slic3r::sort_remove_duplicates(printing_extruders);
+                                }
+                            } else
+                                printing_extruders.emplace_back(correct_extruder_id);
+
+                            // Now we must add this extrusion into the by_extruder map, once for each extruder that will print it:
+                            for (unsigned int extruder : printing_extruders)
+                            {
+                                std::vector<ObjectByExtruder::Island> &islands = object_islands_by_extruder(
+                                    by_extruder,
+                                    extruder,
+                                    &layer_to_print - layers.data(),
+                                    layers.size(), n_slices+1);
+                                for (size_t i = 0; i <= n_slices; ++ i) {
+                                    bool   last = i == n_slices;
+                                    size_t island_idx = last ? n_slices : slices_test_order[i];
+                                    if (// extrusions->first_point does not fit inside any slice
+                                        last ||
+                                        // Use extrusions->first_point() (not active->first_point()) because both
+                                        // sub-collections (split_outer_walls and split_inner_walls) are derived from
+                                        // the same original collection and should be placed in the same island_idx.
+                                        // Using the original point ensures both halves land in the same island.
+                                        // extrusions->first_point fits inside ith slice
+                                        point_inside_surface(island_idx, extrusions->first_point())) {
+                                        if (islands[island_idx].by_region.empty())
+                                            islands[island_idx].by_region.assign(print.num_print_regions(), ObjectByExtruder::Island::Region());
+                                        islands[island_idx].by_region[region.print_region_id()].append(entity_type, active, entity_overrides);
+                                        break;
+                                    }
                                 }
                             }
                         }
+                        // Clear scratch buffers before they go out of scope so the destructors
+                        // don't attempt to delete non-owned child pointers.
+                        split_outer_walls.entities.clear();
+                        split_inner_walls.entities.clear();
                     }
                 }
             } // for regions
@@ -5100,7 +5226,13 @@ LayerResult GCode::process_layer(
         if (print.config().print_sequence == PrintSequence::ByLayer && m_enable_exclude_object && print.config().support_object_skip_flush.value) {
             std::vector<size_t> filament_instances_id;
             for (InstanceToPrint &instance : filament_to_print_instances[extruder_id]) filament_instances_id.emplace_back(instance.label_object_id);
-            m_filament_instances_code = _encode_label_ids_to_base64(filament_instances_id);
+            // Orca: when surface filament selection routes top/bottom infill to a non-primary
+            // extruder, an object can have zero instances on the primary extruder for this
+            // layer. _encode_label_ids_to_base64 throws LogicError("Label object id error!")
+            // on an empty input — so skip the encode (and the M624 emission that consumes
+            // m_filament_instances_code) when there are no instances to label here.
+            if (! filament_instances_id.empty())
+                m_filament_instances_code = _encode_label_ids_to_base64(filament_instances_id);
         }
 
         std::string gcode_toolchange;
@@ -5710,6 +5842,9 @@ std::string GCode::extrude_loop(const ExtrusionLoop&        loop_ref,
     // if polyline was shorter than the clipping distance we'd get a null polyline, so
     // we discard it in that case
     const double seam_gap = scale_(m_config.seam_gap.get_abs_value(nozzle_diameter));
+    const bool seam_gap_applied = enable_seam_slope || m_enable_loop_clipping;
+    const double seam_gap_distance_mm = seam_gap_applied ? unscale_(seam_gap) : 0.0;
+    double seam_scarf_distance_mm = 0.0;
     const double clip_length = m_enable_loop_clipping && !enable_seam_slope ? seam_gap : 0;
 
     // get paths
@@ -5858,6 +5993,7 @@ std::string GCode::extrude_loop(const ExtrusionLoop&        loop_ref,
         const double slope_min_length         = slope_entire_loop ? loop_length : std::min(m_config.seam_slope_min_length.value, loop_length);
         const int    slope_steps              = m_config.seam_slope_steps;
         const double slope_max_segment_length = scale_(slope_min_length / slope_steps);
+        seam_scarf_distance_mm = slope_min_length;
 
         // Calculate the sloped loop
         ExtrusionLoopSloped new_loop(paths, seam_gap, slope_min_length, slope_max_segment_length, start_slope_ratio, loop.loop_role());
@@ -5880,6 +6016,11 @@ std::string GCode::extrude_loop(const ExtrusionLoop&        loop_ref,
             paths.insert(paths.end(), new_loop.paths.begin(), new_loop.paths.end());
             paths.insert(paths.end(), new_loop.ends.begin(), new_loop.ends.end());
         }
+    }
+
+    if (description == "perimeter") {
+        m_processor.result().print_statistics.total_seam_gap_distance += static_cast<float>(seam_gap_distance_mm);
+        m_processor.result().print_statistics.total_seam_scarf_distance += static_cast<float>(seam_scarf_distance_mm);
     }
 
     // BBS
@@ -7233,22 +7374,41 @@ std::string encodeBase64(uint64_t value)
     return dest;
 }
 
-std::string GCode::_encode_label_ids_to_base64(std::vector<size_t> ids)
+// Pure helper: encode `ids` as a 64-bit bitmask over their position in
+// `known_ids` (which must be sorted), then base64. An empty `ids` returns ""
+// — the caller can drop the M624 line entirely instead of emitting an empty
+// argument. A non-sorted entry not in `known_ids` is a programming error and
+// throws.
+//
+// Exposed as a static member so libslic3r unit tests can exercise it without
+// constructing a full GCode instance. See test_label_ids_encoding.cpp.
+std::string GCode::encode_label_ids_to_base64(const std::vector<size_t> &ids,
+                                              const std::vector<size_t> &known_ids)
 {
-    assert(m_label_objects_ids.size() < 64);
+    // Empty input -> empty output. Used to be a fatal "Label object id error!"
+    // throw; in practice the caller can have zero instances when the
+    // surface_wall_override_filament_target dropdown routes top/bottom infill to a
+    // non-primary extruder, leaving the primary's filament_to_print_instances
+    // empty for that layer. An empty result lets the M624 emission path skip
+    // gracefully (it already gates on m_filament_instances_code being non-empty).
+    if (ids.empty())
+        return std::string();
 
+    assert(known_ids.size() < 64);
     uint64_t bitset = 0;
     for (size_t id : ids) {
-        auto index = std::lower_bound(m_label_objects_ids.begin(), m_label_objects_ids.end(), id);
-        if (index != m_label_objects_ids.end() && *index == id)
-            bitset |= (1ull << (index - m_label_objects_ids.begin()));
+        auto index = std::lower_bound(known_ids.begin(), known_ids.end(), id);
+        if (index != known_ids.end() && *index == id)
+            bitset |= (1ull << (index - known_ids.begin()));
         else
             throw Slic3r::LogicError("Unknown label object id!");
     }
-    if (bitset == 0)
-        throw Slic3r::LogicError("Label object id error!");
-
     return encodeBase64(bitset);
+}
+
+std::string GCode::_encode_label_ids_to_base64(std::vector<size_t> ids)
+{
+    return encode_label_ids_to_base64(ids, m_label_objects_ids);
 }
 
 // This method accepts &point in print coordinates.

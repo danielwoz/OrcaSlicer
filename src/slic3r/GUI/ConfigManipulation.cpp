@@ -1,5 +1,6 @@
 // #include "libslic3r/GCodeSender.hpp"
 #include "ConfigManipulation.hpp"
+#include <cctype>
 #include "I18N.hpp"
 #include "GUI_App.hpp"
 #include "format.hpp"
@@ -536,18 +537,83 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
         auto answer = dialog.ShowModal();
         if (answer == wxID_YES)
             new_conf.set_key_value("wall_generator", new ConfigOptionEnum<PerimeterGeneratorType>(PerimeterGeneratorType::Arachne));
-        else 
+        else
             new_conf.set_key_value("fuzzy_skin_mode", new ConfigOptionEnum<FuzzySkinMode>(FuzzySkinMode::Displacement));
         apply(config, &new_conf);
         is_msg_dlg_already_exist = false;
+    }
+
+    // Orca: clamp outer_wall_count to a sensible range relative to wall_loops, and warn when
+    // surface_wall_override_filament is combined with the inner-outer-inner wall sequence.
+    const int wall_loops_v        = config->opt_int("wall_loops");
+    const int wall_filament_v     = config->opt_int("wall_filament");
+    const int surface_wall_override_filament = config->opt_int("surface_wall_override_filament");
+    const int outer_wall_count    = config->opt_int("outer_wall_count");
+    if (surface_wall_override_filament > 0 && wall_loops_v > 0) {
+        const int max_outer = std::max(1, wall_loops_v - 1);
+        if (outer_wall_count < 1 || outer_wall_count > max_outer) {
+            DynamicPrintConfig new_conf = *config;
+            new_conf.set_key_value("outer_wall_count",
+                                   new ConfigOptionInt(std::clamp(outer_wall_count, 1, max_outer)));
+            apply(config, &new_conf);
+        }
+        if (!is_msg_dlg_already_exist
+            && config->opt_enum<WallSequence>("wall_sequence") == WallSequence::InnerOuterInner) {
+            wxString msg_text = _L("The 'Inner-Outer-Inner' wall sequence interleaves outer and inner walls within "
+                                   "each island. When the outer-wall filament differs from the wall filament, this "
+                                   "produces one tool change per island per layer instead of per layer, which "
+                                   "significantly increases wipe-tower volume.");
+            MessageDialog dialog(m_msg_dlg_parent, msg_text, "", wxICON_WARNING | wxOK);
+            is_msg_dlg_already_exist = true;
+            dialog.ShowModal();
+            is_msg_dlg_already_exist = false;
+        }
+        // Orca: warn when outer-wall and inner-wall filaments are different polymer families
+        // (cross-material delamination risk). Fiber/glass-reinforced variants of the same base
+        // polymer (e.g. PETG vs PETG-CF) share a polymer backbone and are not flagged.
+        if (!is_msg_dlg_already_exist
+            && surface_wall_override_filament != wall_filament_v
+            && wall_filament_v > 0) {
+            const auto *types = config->option<ConfigOptionStrings>("filament_type");
+            if (types
+                && (size_t)surface_wall_override_filament <= types->values.size()
+                && (size_t)wall_filament_v    <= types->values.size()) {
+                auto family = [](std::string s) {
+                    // Strip reinforcement / variant suffixes that share a base polymer.
+                    for (const char *suf : { "-CF", "-GF", "-HF", "+" }) {
+                        const size_t n = std::strlen(suf);
+                        if (s.size() >= n && s.compare(s.size() - n, n, suf) == 0) {
+                            s.erase(s.size() - n);
+                            break;
+                        }
+                    }
+                    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::toupper(c); });
+                    return s;
+                };
+                const std::string outer_t = types->values[surface_wall_override_filament - 1];
+                const std::string inner_t = types->values[wall_filament_v    - 1];
+                if (!outer_t.empty() && !inner_t.empty() && family(outer_t) != family(inner_t)) {
+                    wxString msg_text = wxString::Format(
+                        _L("Surface / outer wall override (%s) and inner wall filament (%s) are different polymer "
+                           "families. They may not bond reliably at layer interfaces and can delaminate "
+                           "during or after the print.\n\n"
+                           "Fiber-reinforced variants of the same polymer (e.g. PETG vs PETG-CF) are not "
+                           "flagged — only true cross-family pairings."),
+                        wxString::FromUTF8(outer_t), wxString::FromUTF8(inner_t));
+                    MessageDialog dialog(m_msg_dlg_parent, msg_text, "", wxICON_WARNING | wxOK);
+                    is_msg_dlg_already_exist = true;
+                    dialog.ShowModal();
+                    is_msg_dlg_already_exist = false;
+                }
+            }
+        }
     }
 }
 
 void ConfigManipulation::apply_null_fff_config(DynamicPrintConfig *config, std::vector<std::string> const &keys, std::map<ObjectBase *, ModelConfig *> const &configs)
 {
     for (auto &k : keys) {
-        if (/*k == "adaptive_layer_height" || */ k == "independent_support_layer_height" || k == "enable_support" ||
-            k == "detect_thin_wall" || k == "tree_support_adaptive_layer_height")
+        if (k == "independent_support_layer_height" || k == "enable_support" || k == "detect_thin_wall")
             config->set_key_value(k, new ConfigOptionBool(true));
         else if (k == "wall_loops")
             config->set_key_value(k, new ConfigOptionInt(0));
@@ -605,6 +671,10 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     InfillPattern pattern = config->opt_enum<InfillPattern>("sparse_infill_pattern");
     bool          have_multiline_infill_pattern = pattern == ipGyroid || pattern == ipGrid || pattern == ipRectilinear || pattern == ipTpmsD || pattern == ipTpmsFK || pattern == ipCrossHatch || pattern == ipHoneycomb || pattern == ipLateralLattice || pattern == ipLateralHoneycomb || pattern == ipConcentric ||
                                                   pattern == ipCubic || pattern == ipStars || pattern == ipAlignedRectilinear || pattern == ipLightning || pattern == ip3DHoneycomb || pattern == ipAdaptiveCubic || pattern == ipSupportCubic|| pattern == ipTriangles || pattern == ipQuarterCubic|| pattern == ipArchimedeanChords || pattern == ipHilbertCurve || pattern == ipOctagramSpiral;
+
+    // gyroid_optimized only applies when the sparse infill pattern is gyroid;
+    // hide the whole line otherwise.
+    toggle_line("gyroid_optimized", have_infill && pattern == ipGyroid);
 
     // If there is infill, enable/disable fill_multiline according to whether the pattern supports multiline infill.
     if (have_infill) {
@@ -710,6 +780,18 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     toggle_field("brim_flow_ratio", have_brim);
     // wall_filament uses the same logic as in Print::extruders()
     toggle_field("wall_filament", have_perimeters || have_brim);
+    // Orca: outer-wall-filament feature.
+    toggle_field("surface_wall_override_filament", have_perimeters);
+    toggle_field("outer_wall_count",
+                 have_perimeters
+                 && config->opt_int("surface_wall_override_filament") > 0
+                 && config->opt_int("wall_loops") > 1);
+    // Orca: 'Apply to' picks Walls / Surfaces / Both for surface_wall_override_filament. Only
+    // meaningful once surface_wall_override_filament is set, and only useful when there is at
+    // least one solid shell to apply it to (otherwise Surfaces/Both are no-ops).
+    toggle_field("surface_wall_override_filament_target",
+                 config->opt_int("surface_wall_override_filament") > 0
+                 && (config->opt_int("top_shell_layers") > 0 || config->opt_int("bottom_shell_layers") > 0));
 
     bool have_brim_ear = (config->opt_enum<BrimType>("brim_type") == btEar);
     const auto brim_width = config->opt_float("brim_width");
@@ -742,19 +824,20 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     //toggle_field("support_closing_radius", have_support_material && support_style == smsSnug);
 
     bool support_is_tree = config->opt_bool("enable_support") && is_tree(support_type);
-    bool support_is_normal_tree = support_is_tree && support_style != smsTreeOrganic &&
-    // Orca: use organic as default
-    support_style != smsDefault;
-    bool support_is_organic = support_is_tree && !support_is_normal_tree;
-    // settings shared by normal and organic trees
-    for (auto el : {"tree_support_branch_angle", "tree_support_branch_distance", "tree_support_branch_diameter" })
-        toggle_line(el, support_is_normal_tree);
+    bool support_is_organic = support_is_tree && (support_style == smsTreeOrganic || support_style == smsDefault);
+    bool support_is_normal_tree = support_is_tree && !support_is_organic;
+
+    // hide settings that are not used by tree supports
+    toggle_line("support_threshold_overlap", !support_is_tree); // ORCA: tree supports do not use Threshold Overlap
     // settings specific to normal trees
-    for (auto el : {"tree_support_auto_brim", "tree_support_brim_width", "tree_support_adaptive_layer_height"})
+    for (auto el : {"tree_support_branch_angle", "tree_support_branch_distance", "tree_support_branch_diameter", "tree_support_auto_brim", "tree_support_brim_width"})
         toggle_line(el, support_is_normal_tree);
     // settings specific to organic trees
     for (auto el : {"tree_support_branch_angle_organic", "tree_support_branch_distance_organic", "tree_support_branch_diameter_organic", "tree_support_angle_slow", "tree_support_tip_diameter", "tree_support_top_rate", "tree_support_branch_diameter_angle"})
         toggle_line(el, support_is_organic);
+    // ORCA: Independent support layer height is not compatible with organic tree supports,
+    // as they rely on the support layers being the same as the object layers to determine where to place branches.
+    toggle_line("independent_support_layer_height", have_support_material && !support_is_organic);
 
     toggle_field("tree_support_brim_width", support_is_tree && !config->opt_bool("tree_support_auto_brim"));
     // tree support use max_bridge_length instead of bridge_no_support
@@ -788,9 +871,12 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
 
     toggle_line("raft_contact_distance", have_raft && !have_support_soluble);
 
-    // Orca: Raft, grid, snug and organic supports use these two parameters to control the size & density of the "brim"/flange
-    for (auto el : { "raft_first_layer_expansion", "raft_first_layer_density"})
-        toggle_field(el, have_support_material && !(support_is_normal_tree && !have_raft));
+    // Orca: First-layer density is available for supports broadly.
+    toggle_field("raft_first_layer_density", have_support_material);
+    // Orca: For regular tree (Slim/Strong) without raft, hide first-layer expansion.
+    // Keep it enabled for non-tree supports, organic tree, hybrid tree, and any raft case.
+    toggle_field("raft_first_layer_expansion",
+                 have_support_material && ((!support_is_normal_tree || support_style == smsTreeHybrid) || have_raft));
 
     bool has_ironing = (config->opt_enum<IroningType>("ironing_type") != IroningType::NoIroning);
     for (auto el : { "ironing_pattern", "ironing_flow", "ironing_spacing", "ironing_angle", "ironing_inset", "ironing_angle_fixed" })
@@ -829,8 +915,11 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     toggle_line("enable_tower_interface_cooldown_during_tower",
                 have_prime_tower && config->opt_bool("enable_tower_interface_features"));
 
-    for (auto el : {"wall_filament", "sparse_infill_filament", "solid_infill_filament", "wipe_tower_filament"})
-        toggle_line(el, !bSEMM);
+    // Orca: outer-wall filament works in SEMM mode (AMS / CFS / Mosaic Palette etc.)
+    // — same toolchange-driven routing as multi-extruder, just one physical nozzle.
+    toggle_line("surface_wall_override_filament", true);
+    toggle_line("outer_wall_count", true);
+    toggle_line("surface_wall_override_filament_target", true);
 
     bool purge_in_primetower = preset_bundle->printers.get_edited_preset().config.opt_bool("purge_in_prime_tower");
 
@@ -957,6 +1046,10 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     bool lattice_options = config->opt_enum<InfillPattern>("sparse_infill_pattern") == InfillPattern::ipLateralLattice;
     for (auto el : { "lateral_lattice_angle_1", "lateral_lattice_angle_2"})
         toggle_line(el, lattice_options);
+
+    bool lightning_options = config->opt_enum<InfillPattern>("sparse_infill_pattern") == InfillPattern::ipLightning;
+    for (auto el : { "lightning_overhang_angle", "lightning_prune_angle", "lightning_straightening_angle" })
+        toggle_line(el, lightning_options);
         
     // Adaptative Cubic and support cubic infill patterns do not support infill rotation.
     bool FillAdaptive = (pattern == InfillPattern::ipAdaptiveCubic || pattern == InfillPattern::ipSupportCubic);

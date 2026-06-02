@@ -118,6 +118,9 @@ public:
     virtual void reverse() = 0;
     virtual Point first_point() const = 0;
     virtual Point last_point() const = 0;
+    virtual const Point3& first_point3() const = 0;
+    virtual const Point3& last_point3() const = 0;
+    
     // Produce a list of 2D polygons covered by the extruded paths, offsetted by the extrusion width.
     // Increase the offset by scaled_epsilon to achieve an overlap, so a union will produce no gaps.
     virtual void polygons_covered_by_width(Polygons &out, const float scaled_epsilon) const = 0;
@@ -140,9 +143,21 @@ public:
     
     // Orca: Used for inner/outer/inner mode - classic perimeter generator
     int inset_idx = -1;
+    // Orca: Per-loop filament override. 1-based filament index; -1 = no override.
+    // Set by perimeter generation when surface_wall_override_filament differs from wall_filament
+    // and this loop's inset_idx falls within outer_wall_count.
+    int8_t extruder_override = -1;
 
     static std::string role_to_string(ExtrusionRole role);
     static ExtrusionRole string_to_role(const std::string_view role);
+
+protected:
+    // Helper to copy base-class metadata (inset_idx, extruder_override) in derived
+    // copy ctors/operator= that don't otherwise chain to the base.
+    void copy_entity_fields(const ExtrusionEntity &rhs) {
+        inset_idx = rhs.inset_idx;
+        extruder_override = rhs.extruder_override;
+    }
 };
 
 typedef std::vector<ExtrusionEntity*> ExtrusionEntitiesPtr;
@@ -178,7 +193,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    {}
+    { copy_entity_fields(rhs); }
     ExtrusionPath(ExtrusionPath &&rhs)
         : polyline(std::move(rhs.polyline))
         , overhang_degree(rhs.overhang_degree)
@@ -191,7 +206,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    {}
+    { copy_entity_fields(rhs); }
     ExtrusionPath(const Polyline3 &polyline, const ExtrusionPath &rhs)
         : polyline(polyline)
         , overhang_degree(rhs.overhang_degree)
@@ -204,7 +219,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    {}
+    { copy_entity_fields(rhs); }
     ExtrusionPath(Polyline3 &&polyline, const ExtrusionPath &rhs)
         : polyline(std::move(polyline))
         , overhang_degree(rhs.overhang_degree)
@@ -217,7 +232,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    {}
+    { copy_entity_fields(rhs); }
 
     ExtrusionPath& operator=(const ExtrusionPath& rhs) {
         m_can_reverse = rhs.m_can_reverse;
@@ -231,6 +246,7 @@ public:
         this->overhang_degree = rhs.overhang_degree;
         this->curve_degree = rhs.curve_degree;
         this->polyline = rhs.polyline;
+        copy_entity_fields(rhs);
         return *this;
     }
     ExtrusionPath& operator=(ExtrusionPath&& rhs) {
@@ -245,6 +261,7 @@ public:
         this->overhang_degree = rhs.overhang_degree;
         this->curve_degree = rhs.curve_degree;
         this->polyline = std::move(rhs.polyline);
+        copy_entity_fields(rhs);
         return *this;
     }
 
@@ -253,9 +270,9 @@ public:
 	ExtrusionEntity* clone_move() override { return new ExtrusionPath(std::move(*this)); }
     void reverse() override { this->polyline.reverse(); }
     Point first_point() const override { return this->polyline.points.front().to_point(); }
-    Point3 first_point3() const { return this->polyline.points.front(); }
+    const Point3& first_point3() const override { return this->polyline.points.front(); }
     Point last_point() const override { return this->polyline.points.back().to_point(); }
-    Point3 last_point3() const { return this->polyline.points.back(); }
+    const Point3& last_point3() const override { return this->polyline.points.back(); }
     size_t size() const { return this->polyline.size(); }
     bool empty() const { return this->polyline.empty(); }
     bool is_closed() const { return ! this->empty() && this->polyline.points.front() == this->polyline.points.back(); }
@@ -377,8 +394,8 @@ public:
     ExtrusionPaths paths;
 
     ExtrusionMultiPath() {}
-    ExtrusionMultiPath(const ExtrusionMultiPath &rhs) : paths(rhs.paths), m_can_reverse(rhs.m_can_reverse) {}
-    ExtrusionMultiPath(ExtrusionMultiPath &&rhs) : paths(std::move(rhs.paths)), m_can_reverse(rhs.m_can_reverse) {}
+    ExtrusionMultiPath(const ExtrusionMultiPath &rhs) : paths(rhs.paths), m_can_reverse(rhs.m_can_reverse) { copy_entity_fields(rhs); }
+    ExtrusionMultiPath(ExtrusionMultiPath &&rhs) : paths(std::move(rhs.paths)), m_can_reverse(rhs.m_can_reverse) { copy_entity_fields(rhs); }
     ExtrusionMultiPath(const ExtrusionPaths &paths) : paths(paths) {}
     ExtrusionMultiPath(const ExtrusionPath &path) {this->paths.push_back(path); m_can_reverse = path.can_reverse(); }
 
@@ -386,12 +403,14 @@ public:
     {
         this->paths   = rhs.paths;
         m_can_reverse = rhs.m_can_reverse;
+        copy_entity_fields(rhs);
         return *this;
     }
     ExtrusionMultiPath &operator=(ExtrusionMultiPath &&rhs)
     {
         this->paths   = std::move(rhs.paths);
         m_can_reverse = rhs.m_can_reverse;
+        copy_entity_fields(rhs);
         return *this;
     }
 
@@ -403,7 +422,9 @@ public:
 	ExtrusionEntity* clone_move() override { return new ExtrusionMultiPath(std::move(*this)); }
     void reverse() override;
     Point first_point() const override { return this->paths.front().polyline.points.front().to_point(); }
+    const Point3& first_point3() const override { return this->paths.front().polyline.points.front(); }
     Point last_point() const override { return this->paths.back().polyline.points.back().to_point(); }
+    const Point3& last_point3() const override { return this->paths.back().polyline.points.back(); }
     size_t size() const { return this->paths.size(); }
     bool empty() const { return this->paths.empty(); }
     double length() const override;
@@ -448,6 +469,24 @@ public:
         { this->paths.push_back(path); }
     ExtrusionLoop(const ExtrusionPath &&path, ExtrusionLoopRole role = elrDefault) : m_loop_role(role)
         { this->paths.emplace_back(std::move(path)); }
+    ExtrusionLoop(const ExtrusionLoop &rhs)
+        : paths(rhs.paths), m_loop_role(rhs.m_loop_role)
+    { copy_entity_fields(rhs); }
+    ExtrusionLoop(ExtrusionLoop &&rhs)
+        : paths(std::move(rhs.paths)), m_loop_role(rhs.m_loop_role)
+    { copy_entity_fields(rhs); }
+    ExtrusionLoop& operator=(const ExtrusionLoop& rhs) {
+        paths = rhs.paths;
+        m_loop_role = rhs.m_loop_role;
+        copy_entity_fields(rhs);
+        return *this;
+    }
+    ExtrusionLoop& operator=(ExtrusionLoop&& rhs) {
+        paths = std::move(rhs.paths);
+        m_loop_role = rhs.m_loop_role;
+        copy_entity_fields(rhs);
+        return *this;
+    }
     bool is_loop() const override{ return true; }
     bool can_reverse() const override { return false; }
 	ExtrusionEntity* clone() const override{ return new ExtrusionLoop (*this); }
@@ -459,7 +498,9 @@ public:
     bool is_counter_clockwise() { return this->polygon().is_counter_clockwise(); }
     void reverse() override;
     Point first_point() const override { return this->paths.front().polyline.points.front().to_point(); }
+    const Point3& first_point3() const override { return this->paths.front().polyline.points.front(); }
     Point last_point() const override { assert(this->first_point() == this->paths.back().polyline.points.back().to_point()); return this->first_point(); }
+    const Point3& last_point3() const override { assert(this->first_point3() == this->paths.back().polyline.points.back()); return this->first_point3(); }
     Polygon polygon() const;
     double length() const override;
     bool split_at_vertex(const Point &point, const double scaled_epsilon = scaled<double>(0.001));
