@@ -819,15 +819,16 @@ bool DropDown::ShouldDismissOnTopWindowDeactivate()
     // toplevel inactive, which would otherwise cascade-dismiss the whole
     // chain. Skip when our chain peer is shown.
     //
-    // On X11 (including X11 forwarding) this override changes first-
-    // popup behavior too — forwarded X11 fires extra deactivate events
-    // as the popup grabs focus, and overriding the default lets the
-    // wxPopupTransientWindow get into a state where mouse-down inside
-    // the popup fails to register a selection. Defer to the base class
-    // on non-Wayland so X11 sessions match BambuStudio's upstream
-    // behavior (which works on both local + forwarded X11).
+    // On X11 (and X11 forwarding) the parent's `wxEVT_ACTIVATE active=false`
+    // fires the moment our popup grabs the X server's pointer/focus, which
+    // would dismiss the popup before the user can click an item. BambuStudio
+    // upstream doesn't have this Orca-added auto-dismiss path (its
+    // PopupWindow::topWindowActivate just does event.Skip() and stops), so
+    // matching that — by returning false on X11 — is the right shape.
+    // Outside-click dismissal still goes through wxPopupTransientWindow's
+    // mouse-grab path, so we don't lose that.
     if (!dropdown_is_wayland_session()) {
-        return PopupWindow::ShouldDismissOnTopWindowDeactivate();
+        return false;
     }
     return !((mainDropDown && mainDropDown->IsShown()) ||
              (subDropDown  && subDropDown->IsShown()));
