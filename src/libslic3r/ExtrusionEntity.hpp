@@ -508,14 +508,11 @@ public:
     bool is_smooth(double angle_threshold = 0.174, double min_arm_length = 0.025) const;
     //static inline std::string role_to_string(ExtrusionLoopRole role);
 
-#ifndef NDEBUG
-	bool validate() const {
-		assert(this->first_point() == this->paths.back().polyline.points.back());
-		for (size_t i = 1; i < paths.size(); ++ i)
-			assert(this->paths[i - 1].polyline.points.back() == this->paths[i].polyline.points.front());
-		return true;
-	}
-#endif /* NDEBUG */
+// validate() previously asserted polyline closure on the loop. It compared
+// `first_point()` (Point — Vec2) against `polyline.points.back()` (Point3 —
+// Vec3) which doesn't compile under newer Eigen ('cwiseEqual' requires
+// matching dimensions). Function is never called anywhere; removed rather
+// than carrying a dead asserter that breaks the build.
 
 private:
     ExtrusionLoopRole m_loop_role;

@@ -619,6 +619,7 @@ public:
 
     // fun2
     bool is_support_print_with_emmc{false};
+    bool is_support_remote_dry{false};         // BBS port: fun2 bit 5
 
     bool installed_upgrade_kit{false};
     int  bed_temperature_limit = -1;

@@ -157,6 +157,11 @@ void ConnectPrinterDialog::on_input_enter(wxCommandEvent& evt)
 void ConnectPrinterDialog::on_button_confirm(wxCommandEvent &event)
 {
     wxString code = m_textCtrl_code->GetTextCtrl()->GetValue();
+    std::fprintf(stderr,
+        "[ORCA-TRACE] ConnectPrinterDialog::on_button_confirm entered_code_len=%zu "
+        "obj=%p\n",
+        size_t(code.size()), (void*) m_obj);
+    std::fflush(stderr);
     for (char c : code) {
         if (!(('0' <= c && c <= '9') || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z'))) {
             show_error(this, _L("Invalid input."));
@@ -164,6 +169,13 @@ void ConnectPrinterDialog::on_button_confirm(wxCommandEvent &event)
         }
     }
     if (m_obj) {
+        std::fprintf(stderr,
+            "[ORCA-TRACE] ConnectPrinterDialog: before set_*_access_code "
+            "dev_id=%s access_code=[%s] user_access_code=[%s]\n",
+            m_obj->get_dev_id().c_str(),
+            m_obj->get_access_code().c_str(),
+            m_obj->get_user_access_code().c_str());
+        std::fflush(stderr);
         // Persist to BOTH access_code and user_access_code.
         //
         // The pre-print gate at SelectMachine.cpp checks
@@ -179,6 +191,15 @@ void ConnectPrinterDialog::on_button_confirm(wxCommandEvent &event)
         const std::string s = code.ToStdString();
         m_obj->set_user_access_code(s);
         m_obj->set_access_code(s);
+        std::fprintf(stderr,
+            "[ORCA-TRACE] ConnectPrinterDialog: AFTER set_*_access_code "
+            "dev_id=%s access_code=[%s] user_access_code=[%s] "
+            "has_access_right=%d\n",
+            m_obj->get_dev_id().c_str(),
+            m_obj->get_access_code().c_str(),
+            m_obj->get_user_access_code().c_str(),
+            int(m_obj->has_access_right()));
+        std::fflush(stderr);
     }
     EndModal(wxID_OK);
 }

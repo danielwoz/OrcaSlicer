@@ -431,6 +431,53 @@ void DevFilaSystemParser::ParseV1_0(const json& jj, MachineObject* obj, DevFilaS
                         curr_ams->m_left_dry_time = (*it)["dry_time"].get<int>();
                     }
 
+                    // Remote-drying state, ported from BambuStudio's
+                    // DevFilaSystemParser::ParseV1_0 (2026-06-02). The
+                    // printer encodes status/sub-status/fan bits inside
+                    // the `info` hex blob and writes the dry-cycle setpoint
+                    // + reasons-it-cannot-dry as their own JSON fields.
+                    if (it->contains("info"))
+                    {
+                        try {
+                            const std::string info = (*it)["info"].get<std::string>();
+                            curr_ams->m_dry_status     = (DevAms::DryStatus)
+                                DevUtil::get_flag_bits(info,  4, 4);
+                            curr_ams->m_dry_fan1_status = (DevAms::DryFanStatus)
+                                DevUtil::get_flag_bits(info, 18, 2);
+                            curr_ams->m_dry_fan2_status = (DevAms::DryFanStatus)
+                                DevUtil::get_flag_bits(info, 20, 2);
+                            curr_ams->m_dry_sub_status = (DevAms::DrySubStatus)
+                                DevUtil::get_flag_bits(info, 22, 2);
+                        } catch (...) { /* info blob is optional / malformed */ }
+                    }
+                    if (it->contains("dry_setting"))
+                    {
+                        try {
+                            const auto& j_set = (*it)["dry_setting"];
+                            DevAms::DrySettings ds;
+                            if (j_set.contains("dry_filament") && j_set["dry_filament"].is_string())
+                                ds.dry_filament = j_set["dry_filament"].get<std::string>();
+                            if (j_set.contains("dry_temperature") && j_set["dry_temperature"].is_number())
+                                ds.dry_temp = j_set["dry_temperature"].get<int>();
+                            if (j_set.contains("dry_duration") && j_set["dry_duration"].is_number())
+                                ds.dry_hour = j_set["dry_duration"].get<int>();
+                            curr_ams->m_dry_settings = ds;
+                        } catch (...) {}
+                    }
+                    if (it->contains("dry_sf_reason") && (*it)["dry_sf_reason"].is_array())
+                    {
+                        try {
+                            std::vector<DevAms::CannotDryReason> reasons;
+                            for (const auto& r : (*it)["dry_sf_reason"]) {
+                                if (r.is_number()) {
+                                    reasons.push_back(
+                                        (DevAms::CannotDryReason) r.get<int>());
+                                }
+                            }
+                            curr_ams->m_dry_cannot_reasons = std::move(reasons);
+                        } catch (...) {}
+                    }
+
                     if (it->contains("humidity"))
                     {
                         try
@@ -695,3 +742,165 @@ void DevFilaSystemParser::ParseV1_0(const json& jj, MachineObject* obj, DevFilaS
 }
 
 }
+namespace Slic3r {
+// BBS port — forward the tray's filament_id (stored in `setting_id`,
+// populated from MQTT `tray_info_idx` e.g. "GFG00") to the hard-coded
+// preset DB in DevUtilBackend::GetFilamentDryingPreset. Earlier this
+// returned std::nullopt unconditionally, which made AMSDryCtrWin fall
+// back to PLA defaults (heat_distortion=45°C) and refuse to enable
+// Start whenever the user picked a temp > 45°C — see the gate at
+// AMSDryControl.cpp:1523.
+std::optional<DevFilamentDryingPreset> DevAmsTray::get_ams_drying_preset() const {
+    return DevUtilBackend::GetFilamentDryingPreset(setting_id);
+}
+} // namespace Slic3r
+
+namespace Slic3r {
+bool DevAms::IsSupportRemoteDry(const MachineObject* obj) const {
+    if (!obj) return false;
+    if (!SupportDrying()) return false;
+    return obj->is_support_remote_dry;
+}
+} // namespace Slic3r
+
+// ============================================================================
+// DevUtilBackend::GetFilamentDryingPreset — hard-coded preset DB.
+//
+// Source: BambuStudio's `resources/profiles/BBL/filament/fdm_filament_
+// <material>.json` keys `filament_dev_ams_drying_temperature`,
+// `_time`, `_ams_limitations`, `filament_dev_drying_softening_temperature`,
+// `_cooling_temperature`, `_heat_distortion_temperature`. Extracted
+// 2026-06-02. Re-run `BambuStudio/resources/profiles/BBL/filament/`
+// extraction (see the python script in this commit's message) to refresh
+// when Bambu updates official presets.
+//
+// Indexing convention (matches BBS): temperature/time arrays are
+// 4-element [N3F-idle, N3S-idle, N3F-print, N3S-print].
+// ams_supported_mask: bit 0 = N3F, bit 1 = N3S.
+// ============================================================================
+namespace Slic3r {
+namespace {
+
+struct DryingFamilyData {
+    float temp[4];       // [N3F-idle, N3S-idle, N3F-print, N3S-print] °C
+    float time[4];       // [N3F-idle, N3S-idle, N3F-print, N3S-print] hours
+    float softening_temp;
+    float cooling_temp;
+    float heat_distortion_temp;
+    int   ams_supported_mask; // 0b01=N3F, 0b10=N3S, 0b11=both, 0=none
+};
+
+static const std::unordered_map<std::string, DryingFamilyData>& family_data() {
+    static const std::unordered_map<std::string, DryingFamilyData> data = {
+        {"pla",  {{45,45,45,45},  {12,12,12,12},   50,  45,  45, 0b11}},
+        {"abs",  {{65,80,65,75},  {12, 8,12, 8},   80,  75,  90, 0b11}},
+        {"asa",  {{65,80,65,80},  {12, 8,12, 8},   85,  85, 100, 0b11}},
+        {"pc",   {{65,80,65,80},  {12, 8,12, 8},   90,  90, 105, 0b11}},
+        {"pet",  {{65,65,55,55},  {12,12,12,12},   60,  55,  75, 0b11}},
+        {"pctg", {{65,65,55,55},  {12,12,12,12},   60,  55,  75, 0b11}},
+        {"tpu",  {{65,75,45,45},  {12,18,12,18},   50,  40,  45, 0b11}},
+        {"pa",   {{65,85,65,85},  {12,12,12,12},  150, 150, 165, 0b11}},
+        {"ppa",  {{65,85,65,85},  {12,12,12,12},  150, 150, 165, 0b11}},
+        {"pps",  {{65,85,65,85},  {12,12,12,12},  150, 150, 165, 0b00}}, // BBS: no AMS dries PPS
+        // Less common — conservative defaults (BBS doesn't ship explicit values).
+        {"bvoh", {{50,50,50,50},  { 8, 8, 8, 8},   60,  50,  55, 0b11}},
+        {"hips", {{60,60,60,60},  { 8, 8, 8, 8},   70,  60,  70, 0b11}},
+        {"pva",  {{45,45,45,45},  {12,12,12,12},   50,  45,  50, 0b11}},
+        {"eva",  {{45,45,45,45},  { 8, 8, 8, 8},   50,  45,  50, 0b11}},
+        {"pha",  {{45,45,45,45},  { 8, 8, 8, 8},   50,  45,  50, 0b11}},
+        // Polypropylene / polyethylene — Bambu doesn't dry these; return
+        // them anyway so the dialog shows conservative values if the user
+        // picks them.
+        {"pp",   {{60,60,60,60},  { 8, 8, 8, 8},   70,  60,  70, 0b00}},
+        {"pe",   {{60,60,60,60},  { 8, 8, 8, 8},   70,  60,  70, 0b00}},
+    };
+    return data;
+}
+
+// Bambu filament_id (GFA00…) → material family. Sourced by walking BBS's
+// `resources/profiles/BBL/filament/*.json` inherits chain and bucketing
+// every preset by its base `fdm_filament_<family>` template.
+static const std::unordered_map<std::string, std::string>& fid_to_family() {
+    static const std::unordered_map<std::string, std::string> map = {
+        // PLA family (GFA00-GFA50, GFL*, GFS00/02/05)
+        {"GFA00","pla"}, {"GFA01","pla"}, {"GFA02","pla"}, {"GFA05","pla"},
+        {"GFA06","pla"}, {"GFA07","pla"}, {"GFA08","pla"}, {"GFA09","pla"},
+        {"GFA10","pla"}, {"GFA11","pla"}, {"GFA12","pla"}, {"GFA13","pla"},
+        {"GFA15","pla"}, {"GFA16","pla"}, {"GFA17","pla"}, {"GFA18","pla"},
+        {"GFA50","pla"},
+        {"GFL00","pla"}, {"GFL01","pla"}, {"GFL03","pla"}, {"GFL04","pla"},
+        {"GFL05","pla"}, {"GFL95","pla"}, {"GFL96","pla"}, {"GFL98","pla"},
+        {"GFL99","pla"},
+        {"GFS00","pla"}, {"GFS02","pla"}, {"GFS05","pla"},
+        // ABS
+        {"GFB00","abs"}, {"GFB50","abs"}, {"GFB60","abs"}, {"GFB99","abs"},
+        {"GFS06","abs"},
+        // ASA
+        {"GFB01","asa"}, {"GFB02","asa"}, {"GFB51","asa"}, {"GFB61","asa"},
+        {"GFB98","asa"},
+        // PC
+        {"GFC00","pc"},  {"GFC01","pc"},  {"GFC99","pc"},
+        // PET / PETG
+        {"GFG00","pet"}, {"GFG01","pet"}, {"GFG02","pet"}, {"GFG50","pet"},
+        {"GFG60","pet"}, {"GFG96","pet"}, {"GFG98","pet"}, {"GFG99","pet"},
+        {"GFT01","pet"},
+        // PCTG
+        {"GFG97","pctg"},
+        // PA (Nylon)
+        {"GFN03","pa"},  {"GFN04","pa"},  {"GFN05","pa"},  {"GFN08","pa"},
+        {"GFN98","pa"},  {"GFN99","pa"},
+        {"GFS01","pa"},  {"GFS03","pa"},
+        // PPA
+        {"GFN06","ppa"}, {"GFN96","ppa"}, {"GFN97","ppa"},
+        // PPS
+        {"GFT02","pps"}, {"GFT97","pps"}, {"GFT98","pps"},
+        // TPU
+        {"GFU00","tpu"}, {"GFU01","tpu"}, {"GFU02","tpu"}, {"GFU03","tpu"},
+        {"GFU04","tpu"}, {"GFU98","tpu"}, {"GFU99","tpu"},
+        // Support / soluble / dissolvable
+        {"GFS04","pva"}, {"GFS99","pva"},
+        {"GFS97","bvoh"},
+        {"GFS98","hips"},
+        {"GFR99","eva"},
+        {"GFR98","pha"},
+    };
+    return map;
+}
+
+} // namespace
+
+std::optional<DevFilamentDryingPreset> DevUtilBackend::GetFilamentDryingPreset(const std::string& fila_id) {
+    if (fila_id.empty()) return std::nullopt;
+
+    const auto& fid_map = fid_to_family();
+    auto it_fid = fid_map.find(fila_id);
+    if (it_fid == fid_map.end()) return std::nullopt;
+
+    const auto& family_map = family_data();
+    auto it_fam = family_map.find(it_fid->second);
+    if (it_fam == family_map.end()) return std::nullopt;
+
+    const DryingFamilyData& src = it_fam->second;
+    DevFilamentDryingPreset info;
+    info.filament_id = fila_id;
+
+    info.filament_dev_ams_drying_temperature_on_idle [DevAms::AmsType::N3F] = src.temp[0];
+    info.filament_dev_ams_drying_temperature_on_idle [DevAms::AmsType::N3S] = src.temp[1];
+    info.filament_dev_ams_drying_temperature_on_print[DevAms::AmsType::N3F] = src.temp[2];
+    info.filament_dev_ams_drying_temperature_on_print[DevAms::AmsType::N3S] = src.temp[3];
+
+    info.filament_dev_ams_drying_time_on_idle [DevAms::AmsType::N3F] = src.time[0];
+    info.filament_dev_ams_drying_time_on_idle [DevAms::AmsType::N3S] = src.time[1];
+    info.filament_dev_ams_drying_time_on_print[DevAms::AmsType::N3F] = src.time[2];
+    info.filament_dev_ams_drying_time_on_print[DevAms::AmsType::N3S] = src.time[3];
+
+    info.filament_dev_drying_softening_temperature        = src.softening_temp;
+    info.filament_dev_drying_cooling_temperature          = src.cooling_temp;
+    info.filament_dev_ams_drying_heat_distortion_temperature = src.heat_distortion_temp;
+
+    if (src.ams_supported_mask & 0b01) info.ams_limitations.insert(DevAms::AmsType::N3F);
+    if (src.ams_supported_mask & 0b10) info.ams_limitations.insert(DevAms::AmsType::N3S);
+    return info;
+}
+
+} // namespace Slic3r

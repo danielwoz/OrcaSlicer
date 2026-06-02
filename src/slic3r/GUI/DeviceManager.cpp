@@ -5035,6 +5035,11 @@ void MachineObject::parse_new_info(json print)
     // fun2 may have infinite length, use get_flag_bits_no_border
     if (!fun2.empty()) {
         is_support_print_with_emmc = get_flag_bits_no_border(fun2, 0) == 1;
+        // Bit 5 of fun2 advertises remote AMS-drying support — used by
+        // the AMSDryCtrWin dialog (BambuStudio port, 2026-06-02) to
+        // decide whether to open the start/stop UI vs the read-only
+        // humidity popup. Mirrors BBS' DeviceManager.cpp:4295.
+        is_support_remote_dry = (get_flag_bits_no_border(fun2, 5) == 1);
     }
 
     /*aux*/

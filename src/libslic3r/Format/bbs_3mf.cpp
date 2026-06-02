@@ -1600,10 +1600,24 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         }
         while (it != m_plater_data.end())
         {
-            if (it->first > m_plater_data.size())
+            // Upstream guard only checks the upper bound. A plate with
+            // `it->first == 0` (e.g. an OrcaSlicer plate_0-shaped 3mf
+            // already sitting on the printer's SD card from a print made
+            // before today's bridge plate_0→plate_1 normaliser) hits
+            // `plate_data_list[-1]` below and segfaults. Skip those
+            // plates so the rest of the metadata still parses. See
+            // memory `[[project_orca_plate_normaliser]]` for the cause
+            // pattern and `[[project_storage_data_forwarding]]` for the
+            // path that surfaced this crash inside ParseThumbnail.
+            if (it->first < 1 || it->first > m_plater_data.size())
             {
-                add_error("invalid plate index");
-                return false;
+                BOOST_LOG_TRIVIAL(warning)
+                    << __FUNCTION__ << ":" << __LINE__
+                    << " skipping plate with invalid index="
+                    << it->first << " (m_plater_data.size()="
+                    << m_plater_data.size() << ")";
+                ++it;
+                continue;
             }
             PlateData * plate = plate_data_list[it->first-1];
             plate->locked = it->second->locked;
@@ -2272,10 +2286,17 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         }
         while (it != m_plater_data.end())
         {
-            if (it->first > m_plater_data.size())
+            // Same lower-bound guard as load_gcode_3mf_from_stream's
+            // analogous loop — see comment + memory link there.
+            if (it->first < 1 || it->first > m_plater_data.size())
             {
-                add_error("invalid plate index");
-                return false;
+                BOOST_LOG_TRIVIAL(warning)
+                    << __FUNCTION__ << ":" << __LINE__
+                    << " skipping plate with invalid index="
+                    << it->first << " (m_plater_data.size()="
+                    << m_plater_data.size() << ")";
+                ++it;
+                continue;
             }
             plate_data_list[it->first-1]->locked = it->second->locked;
             plate_data_list[it->first-1]->plate_index = it->second->plate_index-1;
@@ -2630,8 +2651,19 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
     //BBS: extract project config from json files
     void _BBS_3MF_Importer::_extract_project_config_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, DynamicPrintConfig& config, ConfigSubstitutionContext& config_substitutions, Model& model)
     {
+        // Bambu-Bridge instrumentation. This function is the last call
+        // made before Orca crashed silently on bridge-forwarded SUB_FILE
+        // model-metadata payloads (2026-06-02). Trace each step so the
+        // next recurrence pinpoints the failure site instead of dying
+        // mid-call with no log entry.
+        BOOST_LOG_TRIVIAL(info)
+            << __FUNCTION__ << ": ENTER filename='" << stat.m_filename
+            << "' uncomp_size=" << stat.m_uncomp_size;
         if (stat.m_uncomp_size > 0) {
             const std::string& temp_path = model.get_backup_path();
+            BOOST_LOG_TRIVIAL(info)
+                << __FUNCTION__ << ": model.get_backup_path()='"
+                << temp_path << "' (empty=" << temp_path.empty() << ")";
 
             std::string dest_file = temp_path + std::string("/") + "_temp_3.config";;
             std::string dest_zip_file = encode_path(dest_file.c_str());
@@ -2641,15 +2673,22 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 add_error("Error while extract project config file to file");
                 return;
             }
+            BOOST_LOG_TRIVIAL(info)
+                << __FUNCTION__ << ": -> config.load_from_json('"
+                << dest_file << "')";
             std::map<std::string, std::string> key_values;
             std::string reason;
             int ret = config.load_from_json(dest_file, config_substitutions, true, key_values, reason);
+            BOOST_LOG_TRIVIAL(info)
+                << __FUNCTION__ << ": <- config.load_from_json ret=" << ret
+                << " reason='" << reason << "'";
             if (ret) {
                 add_error("Error load config from json:"+reason);
                 return;
             }
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", load project config file successfully from %1%\n") %dest_file;
         }
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": EXIT";
     }
 
     //BBS: extract project embedded presets

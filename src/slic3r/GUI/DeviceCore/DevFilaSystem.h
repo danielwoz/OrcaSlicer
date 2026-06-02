@@ -9,6 +9,9 @@
 #include <map>
 #include <optional>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 #include <wx/string.h>
 #include <wx/colour.h>
 
@@ -103,6 +106,13 @@ public:
 
     // static
     static wxColour decode_color(const std::string& color);
+
+    // BBS port — AMSDryCtrWin reads the per-filament recommended drying
+    // preset to suggest temp/duration when the user picks a tray. Orca
+    // doesn't (yet) ship the preset DB, so this returns std::nullopt and
+    // the dialog falls back to manual entry. See DevUtilBackend::
+    // GetFilamentDryingPreset below.
+    std::optional<struct DevFilamentDryingPreset> get_ams_drying_preset() const;
 };
 
 /**
@@ -173,6 +183,90 @@ public:
     bool  SupportDrying() const { return m_ams_type > AMS_LITE; }
     int   GetLeftDryTime() const { return m_left_dry_time; }
 
+    // ------- Remote drying control (ported from BambuStudio 2026-06-02) -------
+    // BBS's `AMSDryCtrWin` opens against N3F/N3S AMS units that support the
+    // `ams_filament_drying` MQTT command. The dialog needs the live drying
+    // status (heating/cooling/etc.), sub-status (dehumidify vs heat), fan
+    // states, an explanation if the AMS *refuses* to start drying, and the
+    // last-pushed dry_setting (filament/temp/duration) so re-opening the
+    // dialog reflects what the user previously asked for.
+
+    enum class DryCtrlMode : int
+    {
+        Off        = 0,
+        OnTime     = 1,
+        OnHumidity = 2,
+    };
+
+    enum class DryStatus : char
+    {
+        Off                          = 0,
+        Checking                     = 1,
+        Drying                       = 2,
+        Cooling                      = 3,
+        Stopping                     = 4,
+        Error                        = 5,
+        CannotStopHeatOutofControl   = 6,
+        PrdTesting                   = 7,
+    };
+
+    enum class DrySubStatus : char
+    {
+        Off        = 0,
+        Heating    = 1,
+        Dehumidify = 2,
+    };
+
+    enum class DryFanStatus : char
+    {
+        Off = 0,
+        On  = 1,
+    };
+
+    enum class CannotDryReason : int
+    {
+        TaskOccupied                     = 0,
+        InsufficientPower                = 1,
+        AmsBusy                          = 2,
+        ConsumableAtAmsOutlet            = 3,
+        InitiatingAmsDrying              = 4,
+        NotSupportedIn2dMode             = 5,
+        DryingInProgress                 = 6,
+        Upgrading                        = 7,
+        InsufficientPowerNeedPluginPower = 8,
+        FilamentAtAmsOutletManualUnload  = 10,
+    };
+
+    struct DrySettings
+    {
+        std::string dry_filament;
+        int         dry_temp = -1; // -1 means invalid (°C)
+        int         dry_hour = -1; // -1 means invalid (hours)
+    };
+
+    std::optional<DryStatus>                    GetDryStatus()        const { return m_dry_status; }
+    std::optional<DrySubStatus>                 GetDrySubStatus()     const { return m_dry_sub_status; }
+    std::optional<DryFanStatus>                 GetFan1Status()       const { return m_dry_fan1_status; }
+    std::optional<DryFanStatus>                 GetFan2Status()       const { return m_dry_fan2_status; }
+    std::optional<std::vector<CannotDryReason>> GetCannotDryReason() const { return m_dry_cannot_reasons; }
+    std::optional<DrySettings>                  GetDrySettings()      const { return m_dry_settings; }
+
+    bool AmsIsDrying() const
+    {
+        if (!m_dry_status.has_value()) return false;
+        const DryStatus s = m_dry_status.value();
+        return s == DryStatus::Checking || s == DryStatus::Drying
+            || s == DryStatus::Cooling  || s == DryStatus::Stopping;
+    }
+
+    // BBS port — AMSDryCtrWin asks the DevAms whether the *printer* the
+    // AMS is attached to advertises remote-drying support. BBS gates the
+    // start/stop UI on this; we mirror by delegating to the
+    // MachineObject's `is_support_remote_dry` flag (set from fun2 bit 5).
+    // Implementation in DevFilaSystem.cpp so we don't drag MachineObject's
+    // full header into this one.
+    bool IsSupportRemoteDry(const MachineObject* obj) const;
+
 private:
     AmsType       m_ams_type = AmsType::AMS;
     std::string   m_ams_id;
@@ -187,6 +281,16 @@ private:
     int    m_humidity_level = 5; // AmsType::AMS
     int    m_humidity_percent = -1; // N3F N3S, the percentage, -1 means invalid. eg. 100 means 100%
     int    m_left_dry_time = 0;
+
+    // Remote-drying state (populated by DevFilaSystemParser when the
+    // printer's MQTT push includes `dry_*` fields; absent on AMS units
+    // that don't advertise drying support).
+    std::optional<DryStatus>                    m_dry_status;
+    std::optional<DrySubStatus>                 m_dry_sub_status;
+    std::optional<DryFanStatus>                 m_dry_fan1_status;
+    std::optional<DryFanStatus>                 m_dry_fan2_status;
+    std::optional<std::vector<CannotDryReason>> m_dry_cannot_reasons;
+    std::optional<DrySettings>                  m_dry_settings;
 };
 
 /**
@@ -256,7 +360,20 @@ public:
 public:
     // ctrls
     int  CtrlAmsReset() const;
-     
+
+    // Remote drying control (BambuStudio port — see DevFilaSystemCtrl.cpp).
+    // CtrlAmsStartDryingHour publishes mode=OnTime with a target temp + hour
+    // count; CtrlAmsStopDrying publishes mode=Off. Both target a specific
+    // ams_id (the printer dispatches per-unit). Returns the publish_json rc.
+    int  CtrlAmsStartDryingHour(int                ams_id,
+                                const std::string& filament_type,
+                                int                tag_temp,
+                                int                tag_duration_hour,
+                                bool               rotate_tray,
+                                int                cooling_temp,
+                                bool               close_power_conflict) const;
+    int  CtrlAmsStopDrying(int ams_id) const;
+
 public:
     static bool IsBBL_Filament(std::string tag_uid);
 
@@ -289,6 +406,47 @@ class DevFilaSystemParser
 {
 public:
     static void ParseV1_0(const json& print_json, MachineObject* obj, DevFilaSystem* system, bool key_field_only);
+};
+
+// -----------------------------------------------------------------------------
+// BBS port — preset DB stub.
+// AMSDryCtrWin references DevFilamentDryingPreset + DevUtilBackend::
+// GetFilamentDryingPreset to recommend per-filament drying temperatures.
+// BBS ships a full preset DB; Orca does not (yet). We define the struct
+// minimally so the dialog compiles and falls back to manual entry, and
+// the static helper returns std::nullopt to signal "no recommendation".
+// Porting the actual preset table is left for a follow-up if the user
+// wants auto-recommend; manual-entry already covers the core use case.
+// -----------------------------------------------------------------------------
+struct DevFilamentDryingPreset
+{
+    std::string filament_id;
+
+    // The BBS struct keys per-AMS-type maps off DevAmsType (an unordered_set
+    // for limitations + unordered_maps for the temps/times). Match the
+    // container types so the dialog's `.count(...)` / `[...]` calls compile;
+    // we substitute Orca's `DevAms::AmsType` for BBS's `DevAmsType`.
+    std::unordered_set<DevAms::AmsType>          ams_limitations;
+    std::unordered_map<DevAms::AmsType, float>   filament_dev_ams_drying_time_on_idle;
+    std::unordered_map<DevAms::AmsType, float>   filament_dev_ams_drying_temperature_on_idle;
+    std::unordered_map<DevAms::AmsType, float>   filament_dev_ams_drying_time_on_print;
+    std::unordered_map<DevAms::AmsType, float>   filament_dev_ams_drying_temperature_on_print;
+    float filament_dev_drying_cooling_temperature = 0.f;
+    float filament_dev_drying_softening_temperature = 0.f;
+    float filament_dev_ams_drying_heat_distortion_temperature = 0.f;
+};
+
+class DevUtilBackend
+{
+public:
+    // Hard-coded preset DB for AMSDryCtrWin's per-filament temp/time
+    // recommendation lookup. Body in DevFilaSystem.cpp; values sourced
+    // from BambuStudio's `resources/profiles/BBL/filament/fdm_filament_
+    // <material>.json` on 2026-06-02 and mapped by Bambu filament_id
+    // (GFA00 etc.) → material family → DryingFamilyData. Returns
+    // std::nullopt for unknown filaments and for materials Bambu doesn't
+    // support AMS-drying for (PPS).
+    static std::optional<DevFilamentDryingPreset> GetFilamentDryingPreset(const std::string& fila_id);
 };
 
 }// namespace Slic3r

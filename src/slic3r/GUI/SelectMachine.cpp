@@ -3009,12 +3009,36 @@ void SelectMachineDialog::on_selection_changed(wxCommandEvent &event)
     MachineObject* obj = nullptr;
     for (int i = 0; i < m_list.size(); i++) {
         if (i == selection) {
-
+            std::fprintf(stderr,
+                "[ORCA-TRACE] SelectMachine::on_selection_changed "
+                "dev_id=%s is_lan_mode=%d has_access_right=%d "
+                "access_code=[%s] user_access_code=[%s] dev_ip=[%s] "
+                "connection_type=[%s]\n",
+                m_list[i]->get_dev_id().c_str(),
+                int(m_list[i]->is_lan_mode_printer()),
+                int(m_list[i]->has_access_right()),
+                m_list[i]->get_access_code().c_str(),
+                m_list[i]->get_user_access_code().c_str(),
+                m_list[i]->get_dev_ip().c_str(),
+                m_list[i]->dev_connection_type.c_str());
+            std::fflush(stderr);
             //check lan mode machine
             if (m_list[i]->is_lan_mode_printer() && !m_list[i]->has_access_right()) {
+                std::fprintf(stderr,
+                    "[ORCA-TRACE] SelectMachine: firing ConnectPrinterDialog "
+                    "for dev_id=%s\n",
+                    m_list[i]->get_dev_id().c_str());
+                std::fflush(stderr);
                 ConnectPrinterDialog dlg(wxGetApp().mainframe, wxID_ANY, _L("Input access code"));
                 dlg.set_machine_object(m_list[i]);
                 auto res = dlg.ShowModal();
+                std::fprintf(stderr,
+                    "[ORCA-TRACE] SelectMachine: ConnectPrinterDialog returned res=%d "
+                    "post: access_code=[%s] user_access_code=[%s]\n",
+                    int(res),
+                    m_list[i]->get_access_code().c_str(),
+                    m_list[i]->get_user_access_code().c_str());
+                std::fflush(stderr);
                 m_printer_last_select = "";
                 m_printer_box->GetPrinterComboBox()->SetSelection(-1);
                 m_printer_box->GetPrinterComboBox()->Refresh();

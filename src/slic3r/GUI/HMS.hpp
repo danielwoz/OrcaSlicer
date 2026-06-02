@@ -12,6 +12,7 @@
 #include "libslic3r/Thread.hpp"
 #include "nlohmann/json.hpp"
 #include <mutex>
+#include <unordered_set>
 
 namespace Slic3r {
 
@@ -32,6 +33,11 @@ protected:
     mutable std::mutex m_hms_mutex;
 
     std::unordered_map<string, time_t> m_cloud_hms_last_update_time;
+    // Rate-limit "no catalog for dev_id_type" messages — slicers query
+    // hms text on every status frame, and emitting an error log line
+    // per frame floods the log when a printer has no catalog shipped
+    // (e.g. A1 'N2S'/039 today). One info line per prefix is plenty.
+    mutable std::unordered_set<std::string> m_logged_missing_catalog;
 
 public:
     HMSQuery() { }

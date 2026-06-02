@@ -1774,7 +1774,15 @@ bool InputIpAddressDialog::isIp(std::string ipstr)
 
 void InputIpAddressDialog::on_ok(wxMouseEvent& evt)
 {
+    std::fprintf(stderr,
+        "[ORCA-TRACE] InputIpAddressDialog::on_ok entered "
+        "need_input_sn=%d current_input_index=%d\n",
+        int(m_need_input_sn), int(current_input_index));
+    std::fflush(stderr);
     if (!m_need_input_sn) {
+        std::fprintf(stderr,
+            "[ORCA-TRACE] InputIpAddressDialog: routing to on_send_retry()\n");
+        std::fflush(stderr);
         on_send_retry();
         return;
     }
@@ -1905,6 +1913,14 @@ void InputIpAddressDialog::post_update_test_msg(std::weak_ptr<InputIpAddressDial
 void InputIpAddressDialog::workerThreadFunc(std::string str_ip, std::string str_access_code, std::string sn, std::string model_id, std::string name)
 {
     std::weak_ptr<InputIpAddressDialog> w = std::weak_ptr<InputIpAddressDialog>(token_);
+    std::fprintf(stderr,
+        "[ORCA-TRACE] InputIpAddressDialog::workerThreadFunc "
+        "ip=[%s] code_len=%zu sn=[%s] model_id=[%s] name=[%s] "
+        "current_input_index=%d\n",
+        str_ip.c_str(), str_access_code.size(),
+        sn.c_str(), model_id.c_str(), name.c_str(),
+        int(current_input_index));
+    std::fflush(stderr);
 
     post_update_test_msg(w, _L("connecting..."), true);
 
@@ -1929,7 +1945,21 @@ void InputIpAddressDialog::workerThreadFunc(std::string str_ip, std::string str_
 
     if (w.expired()) return;
   
+    std::fprintf(stderr,
+        "[ORCA-TRACE] InputIpAddressDialog::workerThreadFunc post-detect "
+        "result=%d detectData.connect_type=[%s] bind_state=[%s] "
+        "model_id=[%s] dev_name=[%s] dev_id=[%s]\n",
+        result, detectData.connect_type.c_str(),
+        detectData.bind_state.c_str(),
+        detectData.model_id.c_str(),
+        detectData.dev_name.c_str(),
+        detectData.dev_id.c_str());
+    std::fflush(stderr);
     if (result < 0) {
+        std::fprintf(stderr,
+            "[ORCA-TRACE] InputIpAddressDialog: EARLY RETURN result=%d "
+            "(no insert_local_device, no field persist)\n", result);
+        std::fflush(stderr);
         post_update_test_msg(w, wxEmptyString, true);
         if (result == -1) {
             post_update_test_msg(w, _L("Failed to connect to printer."), false);

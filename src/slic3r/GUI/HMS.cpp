@@ -4,14 +4,19 @@
 #include "DeviceManager.hpp"
 #include "DeviceCore/DevManager.h"
 #include "DeviceCore/DevUtil.h"
+#include "../Utils/NetworkAgent.hpp"
 
 #include <boost/log/trivial.hpp>
+#include <unordered_map>
 
 static const char* HMS_PATH = "hms";
 static const char* HMS_LOCAL_IMG_PATH = "hms/local_image";
 
 // the local HMS info
-static unordered_set<string> package_dev_id_types {"094", "239", "093", "22E"};
+// Catalog gating — only these prefixes load the local resources/hms/* JSON.
+// Kept in sync with BambuStudio's set, plus 26A (which BambuStudio ships
+// hms_*_26A.json files for but forgot to add to the set upstream).
+static unordered_set<string> package_dev_id_types {"094", "239", "093", "20P", "22E", "26A", "31B"};
 
 namespace Slic3r {
 namespace GUI {
@@ -309,14 +314,58 @@ wxString HMSQuery::query_hms_msg(const std::string& dev_id, const std::string& l
     return _query_hms_msg(dev_id.substr(0, 3), long_error_code, lang_code);
 }
 
+// Map a slicer-side printer_type (model id, e.g. "O1D") to the 3-char
+// HMS catalog prefix Bambu assigns to real dev_ids of that model. Only
+// matters for the bridge's virtual-FFFF dev_ids — their first three
+// chars are "FFF", which would otherwise never match any catalog.
+//
+// Values verified against real dev_ids from this user's account:
+//   H2D dev_id starts with "094" → O1D maps to "094"
+//   H2S dev_id starts with "093" → O1S maps to "093"
+//   A1  dev_id starts with "039" → N2S maps to "039"
+//   (other entries from observed real dev_id prefixes on cross-checked
+//    printers; entries without a shipping HMS catalog are still useful
+//    because the lookup short-circuits before logging an error)
+static const std::unordered_map<std::string, std::string>& model_to_hms_prefix() {
+    static const std::unordered_map<std::string, std::string> map{
+        // H-series (multi-extruder)
+        {"O1D", "094"},   // H2D
+        {"O1S", "093"},   // H2S
+        // A-series
+        {"N2S", "039"},   // A1
+        {"N1",  "030"},   // A1 mini
+        // X / P-series — common dev_id prefixes observed in published
+        // Bambu firmware captures; safe to keep even without a shipped
+        // catalog (the lookup just falls back to substr(0,3) below).
+        {"3DPrinter-X1-Carbon", "00M"},
+        {"3DPrinter-X1",        "00M"},
+        {"3DPrinter-X1E",       "00M"},
+        {"C11",                 "00M"},   // X1 Carbon (some snapshots)
+        {"C12",                 "00M"},   // X1
+        {"C13",                 "00M"},   // X1E
+        {"P1P",                 "03W"},
+        {"P1S",                 "03X"},
+    };
+    return map;
+}
+
 string HMSQuery::get_dev_id_type(const MachineObject* obj) const
 {
-    if (obj)
-    {
-        return obj->get_dev_id().substr(0, 3);
+    if (!obj) return string();
+    const std::string& dev_id = obj->get_dev_id();
+    // For virtual FFFF-prefixed dev_ids (bridge-served), the raw prefix
+    // would be "FFF" and never match a catalog. Translate via the
+    // printer_type → HMS prefix table built from observed Bambu serials.
+    if (Slic3r::NetworkAgent::is_virtual_dev_id(dev_id)) {
+        const std::string& model = obj->printer_type;
+        const auto& table = model_to_hms_prefix();
+        auto it = table.find(model);
+        if (it != table.end()) return it->second;
+        // Unknown model — fall through to the raw substr below. It'll
+        // miss the catalog but at least it stays deterministic instead
+        // of returning "FFF" and spamming an error every push_status.
     }
-
-    return string();
+    return dev_id.substr(0, 3);
 }
 
 wxString HMSQuery::_query_hms_msg(const string& dev_id_type, const string& long_error_code, const string& lang_code)
@@ -330,21 +379,30 @@ wxString HMSQuery::_query_hms_msg(const string& dev_id_type, const string& long_
     auto iter = m_hms_info_jsons.find(dev_id_type);
     if (iter == m_hms_info_jsons.end())
     {
-        BOOST_LOG_TRIVIAL(error) << "there are no hms info for the device";
+        // Log once-per-prefix instead of once-per-push_status. The slicer
+        // pulls hms text on every status frame (~1 Hz) — without the
+        // rate-limit this spams the log at >3000 lines/hour for any
+        // printer model OrcaSlicer doesn't ship a catalog for.
+        if (m_logged_missing_catalog.insert(dev_id_type).second)
+            BOOST_LOG_TRIVIAL(info) << "there are no hms info for the device dev_id_type=" << dev_id_type;
         return wxEmptyString;
     }
 
     const json& m_hms_info_json = iter->second;
     if (!m_hms_info_json.is_object())
     {
-        BOOST_LOG_TRIVIAL(error) << "the hms info is not a valid json object";
+        if (m_logged_missing_catalog.insert(dev_id_type).second)
+            BOOST_LOG_TRIVIAL(info) << "hms catalog for dev_id_type=" << dev_id_type
+                                    << " is not a valid json object (no catalog shipped)";
         return wxEmptyString;
     }
 
     const json& device_hms_json = m_hms_info_json.value("device_hms", json());
     if (device_hms_json.is_null() || !device_hms_json.is_object())
     {
-        BOOST_LOG_TRIVIAL(error) << "there are no valid json object named device_hms";
+        if (m_logged_missing_catalog.insert(dev_id_type).second)
+            BOOST_LOG_TRIVIAL(info) << "hms catalog for dev_id_type=" << dev_id_type
+                                    << " has no valid device_hms object";
         return wxEmptyString;
     }
 

@@ -208,7 +208,19 @@ void PrintJob::process(Ctl &ctl)
     params.password = m_access_code;
 
     // check access code and ip address
-    if (this->connection_type == "lan" && m_print_type == "from_normal") {
+    //
+    // FFFF/virtual dev_ids — skip the stock access-code probe. The bridge's
+    // FTPS server accepts any access code and is on a fixed IP (advertised
+    // via SSDP, not user-typed), so the probe has no safety value. It also
+    // would push a wasted 16-byte upload to the bridge, a phantom
+    // `gcode_file` MQTT publish with project_name="verify_job" that the
+    // bridge's MqttBroker interceptor has to specially recognise, and
+    // (on the real-printer leg) leave a "verify_job" entry on the SD card
+    // that the GUI never deletes. Skipping it makes the real upload the
+    // first thing on the wire — same gate we landed in BBS's
+    // PrintDispatcher::lan_verify_job.
+    if (this->connection_type == "lan" && m_print_type == "from_normal"
+        && !Slic3r::NetworkAgent::is_virtual_dev_id(m_dev_id)) {
         bool emmc_ok = false;
         bool ftp_ok = false;
         if (could_emmc_print) {

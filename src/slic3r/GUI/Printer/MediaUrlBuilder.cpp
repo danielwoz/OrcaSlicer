@@ -7,6 +7,7 @@
 #include "../DeviceManager.hpp"     // full definition of MachineObject
 #include "../DeviceCore/DevManager.h"
 #include "../../Utils/NetworkAgent.hpp"
+#include "../../Utils/bambu_virtual_client/StructuredLog.hpp"          // BBL_LOG
 #include "../../Utils/bambu_virtual_client/VirtualLanPrinterStore.hpp"
 #include "../../Utils/bambu_virtual_client/VirtualSsdpDiscovery.hpp"  // per-printer port resolver
 
@@ -60,7 +61,21 @@ const char* probe_rtsp_scheme(const std::string& host, uint16_t port) {
             [&](const boost::system::error_code& e, std::size_t n) { if (!e) got = n; });
         io.run_for(milliseconds(500));
 
-        scheme = (got >= 5 && std::memcmp(buf, "RTSP/", 5) == 0) ? "rtsp" : "rtsps";
+        // If we read RTSP/<x>.<y> back the server is plain RTSP. If we
+        // read anything else (including nothing within the 500ms read
+        // window — a slow bridge accept/respond chain is the common
+        // case right after a child bounce) we used to pick "rtsps" as
+        // the fallback. That's the wrong default for our bridge: it
+        // serves PLAIN RTSP by default (`rdev.tls = false` in
+        // BridgeApp.cpp; only flipped by BAMBU_BRIDGE_RTSP_TLS=1). A TLS
+        // ServerHello starts with 0x16 0x03 — sniff for that to detect
+        // the rare TLS case; otherwise default to plain rtsp so the
+        // slow-response case doesn't silently break video with an
+        // un-decryptable TLS handshake against a plain socket.
+        const bool looks_like_tls =
+            (got >= 2 && static_cast<unsigned char>(buf[0]) == 0x16
+                      && static_cast<unsigned char>(buf[1]) == 0x03);
+        scheme = looks_like_tls ? "rtsps" : "rtsp";
         boost::system::error_code ig;
         sock.close(ig);
     } catch (...) {
@@ -109,8 +124,15 @@ std::string build_virtual_live_url(MachineObject* mo) {
     // slicer-side flag needed; the bridge's BAMBU_BRIDGE_RTSP_TLS is the
     // single source of truth.
     const char* scheme = probe_rtsp_scheme(lan_ip, rtsp_port);
-    return std::string(scheme) + "://" + lan_ip + ":" +
-           std::to_string(rtsp_port) + "/streaming/live/1";
+    const std::string url = std::string(scheme) + "://" + lan_ip + ":" +
+                            std::to_string(rtsp_port) + "/streaming/live/1";
+    BBL_LOG("media-url", "virtual_live_url_built")
+        .str("dev_id",    dev_id)
+        .str("lan_ip",    lan_ip)
+        .num("rtsp_port", rtsp_port)
+        .str("scheme",    scheme)
+        .str("url",       url);
+    return url;
 }
 
 } // namespace GUI

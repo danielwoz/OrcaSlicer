@@ -1,9 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <atomic>
+#include <chrono>
+#include <fstream>
 #include <set>
+#include <sstream>
+#include <thread>
 #include <algorithm>
 
 #include <boost/log/trivial.hpp>
+#include <nlohmann/json.hpp>
 #include "libslic3r/Utils.hpp"
 #include "NetworkAgent.hpp"
 #include "BBLNetworkPlugin.hpp"
@@ -970,6 +976,37 @@ int NetworkAgent::del_subscribe(std::vector<std::string> dev_list)
 
 namespace {
 
+// Mirror of BambuStudio OSS
+// `bambu_net_oss/core/LocalPrintOrchestrator.cpp::compose_remote_path`.
+// SHARED source of truth for both the FTPS STOR remote name and the
+// `print.param` field of the slicer's `gcode_file` MQTT command. These
+// two MUST be identical character-for-character — the bridge's MqttBroker
+// print interceptor keys its spool lookup on the basename of
+// `print.param`. Drift between the two sites is exactly the bug we hit
+// in BBS-bridge and tracked down by factoring this function out; same
+// invariant applies here.
+//
+// `project_name` is intentionally NOT involved: it rides separately on
+// the MQTT command as `print.project_name` and the printer uses it for
+// the UI label; the filesystem path stays under the slicer's own naming
+// convention (the dotted temp `.NNNNNN.0.3mf` BambuStudio / OrcaSlicer
+// writes), matching what stock direct prints do.
+static std::string compose_remote_path(const PrintParams& p) {
+    std::string folder = p.ftp_folder.empty() ? std::string("/") : p.ftp_folder;
+    if (folder.empty() || folder.back() != '/') folder += '/';
+
+    std::string fname = p.dst_file;
+    if (fname.empty()) fname = p.ftp_file;
+    if (fname.empty()) {
+        try {
+            fname = boost::filesystem::path(p.filename).filename().string();
+        } catch (...) {}
+    }
+    if (fname.empty()) fname = "lan_print.3mf";
+    if (!fname.empty() && fname.front() == '/') fname.erase(0, 1);
+    return folder + fname;
+}
+
 // Virtual-printer (FFFF) FTPS upload. Per-printer FTPS port (ftps_base+index)
 // via the shared resolver so a multi-printer send hits THIS printer's FTPS
 // server instead of always landing on the first printer's 39990 (otherwise
@@ -977,13 +1014,33 @@ namespace {
 int virtual_ftps_upload_(const PrintParams& params,
                          OnUpdateStatusFn  update_fn,
                          WasCancelledFn    cancel_fn) {
+    BOOST_LOG_TRIVIAL(info)
+        << "[ORCA-TRACE] virtual_ftps_upload_ entered "
+        << " dev_id=" << params.dev_id
+        << " dev_ip=" << params.dev_ip
+        << " ftp_folder=" << params.ftp_folder
+        << " ftp_file=" << params.ftp_file
+        << " dst_file=" << params.dst_file
+        << " filename=" << params.filename
+        << " username=" << params.username
+        << " pass_len=" << params.password.size();
     Slic3r::virtual_ftps::UploadParams up;
     up.host        = params.dev_ip;
     up.port        = Slic3r::VirtualSsdpDiscovery::port_for(params.dev_id, 39990, params.dev_ip);
+    BOOST_LOG_TRIVIAL(info)
+        << "[ORCA-TRACE] virtual_ftps_upload_ resolved "
+        << " host=" << up.host << " port=" << up.port;
     up.user        = params.username.empty() ? std::string("bblp") : params.username;
     up.pass        = params.password;
     up.local_path  = params.filename;
-    up.remote_name = params.ftp_file.empty() ? params.dst_file : params.ftp_file;
+    // Single source of truth shared with the gcode_file MQTT command
+    // emitted from virtual_lan_print_. See compose_remote_path() above.
+    {
+        const std::string composed = compose_remote_path(params);
+        const auto slash = composed.find_last_of('/');
+        up.remote_name = (slash == std::string::npos) ? composed
+                                                      : composed.substr(slash + 1);
+    }
     Slic3r::virtual_ftps::ProgressFn  prog = nullptr;
     Slic3r::virtual_ftps::CancelledFn canc = nullptr;
     if (update_fn) prog = [update_fn](int pct, std::string msg){ update_fn(pct, 0, msg); };
@@ -1003,36 +1060,197 @@ int virtual_ftps_upload_(const PrintParams& params,
 int virtual_lan_print_(const PrintParams& params,
                        OnUpdateStatusFn  update_fn,
                        WasCancelledFn    cancel_fn) {
+    // (Plates start at 1: slicer writes plate_1.gcode, slice_info.config
+    // index=1, bridge passes through, printer opens plate_1.gcode. An
+    // earlier `virtual_print_normalise_plate_to_zero` renamed
+    // plate_<N>.* → plate_0.* but did NOT update slice_info.config,
+    // creating a mismatch the printer rejected. Removed in both slicers
+    // and bridge; see memory `project_orca_3mf_filament_settings`.)
+
     int rc = virtual_ftps_upload_(params, update_fn, cancel_fn);
     if (rc != 0) {
         BOOST_LOG_TRIVIAL(warning) << "virtual_lan_print: FTPS upload failed rc=" << rc;
         return rc;
     }
-    std::string folder = params.ftp_folder.empty() ? std::string("/") : params.ftp_folder;
-    if (folder.empty() || folder.back() != '/') folder += '/';
-    std::string fname = params.dst_file.empty() ? params.ftp_file : params.dst_file;
-    if (!fname.empty() && fname.front() == '/') fname.erase(0, 1);
-    const std::string remote_path = folder + fname;
+    // Single source of truth shared with virtual_ftps_upload_'s STOR
+    // remote_name. Both ends MUST agree or the printer can't find the
+    // file the bridge stored. See compose_remote_path() above.
+    const std::string remote_path = compose_remote_path(params);
     static std::atomic<uint64_t> s_seq{1};
     const std::string seq = std::to_string(s_seq.fetch_add(1));
-    const std::string cmd = "{\"print\":{\"command\":\"gcode_file\",\"param\":\""
-                          + remote_path + "\",\"sequence_id\":\"" + seq + "\"}}";
+
+    // Build the gcode_file payload to mirror what BambuStudio's
+    // proprietary plugin's `start_local_print` produces — captured in
+    // docs/plugin-trace/H2D-lan.yaml (2026-05-30, the successful BBS LAN
+    // print). The bare 3-field payload (BBS OSS reference) works for
+    // some calibration files but not for AMS-equipped object prints,
+    // because the printer has no way to know which AMS slot to draw
+    // from. Adding the AMS map + bed-type + cali toggles brings the
+    // wire shape into line with what the H2D firmware sees in cloud-
+    // relay project_file ACKs.
+    nlohmann::json j;
+    j["print"]["command"]     = "gcode_file";
+    j["print"]["param"]       = remote_path;
+    j["print"]["sequence_id"] = seq;
+    // AMS routing. Source-of-truth example: "[3,-1,-1,-1,-1,-1,-1,-1]"
+    // (8-entry int array, -1 = unmapped). When PrintParams holds the
+    // stringified form, embed verbatim; the printer parses the same
+    // shape from project_file too.
+    auto emit_json_or_string = [&](const char* key, const std::string& s) {
+        if (s.empty()) return;
+        try { j["print"][key] = nlohmann::json::parse(s); }
+        catch (...) { j["print"][key] = s; }
+    };
+    emit_json_or_string("ams_mapping",      params.ams_mapping);
+    emit_json_or_string("ams_mapping2",     params.ams_mapping2);
+    emit_json_or_string("ams_mapping_info", params.ams_mapping_info);
+    emit_json_or_string("nozzles_info",     params.nozzles_info);
+    emit_json_or_string("nozzle_mapping",   params.nozzle_mapping);
+    if (!params.task_bed_type.empty())
+        j["print"]["task_bed_type"]    = params.task_bed_type;
+    j["print"]["use_ams"]              = params.task_use_ams;
+    j["print"]["task_use_ams"]         = params.task_use_ams;
+    j["print"]["bed_leveling"]         = params.task_bed_leveling;
+    j["print"]["flow_cali"]            = params.task_flow_cali;
+    j["print"]["vibration_cali"]       = params.task_vibration_cali;
+    j["print"]["layer_inspect"]        = params.task_layer_inspect;
+    j["print"]["timelapse"]            = params.task_record_timelapse;
+    j["print"]["auto_bed_leveling"]    = params.auto_bed_leveling;
+    j["print"]["auto_flow_cali"]       = params.auto_flow_cali;
+    j["print"]["auto_offset_cali"]     = params.auto_offset_cali;
+    if (params.plate_index > 0)
+        j["print"]["plate_idx"]        = std::to_string(params.plate_index);
+    if (params.origin_profile_id > 0)
+        j["print"]["profile_id"]       = std::to_string(params.origin_profile_id);
+    if (!params.origin_model_id.empty())
+        j["print"]["model_id"]         = params.origin_model_id;
+    if (!params.project_name.empty())
+        j["print"]["project_name"]     = params.project_name;
+    if (!params.task_name.empty())
+        j["print"]["task_name"]        = params.task_name;
+    // try_emmc_print isn't observed as an MQTT field in any trace; it's a
+    // slicer-side flag the plugin uses to pick the upload transport. Keep
+    // out of the wire payload.
+
+    const std::string cmd = j.dump();
     BOOST_LOG_TRIVIAL(info) << "virtual_lan_print: dev=" << params.dev_id
-                            << " gcode_file " << remote_path;
+                            << " gcode_file " << remote_path
+                            << " bytes=" << cmd.size()
+                            << " ams_mapping=" << params.ams_mapping
+                            << " use_ams=" << int(params.task_use_ams);
     int pubrc = Slic3r::VirtualMqttClient::instance().send_message(params.dev_id, cmd, /*qos=*/0);
     if (pubrc != 0) {
         BOOST_LOG_TRIVIAL(warning) << "virtual_lan_print: MQTT send rc=" << pubrc;
         return -1;
     }
-    return 0;
+
+    // Stock OrcaSlicer's PrintJob fires a leading verify_job probe just
+    // like BambuStudio does (see PrintJob.cpp:222) — but for FFFF dev_ids
+    // we now gate that out in PrintJob, so this code path should never
+    // be reached with project_name=="verify_job" again. Keep the safety
+    // skip anyway so an older PrintJob mid-upgrade can't deadlock the
+    // wait loop below.
+    if (params.project_name == "verify_job") {
+        BOOST_LOG_TRIVIAL(info)
+            << "virtual_lan_print: probe (project_name=verify_job) — "
+               "skipping bridge-dispatch wait";
+        return 0;
+    }
+
+    // Wait for the bridge to finish dispatching this print to the real
+    // printer before returning. Without this, Orca's PrintJob considers
+    // the print "sent" the moment the local-FTPS-to-bridge upload
+    // finishes (~ instant on LAN) and immediately closes its progress
+    // dialog while the bridge is still uploading to the printer and
+    // waiting for the print to actually start (10–20 s after).
+    //
+    // The bridge writes a JSON status file at
+    //   /tmp/bridge-progress/<FFFF dev_id>.json
+    // and updates it on each plugin update_fn callback. We poll the
+    // file every 250 ms, mirror the (stage, code, info) into the
+    // caller's update_fn so Orca's "Sending…" dialog shows progress,
+    // and return only when the bridge marks the upload `done` (rc=0)
+    // or `failed`. Bounded by a 120-second timeout so a hung bridge
+    // doesn't lock up Orca's print dialog forever.
+    {
+        const std::string progress_path =
+            "/tmp/bridge-progress/" + params.dev_id + ".json";
+        using namespace std::chrono;
+        const auto deadline = steady_clock::now() + seconds(120);
+        std::string last_phase;
+        int         last_stage = -1, last_code = -1;
+        std::string last_info;
+        while (true) {
+            if (cancel_fn && cancel_fn()) {
+                BOOST_LOG_TRIVIAL(info)
+                    << "virtual_lan_print: cancelled while waiting for "
+                       "bridge dispatch";
+                return -2;
+            }
+            if (steady_clock::now() > deadline) {
+                BOOST_LOG_TRIVIAL(warning)
+                    << "virtual_lan_print: bridge dispatch wait timed out "
+                       "after 120s — returning success anyway so Orca "
+                       "doesn't strand the user";
+                return 0;
+            }
+            std::ifstream f(progress_path);
+            if (f) {
+                std::stringstream ss; ss << f.rdbuf();
+                try {
+                    auto j2 = nlohmann::json::parse(ss.str());
+                    int stage = j2.value("stage", -1);
+                    int code  = j2.value("code",  -1);
+                    std::string info  = j2.value("info",  std::string{});
+                    std::string phase = j2.value("phase", std::string{});
+                    if (stage != last_stage || code != last_code
+                        || info != last_info || phase != last_phase) {
+                        if (update_fn) update_fn(stage, code, info);
+                        BOOST_LOG_TRIVIAL(info)
+                            << "virtual_lan_print: bridge progress phase="
+                            << phase << " stage=" << stage
+                            << " code=" << code << " info=" << info;
+                        last_stage = stage; last_code = code;
+                        last_info = info;   last_phase = phase;
+                    }
+                    if (phase == "done") {
+                        BOOST_LOG_TRIVIAL(info)
+                            << "virtual_lan_print: bridge dispatch done; "
+                               "returning success";
+                        return 0;
+                    }
+                    if (phase == "failed") {
+                        BOOST_LOG_TRIVIAL(warning)
+                            << "virtual_lan_print: bridge dispatch failed; "
+                               "info=" << info;
+                        return code != 0 ? code : -1;
+                    }
+                } catch (...) {
+                    // Half-written file or stale; just retry.
+                }
+            }
+            std::this_thread::sleep_for(milliseconds(250));
+        }
+    }
 }
 
 } // namespace
 
 int NetworkAgent::start_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
-    if (is_virtual_dev_id(params.dev_id))
+    if (is_virtual_dev_id(params.dev_id)) {
+        BOOST_LOG_TRIVIAL(info) << "[ORCA-TRACE] NetworkAgent print-entry "
+            << " virtual_branch=true dev_id=" << params.dev_id
+            << " dev_ip=" << params.dev_ip
+            << " ftp_folder=" << params.ftp_folder
+            << " ftp_file=" << params.ftp_file
+            << " dst_file=" << params.dst_file
+            << " filename=" << params.filename
+            << " pass_len=" << params.password.size();
         return virtual_lan_print_(params, update_fn, cancel_fn);
+    }
+    BOOST_LOG_TRIVIAL(info) << "[ORCA-TRACE] NetworkAgent print-entry "
+        << " virtual_branch=false dev_id=" << params.dev_id;
     if (m_printer_agent)
         return m_printer_agent->start_print(params, update_fn, cancel_fn, wait_fn);
     return -1;
@@ -1040,8 +1258,19 @@ int NetworkAgent::start_print(PrintParams params, OnUpdateStatusFn update_fn, Wa
 
 int NetworkAgent::start_local_print_with_record(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
-    if (is_virtual_dev_id(params.dev_id))
+    if (is_virtual_dev_id(params.dev_id)) {
+        BOOST_LOG_TRIVIAL(info) << "[ORCA-TRACE] NetworkAgent print-entry "
+            << " virtual_branch=true dev_id=" << params.dev_id
+            << " dev_ip=" << params.dev_ip
+            << " ftp_folder=" << params.ftp_folder
+            << " ftp_file=" << params.ftp_file
+            << " dst_file=" << params.dst_file
+            << " filename=" << params.filename
+            << " pass_len=" << params.password.size();
         return virtual_lan_print_(params, update_fn, cancel_fn);
+    }
+    BOOST_LOG_TRIVIAL(info) << "[ORCA-TRACE] NetworkAgent print-entry "
+        << " virtual_branch=false dev_id=" << params.dev_id;
     if (m_printer_agent)
         return m_printer_agent->start_local_print_with_record(params, update_fn, cancel_fn, wait_fn);
     return -1;
@@ -1058,8 +1287,19 @@ int NetworkAgent::start_send_gcode_to_sdcard(PrintParams params, OnUpdateStatusF
 
 int NetworkAgent::start_local_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn)
 {
-    if (is_virtual_dev_id(params.dev_id))
+    if (is_virtual_dev_id(params.dev_id)) {
+        BOOST_LOG_TRIVIAL(info) << "[ORCA-TRACE] NetworkAgent print-entry "
+            << " virtual_branch=true dev_id=" << params.dev_id
+            << " dev_ip=" << params.dev_ip
+            << " ftp_folder=" << params.ftp_folder
+            << " ftp_file=" << params.ftp_file
+            << " dst_file=" << params.dst_file
+            << " filename=" << params.filename
+            << " pass_len=" << params.password.size();
         return virtual_lan_print_(params, update_fn, cancel_fn);
+    }
+    BOOST_LOG_TRIVIAL(info) << "[ORCA-TRACE] NetworkAgent print-entry "
+        << " virtual_branch=false dev_id=" << params.dev_id;
     if (m_printer_agent)
         return m_printer_agent->start_local_print(params, update_fn, cancel_fn);
     return -1;

@@ -1,4 +1,5 @@
 #include "AMSControl.hpp"
+#include "slic3r/GUI/AMSDryControl.hpp"
 #include "Label.hpp"
 #include "../BitmapCache.hpp"
 #include "../I18N.hpp"
@@ -28,6 +29,7 @@ AMSControl::AMSControl(wxWindow *parent, wxWindowID id, const wxPoint &pos, cons
     : wxSimplebook(parent, wxID_ANY, pos, size)
     , m_Humidity_tip_popup(AmsHumidityTipPopup(this))
     , m_percent_humidity_dry_popup(new uiAmsPercentHumidityDryPopup(this))
+    , m_ams_dry_ctr_win(new AMSDryCtrWin(this))
     , m_ams_introduce_popup(AmsIntroducePopup(this))
 {
     Slic3r::DeviceManager* dev = Slic3r::GUI::wxGetApp().getDeviceManager();
@@ -256,12 +258,48 @@ AMSControl::AMSControl(wxWindow *parent, wxWindowID id, const wxPoint &pos, cons
             }
             else
             {
-                m_percent_humidity_dry_popup->Update(info);
-
-                wxPoint img_pos = ClientToScreen(wxPoint(0, 0));
-                wxPoint popup_pos(img_pos.x - m_percent_humidity_dry_popup->GetSize().GetWidth() + FromDIP(150), img_pos.y - FromDIP(80));
-                m_percent_humidity_dry_popup->Move(popup_pos);
-                m_percent_humidity_dry_popup->ShowModal();
+                // BBS port (2026-06-02): if the printer advertises remote
+                // drying (fun2 bit 5) and this AMS is N3F/N3S, open the
+                // full start/stop AMSDryCtrWin dialog instead of the
+                // read-only humidity popup. Falls back to the popup
+                // when the dialog isn't applicable.
+                //
+                // Gated to **virtual (FFFF) printers only**: BBS sends the
+                // `ams_filament_drying` MQTT publish through the closed
+                // libBambuSource plugin, which signs the print.* envelope.
+                // We don't have that path for real-printer entries in Orca;
+                // only the bridge's FFFF mTLS-cert path can sign these
+                // commands. Showing the editor for a real-printer dev_id
+                // would mislead the user — Start would silently fail or
+                // get rejected. Real-printer entries fall through to the
+                // existing read-only humidity popup.
+                MachineObject* sel_obj = nullptr;
+                if (DeviceManager* dev = ::Slic3r::GUI::wxGetApp().getDeviceManager())
+                    sel_obj = dev->get_selected_machine();
+                const bool is_virtual_dev =
+                    sel_obj && NetworkAgent::is_virtual_dev_id(sel_obj->get_dev_id());
+                const bool dry_dialog_available =
+                    is_virtual_dev && sel_obj->is_support_remote_dry &&
+                    (info->ams_type == AMSModel::N3F_AMS ||
+                     info->ams_type == AMSModel::N3S_AMS);
+                if (dry_dialog_available && m_ams_dry_ctr_win) {
+                    m_ams_dry_ctr_win->set_ams_id(info->ams_id);
+                    if (auto fila = sel_obj->GetFilaSystem()) {
+                        m_ams_dry_ctr_win->update(fila, sel_obj);
+                    }
+                    wxPoint img_pos = ClientToScreen(wxPoint(0, 0));
+                    wxPoint popup_pos(
+                        img_pos.x - m_ams_dry_ctr_win->GetSize().GetWidth() + FromDIP(150),
+                        img_pos.y - FromDIP(80));
+                    m_ams_dry_ctr_win->Move(popup_pos);
+                    m_ams_dry_ctr_win->ShowModal();
+                } else {
+                    m_percent_humidity_dry_popup->Update(info);
+                    wxPoint img_pos = ClientToScreen(wxPoint(0, 0));
+                    wxPoint popup_pos(img_pos.x - m_percent_humidity_dry_popup->GetSize().GetWidth() + FromDIP(150), img_pos.y - FromDIP(80));
+                    m_percent_humidity_dry_popup->Move(popup_pos);
+                    m_percent_humidity_dry_popup->ShowModal();
+                }
             }
         }
 
@@ -275,7 +313,12 @@ void AMSControl::on_retry()
     post_event(wxCommandEvent(EVT_AMS_RETRY));
 }
 
-AMSControl::~AMSControl() {}
+AMSControl::~AMSControl() {
+    if (m_ams_dry_ctr_win) {
+        m_ams_dry_ctr_win->Destroy();
+        m_ams_dry_ctr_win = nullptr;
+    }
+}
 
 std::string AMSControl::GetCurentAms() {
     return m_current_ams;

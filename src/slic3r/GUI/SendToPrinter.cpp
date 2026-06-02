@@ -951,6 +951,14 @@ void SendToPrinterDialog::on_ok(wxCommandEvent &event)
         auto m_send_job           = std::make_unique<SendJob>(m_printer_last_select);
         m_send_job->m_dev_ip      = obj_->get_dev_ip();
         m_send_job->m_access_code = obj_->get_access_code();
+        BOOST_LOG_TRIVIAL(info)
+            << "[ORCA-TRACE] SendToPrinter: built SendJob"
+            << " dev_id=" << m_printer_last_select
+            << " dev_ip=[" << obj_->get_dev_ip() << "]"
+            << " access_code_len=" << obj_->get_access_code().size()
+            << " user_access_code_len=" << obj_->get_user_access_code().size()
+            << " is_lan_mode=" << int(obj_->is_lan_mode_printer())
+            << " has_access_right=" << int(obj_->has_access_right());
 
 
         BOOST_LOG_TRIVIAL(info) << "send_job: use ftp send job";
