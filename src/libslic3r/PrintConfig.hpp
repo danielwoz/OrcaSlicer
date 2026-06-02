@@ -375,6 +375,22 @@ enum PrinterStructure {
     psDelta
 };
 
+enum class InputShaperType : unsigned char {
+    Default = 0,
+    MZV,
+    ZV,
+    ZVD,
+    ZVDD,
+    ZVDDD,
+    EI,
+    EI2,
+    TwoHumpEI,
+    EI3,
+    ThreeHumpEI,
+    DAA,
+    Disable
+};
+
 // BBS
 enum ZHopType {
     zhtAuto = 0,
@@ -538,6 +554,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(BrimType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(TimelapseType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(BedType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SkirtType)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(InputShaperType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(DraftShield)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(ForwardCompatibilitySubstitutionRule)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(GCodeThumbnailsFormat)
@@ -1099,6 +1116,9 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,                lateral_lattice_angle_1))
     ((ConfigOptionFloat,                lateral_lattice_angle_2))
     ((ConfigOptionFloat,                infill_overhang_angle))
+    ((ConfigOptionFloat,                lightning_overhang_angle))
+    ((ConfigOptionFloat,                lightning_prune_angle))
+    ((ConfigOptionFloat,                lightning_straightening_angle))
     ((ConfigOptionBool,                 align_infill_direction_to_model))
     ((ConfigOptionString,               extra_solid_infills))
     ((ConfigOptionEnum<FuzzySkinType>,  fuzzy_skin))
@@ -1129,6 +1149,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     // Orca:
     ((ConfigOptionFloatOrPercent,                infill_combination_max_layer_height))
     ((ConfigOptionInt,                  fill_multiline))
+    ((ConfigOptionBool,                 gyroid_optimized))
     // Ironing options
     ((ConfigOptionEnum<IroningType>, ironing_type))
     ((ConfigOptionEnum<InfillPattern>, ironing_pattern))
@@ -1282,6 +1303,14 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                 resonance_avoidance))
     ((ConfigOptionFloat,                min_resonance_avoidance_speed))
     ((ConfigOptionFloat,                max_resonance_avoidance_speed))
+
+    //Orca: Input shaping
+    ((ConfigOptionBool,                 input_shaping_emit))
+    ((ConfigOptionEnum<InputShaperType>, input_shaping_type))
+    ((ConfigOptionFloat,                input_shaping_freq_x))
+    ((ConfigOptionFloat,                input_shaping_freq_y))
+    ((ConfigOptionFloat,                input_shaping_damp_x))
+    ((ConfigOptionFloat,                input_shaping_damp_y))
 )
 
 // This object is mapped to Perl as Slic3r::Config::GCode.
@@ -1307,6 +1336,10 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,               fan_kickstart))
     ((ConfigOptionBool,                fan_speedup_overhangs))
     ((ConfigOptionFloat,               fan_speedup_time))
+    // ORCA: minimum PWM (as a percent 0-100) emitted when the part-cooling fan is asked for a non-zero speed.
+    // Used to overcome the PWM start-up threshold on fans that cannot spool below a certain duty cycle.
+    // A value of 0 (the default) leaves behaviour unchanged. A fan command of 0 (off) is always honoured.
+    ((ConfigOptionInt,                 part_cooling_fan_min_pwm))
     ((ConfigOptionFloats,              filament_diameter))
     ((ConfigOptionBoolsNullable,       filament_adaptive_volumetric_speed))
     ((ConfigOptionStrings,             volumetric_speed_coefficients))
@@ -1450,6 +1483,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionEnum<WipeTowerType>, wipe_tower_type))
     ((ConfigOptionBool,                purge_in_prime_tower))
     ((ConfigOptionBool,                enable_filament_ramming))
+    ((ConfigOptionBool,                tool_change_on_wipe_tower))
     ((ConfigOptionBool,                support_multi_bed_types))
 
     // Small Area Infill Flow Compensation
@@ -1472,6 +1506,9 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionFloatOrPercent,     max_travel_detour_distance))
     ((ConfigOptionPoints,             printable_area))
     ((ConfigOptionPointsGroups,       extruder_printable_area))
+    ((ConfigOptionBool,               support_parallel_printheads))
+    ((ConfigOptionInt,                parallel_printheads_count))
+    ((ConfigOptionStrings,            parallel_printheads_bed_exclude_areas))
     //BBS: add bed_exclude_area
     ((ConfigOptionPoints,             bed_exclude_area))
     ((ConfigOptionPoints,             head_wrap_detect_zone))

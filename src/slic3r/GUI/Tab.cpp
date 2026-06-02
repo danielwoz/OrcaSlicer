@@ -40,7 +40,7 @@
 #include "UnsavedChangesDialog.hpp"
 #include "SavePresetDialog.hpp"
 #include "EditGCodeDialog.hpp"
-
+#include "MultiChoiceDialog.hpp"
 #include "MsgDialog.hpp"
 #include "Notebook.hpp"
 
@@ -48,6 +48,7 @@
 #include "Widgets/Label.hpp"
 #include "Widgets/SwitchButton.hpp"
 #include "Widgets/TabCtrl.hpp"
+#include "Widgets/ComboBox.hpp"
 #include "MarkdownTip.hpp"
 #include "Search.hpp"
 #include "BedShapeDialog.hpp"
@@ -423,9 +424,12 @@ void Tab::create_preset_tab()
         });
         m_top_sizer->Add(m_mode_icon, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::WideSpacing()));
         m_mode_view = new ModeSwitchButton(m_top_panel);
-        m_mode_view->SetSelection(mode_to_selection(wxGetApp().get_saved_mode()));
-        if (wxGetApp().get_mode() == comDevelop)
+        if (wxGetApp().get_mode() == comDevelop) {
+            m_mode_view->SetSelection(mode_to_selection(comExpert));
             m_mode_view->Enable(false);
+        } else {
+            m_mode_view->SetSelection(mode_to_selection(wxGetApp().get_saved_mode()));
+        }
         m_top_sizer->AddSpacer(FromDIP(SidebarProps::ElementSpacing()));
         m_top_sizer->Add( m_mode_view, 0, wxALIGN_CENTER_VERTICAL);
     }
@@ -1494,6 +1498,11 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
         return;
     }
 
+    if (opt_key == "gcode_flavor" && m_type == Preset::TYPE_PRINTER) {
+        if (auto printer_tab = dynamic_cast<TabPrinter*>(this))
+            printer_tab->on_gcode_flavor_changed();
+    }
+
     if (opt_key == "compatible_prints")
         this->compatible_widget_reload(m_compatible_prints);
     if (opt_key == "compatible_printers")
@@ -1548,8 +1557,7 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
 
 
     if (opt_key == "single_extruder_multi_material"  ){
-        const auto bSEMM = m_config->opt_bool("single_extruder_multi_material");
-        wxGetApp().sidebar().show_SEMM_buttons(bSEMM);
+        wxGetApp().sidebar().show_SEMM_buttons();
         wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     }
 
@@ -1600,8 +1608,7 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
 
 
     if (opt_key == "single_extruder_multi_material"  ){
-        const auto bSEMM = m_config->opt_bool("single_extruder_multi_material");
-        wxGetApp().sidebar().show_SEMM_buttons(bSEMM);
+        wxGetApp().sidebar().show_SEMM_buttons();
         wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     }
 
@@ -1925,6 +1932,26 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
             auto new_conf = *m_config;
             new_conf.set_key_value("max_layer_height", new ConfigOptionFloats(max_layer_height_from_nozzle));
             m_config_manipulation.apply(m_config, &new_conf);
+        }
+    }
+
+    if (opt_key == "parallel_printheads_count" || opt_key == "parallel_printheads_bed_exclude_areas") {
+        if (m_config->opt_bool("support_parallel_printheads")) {
+            const int count = opt_key == "parallel_printheads_count" ? boost::any_cast<int>(value) : m_config->opt_int("parallel_printheads_count");
+            if (auto *field = this->get_field("bed_exclude_area")) {
+                wxString exclude_area;
+                if (count > 0) {
+                    if (const auto *areas = m_config->option<ConfigOptionStrings>("parallel_printheads_bed_exclude_areas");
+                        areas != nullptr) {
+                        const size_t index = static_cast<size_t>(count - 1);
+                        if (index < areas->values.size())
+                            exclude_area = wxString::FromUTF8(areas->values[index]);
+                    }
+                }
+
+                field->set_value(exclude_area, true);
+                field->propagate_value();
+            }
         }
     }
 
@@ -2441,6 +2468,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("sparse_infill_density", "strength_settings_infill#sparse-infill-density");
         optgroup->append_single_option_line("fill_multiline", "strength_settings_infill#fill-multiline");
         optgroup->append_single_option_line("sparse_infill_pattern", "strength_settings_infill#sparse-infill-pattern");
+        optgroup->append_single_option_line("gyroid_optimized", "strength_settings_patterns#gyroid-optimized");
         optgroup->append_single_option_line("infill_direction", "strength_settings_infill#direction");
         optgroup->append_single_option_line("sparse_infill_rotate_template", "strength_settings_infill_rotation_template_metalanguage");
         optgroup->append_single_option_line("skin_infill_density", "strength_settings_patterns#locked-zag");
@@ -2454,6 +2482,9 @@ void TabPrint::build()
         optgroup->append_single_option_line("lateral_lattice_angle_1", "strength_settings_patterns#lateral-lattice");
         optgroup->append_single_option_line("lateral_lattice_angle_2", "strength_settings_patterns#lateral-lattice");
         optgroup->append_single_option_line("infill_overhang_angle", "strength_settings_patterns#lateral-honeycomb");
+        optgroup->append_single_option_line("lightning_overhang_angle", "strength_settings_patterns#lightning");
+        optgroup->append_single_option_line("lightning_prune_angle", "strength_settings_patterns#lightning");
+        optgroup->append_single_option_line("lightning_straightening_angle", "strength_settings_patterns#lightning");
         optgroup->append_single_option_line("infill_anchor_max", "strength_settings_infill#anchor");
         optgroup->append_single_option_line("infill_anchor", "strength_settings_infill#anchor");
         optgroup->append_single_option_line("internal_solid_infill_pattern", "strength_settings_infill#internal-solid-infill");
@@ -4424,6 +4455,7 @@ void TabPrinter::build_fff()
         create_line_with_widget(optgroup.get(), "printable_area", "custom-svg-and-png-bed-textures_124612", [this](wxWindow* parent) {
            return 	create_bed_shape_widget(parent);
         });
+        optgroup->append_single_option_line("parallel_printheads_count");
         Option option = optgroup->get_option("bed_exclude_area");
         option.opt.full_width = true;
         optgroup->append_single_option_line(option, "printer_basic_information_printable_space#excluded-bed-area");
@@ -4499,6 +4531,8 @@ void TabPrinter::build_fff()
         line.append_option(optgroup->get_option("fan_speedup_overhangs"));
         optgroup->append_line(line);
         optgroup->append_single_option_line("fan_kickstart", "printer_basic_information_cooling_fan#fan-kick-start-time");
+        // ORCA: PWM floor for fans that won't spool at low duty cycles.
+        optgroup->append_single_option_line("part_cooling_fan_min_pwm", "printer_basic_information_cooling_fan#minimum-non-zero-part-cooling-fan-speed");
 
         optgroup = page->new_optgroup(L("Extruder Clearance"), "param_extruder_clearance");
         optgroup->append_single_option_line("extruder_clearance_radius", "printer_basic_information_extruder_clearance#radius");
@@ -4799,15 +4833,31 @@ PageShp TabPrinter::build_kinematics_page()
     optgroup->append_single_option_line("emit_machine_limits_to_gcode", "printer_motion_ability#emit-limits-to-g-code");
 
     // resonance avoidance ported over from qidi slicer
-    optgroup = page->new_optgroup(L("Resonance Avoidance"), "param_resonance_avoidance");
+    optgroup = page->new_optgroup(L("Resonance Compensation"), "param_resonance_avoidance");
     optgroup->append_single_option_line("resonance_avoidance", "printer_motion_ability#resonance-avoidance");
     // Resonance‑avoidance speed inputs
     {
         Line resonance_line = {L("Resonance Avoidance Speed"), L""};
-        resonance_line.label_path = "printer_motion_ability#resonance-avoidance-speed";
+        resonance_line.label_path = "printer_motion_ability#resonance-avoidance";
         resonance_line.append_option(optgroup->get_option("min_resonance_avoidance_speed"));
         resonance_line.append_option(optgroup->get_option("max_resonance_avoidance_speed"));
         optgroup->append_line(resonance_line);
+    }
+    optgroup->append_single_option_line("input_shaping_emit", "printer_motion_ability#input-shaping");
+    optgroup->append_single_option_line("input_shaping_type", "printer_motion_ability#input-shaping-type");
+    {
+        Line freq_line = {L("Frequency"), L("The frequency of the anti-vibration signal will correspond to the natural frequency of the frame.")};
+        freq_line.label_path = "printer_motion_ability#input-shaping";
+        freq_line.append_option(optgroup->get_option("input_shaping_freq_x"));
+        freq_line.append_option(optgroup->get_option("input_shaping_freq_y"));
+        optgroup->append_line(freq_line);
+    }
+    {
+        Line damping_line = {L("Damping"), L("Damping ratio for the input shaping filter.")};
+        damping_line.label_path = "printer_motion_ability#input-shaping";
+        damping_line.append_option(optgroup->get_option("input_shaping_damp_x"));
+        damping_line.append_option(optgroup->get_option("input_shaping_damp_y"));
+        optgroup->append_line(damping_line);
     }
 
     const std::vector<std::string> speed_axes{
@@ -4979,6 +5029,7 @@ if (is_marlin_flavor)
         optgroup->append_single_option_line("wipe_tower_type", "printer_multimaterial_wipe_tower");
         optgroup->append_single_option_line("purge_in_prime_tower", "printer_multimaterial_wipe_tower#purge-in-prime-tower");
         optgroup->append_single_option_line("enable_filament_ramming", "printer_multimaterial_wipe_tower#enable-filament-ramming");
+        optgroup->append_single_option_line("tool_change_on_wipe_tower", "printer_multimaterial_wipe_tower#tool-change-on-wipe-tower");
 
 
         optgroup = page->new_optgroup(L("Single extruder multi-material parameters"), "param_settings");
@@ -5251,6 +5302,115 @@ void TabPrinter::clear_pages()
     m_reset_to_filament_color = nullptr;
 }
 
+std::vector<InputShaperType> input_shaper_types_for_flavor(GCodeFlavor flavor)
+{
+    switch (flavor) {
+    case GCodeFlavor::gcfKlipper:
+        return {
+            InputShaperType::Default,
+            InputShaperType::ZV,
+            InputShaperType::MZV,
+            InputShaperType::ZVD,
+            InputShaperType::EI,
+            InputShaperType::TwoHumpEI,
+            InputShaperType::ThreeHumpEI,
+            InputShaperType::Disable
+        };
+    case GCodeFlavor::gcfRepRapFirmware:
+        return {
+            InputShaperType::Default,
+            InputShaperType::MZV,
+            InputShaperType::ZVD,
+            InputShaperType::ZVDD,
+            InputShaperType::ZVDDD,
+            InputShaperType::EI2,
+            InputShaperType::EI3,
+            InputShaperType::DAA,
+            InputShaperType::Disable
+        };
+    case GCodeFlavor::gcfMarlinFirmware:
+        return {
+            InputShaperType::ZV,
+            InputShaperType::Disable
+        };
+    default:
+        return {
+            InputShaperType::Default,
+            InputShaperType::Disable
+        };
+    }
+}
+
+void TabPrinter::update_input_shaper_menu(GCodeFlavor flavor)
+{
+    if (m_presets->get_edited_preset().printer_technology() != ptFFF)
+        return;
+
+    const std::vector<InputShaperType> allowed = input_shaper_types_for_flavor(flavor);
+    if (allowed.empty())
+        return;
+
+    const InputShaperType current = m_config->opt_enum<InputShaperType>("input_shaping_type");
+    const bool needs_reset = std::find(allowed.begin(), allowed.end(), current) == allowed.end();
+    const InputShaperType desired = needs_reset ? allowed.front() : current;
+
+    if (needs_reset && current != desired) {
+        DynamicPrintConfig new_conf = *m_config;
+        new_conf.set_key_value("input_shaping_type", new ConfigOptionEnum<InputShaperType>(desired));
+        m_config_manipulation.apply(m_config, &new_conf);
+    }
+
+    Page* owning_page = nullptr;
+    Field* field = get_field("input_shaping_type", &owning_page);
+    if (field == nullptr)
+        return;
+
+    auto choice_field = dynamic_cast<Choice*>(field);
+    if (choice_field == nullptr)
+        return;
+
+    auto combo = dynamic_cast<ComboBox*>(choice_field->getWindow());
+    if (combo == nullptr)
+        return;
+
+    const ConfigOptionDef* def = m_config->def()->get("input_shaping_type");
+    if (def == nullptr)
+        return;
+
+    const auto& labels = def->enum_labels;
+    const auto& values = def->enum_values;
+
+    wxWindowUpdateLocker locker(combo);
+    combo->Clear();
+
+    for (InputShaperType type : allowed) {
+        const size_t idx = static_cast<size_t>(type);
+        wxString label;
+        if (idx < labels.size() && !labels[idx].empty())
+            label = _(labels[idx]);
+        else if (idx < values.size())
+            label = wxString::FromUTF8(values[idx].c_str());
+        else
+            label = wxString::Format("%d", static_cast<int>(type));
+
+        combo->Append(label, wxNullBitmap,
+            reinterpret_cast<void*>(static_cast<uintptr_t>(static_cast<int>(type))));
+    }
+
+    if (combo->GetCount() == 0)
+        return;
+
+    choice_field->set_value(static_cast<int>(desired), false);
+}
+
+void TabPrinter::on_gcode_flavor_changed()
+{
+    auto* flavor_option = m_config->option<ConfigOptionEnum<GCodeFlavor>>("gcode_flavor");
+    if (!flavor_option)
+        return;
+    update_input_shaper_menu(flavor_option->value);
+}
+
 void TabPrinter::toggle_options()
 {
     if (!m_active_page || m_presets->get_edited_preset().printer_technology() == ptSLA)
@@ -5276,6 +5436,7 @@ void TabPrinter::toggle_options()
     //    toggle_option("change_filament_gcode", have_multiple_extruders);
     //}
     if (m_active_page->title() == L("Basic information")) {
+        const auto &printer_cfg = m_preset_bundle->printers.get_edited_preset().config;
 
         // SoftFever: hide BBL specific settings
         for (auto el : {"scan_first_layer", "bbl_calib_mark_logo", "bbl_use_printhost"})
@@ -5287,6 +5448,9 @@ void TabPrinter::toggle_options()
 
         auto gcf = m_config->option<ConfigOptionEnum<GCodeFlavor>>("gcode_flavor")->value;
         toggle_line("enable_power_loss_recovery", is_BBL_printer || gcf == gcfMarlinFirmware);
+
+        const bool support_parallel_printheads = printer_cfg.opt_bool("support_parallel_printheads");
+        toggle_line("parallel_printheads_count", support_parallel_printheads);
     }
     
 
@@ -5319,6 +5483,12 @@ void TabPrinter::toggle_options()
         toggle_option("extruders_count", !bSEMM);
         toggle_option("manual_filament_change", bSEMM);
         toggle_option("purge_in_prime_tower", bSEMM && supports_wipe_tower_2);
+
+        // Orca: "Tool change on wipe tower" only makes sense for multi-extruder (multi-toolhead) printers
+        // using a Type 2 wipe tower. SEMM already always travels to the tower as part of the purge,
+        // so the option is irrelevant there.
+        const size_t extruders_count = m_config->option<ConfigOptionFloats>("nozzle_diameter")->size();
+        toggle_option("tool_change_on_wipe_tower", !bSEMM && supports_wipe_tower_2 && extruders_count > 1);
     }
     wxString extruder_number;
     long val = 1;
@@ -5359,7 +5529,7 @@ void TabPrinter::toggle_options()
         // some options only apply when not using firmware retraction
         vec.resize(0);
         vec = {"retraction_speed", "deretraction_speed",    "retract_before_wipe",
-               "retract_length",   "retract_restart_extra", "wipe",
+               "retract_length",   "retract_restart_extra",
                "wipe_distance"};
         for (auto el : vec)
             //BBS
@@ -5367,20 +5537,25 @@ void TabPrinter::toggle_options()
 
         bool wipe = retraction && m_config->opt_bool("wipe", variant_index);
         toggle_option("retract_before_wipe", wipe, i);
+        float retract_before_wipe = static_cast<ConfigOptionPercents*>(m_config->option("retract_before_wipe"))->values[variant_index];
 
-        if (use_firmware_retraction && wipe) {
+        if (use_firmware_retraction && wipe && retract_before_wipe < 100.0) {
             //wxMessageDialog dialog(parent(),
             MessageDialog dialog(parent(),
-                _(L("The Wipe option is not available when using the Firmware Retraction mode.\n"
-                    "\nShall I disable it in order to enable Firmware Retraction?")),
+                _(L("The Retract before wipe option could be only 100% when using the Firmware Retraction mode.\n"
+                    "\nShall I set it to 100% in order to enable Firmware Retraction?")),
                 _(L("Firmware Retraction")), wxICON_WARNING | wxYES | wxNO);
 
             DynamicPrintConfig new_conf = *m_config;
             if (dialog.ShowModal() == wxID_YES) {
                 auto wipe = static_cast<ConfigOptionBools*>(m_config->option("wipe")->clone());
-                for (size_t w = 0; w < wipe->values.size(); w++)
+                auto retract_before_wipe = static_cast<ConfigOptionPercents*>(m_config->option("retract_before_wipe")->clone());
+                for (size_t w = 0; w < wipe->values.size(); w++) {
                     wipe->values[w] = false;
+                    retract_before_wipe->values[w] = 100.0;
+                }
                 new_conf.set_key_value("wipe", wipe);
+                new_conf.set_key_value("retract_before_wipe", retract_before_wipe);
             }
             else {
                 new_conf.set_key_value("use_firmware_retraction", new ConfigOptionBool(false));
@@ -5403,6 +5578,7 @@ void TabPrinter::toggle_options()
 
     if (m_active_page->title() == L("Motion ability")) {
         auto gcf = m_config->option<ConfigOptionEnum<GCodeFlavor>>("gcode_flavor")->value;
+        update_input_shaper_menu(gcf);
         bool silent_mode = m_config->opt_bool("silent_mode");
         int  max_field   = silent_mode ? 2 : 1;
         for (int i = 0; i < max_field; ++i)
@@ -5430,9 +5606,31 @@ void TabPrinter::toggle_options()
             toggle_option("machine_max_jerk_e", enable_jerk, i);
         }
 
+        bool emittable_limits = m_config->opt_enum<GCodeFlavor>("gcode_flavor") == GCodeFlavor::gcfMarlinLegacy || m_config->opt_enum<GCodeFlavor>("gcode_flavor") == GCodeFlavor::gcfMarlinFirmware || m_config->opt_enum<GCodeFlavor>("gcode_flavor") == GCodeFlavor::gcfRepRapFirmware;
+        toggle_option("emit_machine_limits_to_gcode", emittable_limits);
+
         bool resonance_avoidance = m_config->opt_bool("resonance_avoidance");
         toggle_option("min_resonance_avoidance_speed", resonance_avoidance);
         toggle_option("max_resonance_avoidance_speed", resonance_avoidance);
+
+        bool input_shaping_compatible = m_config->opt_enum<GCodeFlavor>("gcode_flavor") == GCodeFlavor::gcfMarlinFirmware || m_config->opt_enum<GCodeFlavor>("gcode_flavor") == GCodeFlavor::gcfRepRapFirmware;
+
+        for (auto is : {"input_shaping_emit", "input_shaping_type", "input_shaping_freq_x", "input_shaping_freq_y",
+                            "input_shaping_damp_x", "input_shaping_damp_y"})
+                toggle_line(is, input_shaping_compatible);
+
+        if (input_shaping_compatible) {
+            bool emit_machine_limits_to_gcode = m_config->opt_bool("emit_machine_limits_to_gcode");
+            toggle_option("input_shaping_emit", emit_machine_limits_to_gcode);
+            bool input_shaping_emit = emit_machine_limits_to_gcode && m_config->opt_bool("input_shaping_emit");
+            bool reprap = m_config->opt_enum<GCodeFlavor>("gcode_flavor") == GCodeFlavor::gcfRepRapFirmware;
+            toggle_option("input_shaping_type", input_shaping_emit);
+            toggle_option("input_shaping_freq_x", input_shaping_emit);
+            toggle_option("input_shaping_freq_y", input_shaping_emit && !reprap);
+            toggle_option("input_shaping_damp_x", input_shaping_emit);
+            toggle_option("input_shaping_damp_y", input_shaping_emit && !reprap);
+        }
+
     }
 }
 
@@ -6846,7 +7044,15 @@ wxSizer* Tab::compatible_widget_create(wxWindow* parent, PresetDependencies &dep
                 presets.Add(from_u8(preset.name));
         }
 
-        wxMultiChoiceDialog dlg(parent, deps.dialog_title, deps.dialog_label, presets);
+        if(deps.type == Preset::TYPE_PRINTER){
+            deps.dialog_title = "Compatible printers";
+            deps.dialog_label = "Select printers";
+        }else{
+            deps.dialog_title = "Compatible process profiles";
+            deps.dialog_label = "Select profiles";
+        }
+
+        MultiChoiceDialog dlg(parent, deps.dialog_label, deps.dialog_title, presets);
         wxGetApp().UpdateDlgDarkUI(&dlg);
         // Collect and set indices of depending_presets marked as compatible.
         wxArrayInt selections;
@@ -6859,13 +7065,16 @@ wxSizer* Tab::compatible_widget_create(wxWindow* parent, PresetDependencies &dep
                         break;
                     }
         dlg.SetSelections(selections);
+        dlg.SetSize(FromDIP(wxSize(360, 480)));
         std::vector<std::string> value;
         // Show the dialog.
         if (dlg.ShowModal() == wxID_OK) {
             selections.Clear();
             selections = dlg.GetSelections();
-            for (auto idx : selections)
-                value.push_back(presets[idx].ToUTF8().data());
+            // leave list empty if all items checked. this will check "All" checkbox automatically. also fixes unnecessary config change
+            if(selections.GetCount() != presets.GetCount())
+                for (auto idx : selections)
+                    value.push_back(presets[idx].ToUTF8().data());
             if (value.empty()) {
                 deps.checkbox->SetValue(1);
                 deps.btn->Disable();
@@ -7201,7 +7410,7 @@ void Tab::switch_excluder(int extruder_id)
         {}, {"", "filament_extruder_variant"},                   // Preset::TYPE_FILAMENT filament don't use id anymore
         {}, {"printer_extruder_id", "printer_extruder_variant"}, // Preset::TYPE_PRINTER
     };
-    if (!m_variant_combo && (extruder_id >= nozzle_volumes->size() || extruder_id >= extruders->size()))
+    if (!m_variant_combo && (extruder_id >= (int)nozzle_volumes->size() || extruder_id >= (int)extruders->size()))
         extruder_id = 0;
     if (m_extruder_switch && m_type != Preset::TYPE_PRINTER) {
         int current_extruder = m_extruder_switch->GetValue() ? 1 : 0;

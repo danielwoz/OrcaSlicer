@@ -1575,13 +1575,13 @@ std::vector<int> PartPlate::get_extruders(bool conside_custom_gcode) const
                 plate_extruders.push_back(glb_support_extr);
         }
 
-        int obj_wall_extr = 1;
+        int obj_wall_extr = 0;
 		const ConfigOption* wall_opt = mo->config.option("wall_filament");
 		if (wall_opt != nullptr)
 			obj_wall_extr = wall_opt->getInt();
-		if (obj_wall_extr != 1)
+		if (obj_wall_extr != 0)
 			plate_extruders.push_back(obj_wall_extr);
-		else if (glb_wall_extr != 1)
+		else if (glb_wall_extr != 0)
 			plate_extruders.push_back(glb_wall_extr);
 
 		// Orca: outer-wall filament. 0 = disabled (use wall_filament).
@@ -1594,22 +1594,22 @@ std::vector<int> PartPlate::get_extruders(bool conside_custom_gcode) const
 		else if (glb_outer_wall_extr != 0)
 			plate_extruders.push_back(glb_outer_wall_extr);
 
-		int obj_sparse_infill_extr = 1;
+		int obj_sparse_infill_extr = 0;
 		const ConfigOption* sparse_infill_opt = mo->config.option("sparse_infill_filament");
 		if (sparse_infill_opt != nullptr)
 			obj_sparse_infill_extr = sparse_infill_opt->getInt();
-		if (obj_sparse_infill_extr != 1)
+		if (obj_sparse_infill_extr != 0)
 			plate_extruders.push_back(obj_sparse_infill_extr);
-		else if (glb_sparse_infill_extr != 1)
+		else if (glb_sparse_infill_extr != 0)
 			plate_extruders.push_back(glb_sparse_infill_extr);
 
-		int obj_solid_infill_extr = 1;
+		int obj_solid_infill_extr = 0;
 		const ConfigOption* solid_infill_opt = mo->config.option("solid_infill_filament");
 		if (solid_infill_opt != nullptr)
 			obj_solid_infill_extr = solid_infill_opt->getInt();
-		if (obj_solid_infill_extr != 1)
+		if (obj_solid_infill_extr != 0)
 			plate_extruders.push_back(obj_solid_infill_extr);
-		else if (glb_solid_infill_extr != 1)
+		else if (glb_solid_infill_extr != 0)
 			plate_extruders.push_back(glb_solid_infill_extr);
 
 	}
@@ -1709,13 +1709,13 @@ std::vector<int> PartPlate::get_extruders_under_cli(bool conside_custom_gcode, D
             else if (glb_support_extr != 0)
                 plate_extruders.push_back(glb_support_extr);
 
-			int obj_wall_extr = 1;
+			int obj_wall_extr = 0;
 			const ConfigOption* wall_opt = object->config.option("wall_filament");
 			if (wall_opt != nullptr)
 				obj_wall_extr = wall_opt->getInt();
-			if (obj_wall_extr != 1)
+			if (obj_wall_extr != 0)
 				plate_extruders.push_back(obj_wall_extr);
-			else if (glb_wall_extr != 1)
+			else if (glb_wall_extr != 0)
 				plate_extruders.push_back(glb_wall_extr);
 
 			// Orca: outer-wall filament. 0 = disabled (use wall_filament).
@@ -1728,22 +1728,22 @@ std::vector<int> PartPlate::get_extruders_under_cli(bool conside_custom_gcode, D
 			else if (glb_outer_wall_extr != 0)
 				plate_extruders.push_back(glb_outer_wall_extr);
 
-			int obj_sparse_infill_extr = 1;
+			int obj_sparse_infill_extr = 0;
 			const ConfigOption* sparse_infill_opt = object->config.option("sparse_infill_filament");
 			if (sparse_infill_opt != nullptr)
 				obj_sparse_infill_extr = sparse_infill_opt->getInt();
-			if (obj_sparse_infill_extr != 1)
+			if (obj_sparse_infill_extr != 0)
 				plate_extruders.push_back(obj_sparse_infill_extr);
-			else if (glb_sparse_infill_extr != 1)
+			else if (glb_sparse_infill_extr != 0)
 				plate_extruders.push_back(glb_sparse_infill_extr);
 
-			int obj_solid_infill_extr = 1;
+			int obj_solid_infill_extr = 0;
 			const ConfigOption* solid_infill_opt = object->config.option("solid_infill_filament");
 			if (solid_infill_opt != nullptr)
 				obj_solid_infill_extr = solid_infill_opt->getInt();
-			if (obj_solid_infill_extr != 1)
+			if (obj_solid_infill_extr != 0)
 				plate_extruders.push_back(obj_solid_infill_extr);
-			else if (glb_solid_infill_extr != 1)
+			else if (glb_solid_infill_extr != 0)
 				plate_extruders.push_back(glb_solid_infill_extr);
         }
     }
