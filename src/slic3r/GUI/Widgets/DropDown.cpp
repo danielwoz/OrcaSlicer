@@ -2,6 +2,8 @@
 #include "Label.hpp"
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <wx/display.h>
 #include <wx/dcbuffer.h>
 #include <wx/dcgraph.h>
@@ -11,6 +13,27 @@
 #endif
 
 #include <set>
+
+#ifdef __WXGTK__
+// Runtime detection — `#ifdef __WXGTK__` alone covers GTK builds, but
+// the Wayland-specific popup-grab fixes below (gtk_window_set_transient
+// _for, idle-motion synthesis, ShouldDismissOnTopWindowDeactivate
+// override) break dropdowns when GTK is actually using the X11 backend
+// (incl. forwarded X11 over SSH). Gate on the live backend so X11
+// sessions get the unmodified upstream wx behavior — same path
+// BambuStudio uses, which works on X11 + X11-forwarding without any of
+// these tweaks.
+static bool dropdown_is_wayland_session() {
+    const char* gdk_backend = std::getenv("GDK_BACKEND");
+    if (gdk_backend && std::strstr(gdk_backend, "x11")) {
+        // GDK_BACKEND=x11 explicitly forces the X11 backend regardless
+        // of whether WAYLAND_DISPLAY is set (the user's typical setup
+        // for X11 forwarding).
+        return false;
+    }
+    return std::getenv("WAYLAND_DISPLAY") != nullptr;
+}
+#endif
 
 wxDEFINE_EVENT(EVT_DISMISS, wxCommandEvent);
 
@@ -564,32 +587,34 @@ void DropDown::messureSize()
         subDropDown->use_content_width = true;
         subDropDown->Create(GetParent());
 #ifdef __WXGTK__
-        // Orca:  Keep the wx parent as the combobox so wxPopupTransientWindow installs
-        // its capture handlers on the main dropdown, but make the native GTK
-        // popup transient for the currently open popup to satisfy Wayland's
-        // xdg-shell rule that a popup's parent must be the topmost mapped popup.
-        gtk_window_set_transient_for(GTK_WINDOW(subDropDown->GetHandle()), GTK_WINDOW(GetHandle()));
-        // Orca: On Wayland, while the sub holds an xdg_popup grab, motion events for
-        // the cursor over main may not be delivered (Mutter drops motion
-        // outside the grabbing surface). Poll on idle and synthesize a
-        // mouseMove on main so its hover highlight tracks and it can dismiss
-        // the sub when the cursor leaves the parent (group) item.
-        DropDown* sub = subDropDown;
-        sub->Bind(wxEVT_IDLE, [sub](wxIdleEvent& e) {
-            e.Skip();
-            if (!sub->IsShown() || !sub->mainDropDown->IsShown())
-                return;
-            wxPoint screen_pt = wxGetMousePosition();
-            if (sub->GetScreenRect().Contains(screen_pt) || !sub->mainDropDown->GetScreenRect().Contains(screen_pt))
-                return;
-            wxPoint main_pt = sub->mainDropDown->ScreenToClient(screen_pt);
-            wxMouseEvent ev(wxEVT_MOTION);
-            ev.SetEventObject(sub->mainDropDown);
-            ev.m_x = main_pt.x;
-            ev.m_y = main_pt.y;
-            sub->mainDropDown->mouseMove(ev);
-            e.RequestMore();
-        });
+        if (dropdown_is_wayland_session()) {
+            // Orca:  Keep the wx parent as the combobox so wxPopupTransientWindow installs
+            // its capture handlers on the main dropdown, but make the native GTK
+            // popup transient for the currently open popup to satisfy Wayland's
+            // xdg-shell rule that a popup's parent must be the topmost mapped popup.
+            gtk_window_set_transient_for(GTK_WINDOW(subDropDown->GetHandle()), GTK_WINDOW(GetHandle()));
+            // Orca: On Wayland, while the sub holds an xdg_popup grab, motion events for
+            // the cursor over main may not be delivered (Mutter drops motion
+            // outside the grabbing surface). Poll on idle and synthesize a
+            // mouseMove on main so its hover highlight tracks and it can dismiss
+            // the sub when the cursor leaves the parent (group) item.
+            DropDown* sub = subDropDown;
+            sub->Bind(wxEVT_IDLE, [sub](wxIdleEvent& e) {
+                e.Skip();
+                if (!sub->IsShown() || !sub->mainDropDown->IsShown())
+                    return;
+                wxPoint screen_pt = wxGetMousePosition();
+                if (sub->GetScreenRect().Contains(screen_pt) || !sub->mainDropDown->GetScreenRect().Contains(screen_pt))
+                    return;
+                wxPoint main_pt = sub->mainDropDown->ScreenToClient(screen_pt);
+                wxMouseEvent ev(wxEVT_MOTION);
+                ev.SetEventObject(sub->mainDropDown);
+                ev.m_x = main_pt.x;
+                ev.m_y = main_pt.y;
+                sub->mainDropDown->mouseMove(ev);
+                e.RequestMore();
+            });
+        }
 #endif
         subDropDown->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent &e) {
             e.SetEventObject(this);
@@ -789,11 +814,26 @@ void DropDown::Dismiss()
 
 bool DropDown::ShouldDismissOnTopWindowDeactivate()
 {
+#ifdef __WXGTK__
     // On Wayland, mapping a chained xdg_popup with grab makes the parent
     // toplevel inactive, which would otherwise cascade-dismiss the whole
     // chain. Skip when our chain peer is shown.
+    //
+    // On X11 (including X11 forwarding) this override changes first-
+    // popup behavior too — forwarded X11 fires extra deactivate events
+    // as the popup grabs focus, and overriding the default lets the
+    // wxPopupTransientWindow get into a state where mouse-down inside
+    // the popup fails to register a selection. Defer to the base class
+    // on non-Wayland so X11 sessions match BambuStudio's upstream
+    // behavior (which works on both local + forwarded X11).
+    if (!dropdown_is_wayland_session()) {
+        return PopupWindow::ShouldDismissOnTopWindowDeactivate();
+    }
     return !((mainDropDown && mainDropDown->IsShown()) ||
              (subDropDown  && subDropDown->IsShown()));
+#else
+    return PopupWindow::ShouldDismissOnTopWindowDeactivate();
+#endif
 }
 
 void DropDown::OnDismiss()
