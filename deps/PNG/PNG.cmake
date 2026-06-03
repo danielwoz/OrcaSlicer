@@ -16,7 +16,6 @@ if(APPLE AND IS_CROSS_COMPILE)
         CMAKE_ARGS
             -DPNG_SHARED=OFF
             -DPNG_STATIC=ON
-            -DPNG_PREFIX=prusaslicer_
             -DPNG_TESTS=OFF
             -DDISABLE_DEPENDENCY_TRACKING=OFF
             ${_disable_neon_extension}
@@ -36,7 +35,6 @@ set(_patch_step "")
         CMAKE_ARGS
             -DPNG_SHARED=OFF
             -DPNG_STATIC=ON
-            -DPNG_PREFIX=prusaslicer_
             -DPNG_TESTS=OFF
             -DDISABLE_DEPENDENCY_TRACKING=OFF
             ${_disable_neon_extension}

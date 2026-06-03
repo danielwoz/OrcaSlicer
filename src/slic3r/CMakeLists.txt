@@ -759,7 +759,11 @@ set(BAMBU_VIRTUAL_CLIENT_BOOST_INCLUDE_DIR  ${Boost_INCLUDE_DIRS}
     CACHE PATH "Boost include dir for bambu_virtual_client" FORCE)
 # wx include dirs — VirtualSsdpDiscovery.cpp uses wxGetApp/CallAfter,
 # and slicer headers it pulls in transitively #include <wx/setup.h>.
-set(BAMBU_VIRTUAL_CLIENT_WX_INCLUDE_DIRS    "${wxWidgets_INCLUDE_DIRS}"
+set(_bvc_wx_inc "${wxWidgets_INCLUDE_DIRS}")
+if (NOT _bvc_wx_inc AND TARGET wx::core)
+    get_target_property(_bvc_wx_inc wx::core INTERFACE_INCLUDE_DIRECTORIES)
+endif()
+set(BAMBU_VIRTUAL_CLIENT_WX_INCLUDE_DIRS    "${_bvc_wx_inc}"
     CACHE STRING "wxWidgets include dirs for bambu_virtual_client" FORCE)
 # Generated headers (libslic3r_version.h, libslic3r/Config.hpp, etc.) and
 # headers libslic3r/Utils.hpp transitively pulls in (Eigen, dev-utils).
@@ -767,6 +771,15 @@ set(BAMBU_VIRTUAL_CLIENT_EXTRA_INCLUDE_DIRS
     "${CMAKE_BINARY_DIR}/src/libslic3r;${CMAKE_BINARY_DIR}/src/slic3r;${CMAKE_BINARY_DIR}/src/dev-utils/platform;${CMAKE_SOURCE_DIR}/src/eigen;${CMAKE_SOURCE_DIR}/deps_src/eigen"
     CACHE STRING "extra include dirs (generated headers) for bambu_virtual_client" FORCE)
 # Built independently — don't double-build its CLI testbed in slicer trees.
+set(_bvc_eigen_inc "${EIGEN3_INCLUDE_DIR}")
+if (NOT _bvc_eigen_inc)
+    set(_bvc_eigen_inc "${Eigen3_INCLUDE_DIRS}")
+endif()
+if (NOT _bvc_eigen_inc AND TARGET Eigen3::Eigen)
+    get_target_property(_bvc_eigen_inc Eigen3::Eigen INTERFACE_INCLUDE_DIRECTORIES)
+endif()
+set(BAMBU_VIRTUAL_CLIENT_EIGEN_INCLUDE_DIR "${_bvc_eigen_inc}"
+    CACHE PATH "Eigen include dir for bambu_virtual_client" FORCE)
 set(BAMBU_VIRTUAL_CLIENT_BUILD_CLI OFF CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/Utils/bambu_virtual_client
                  ${CMAKE_BINARY_DIR}/bambu_virtual_client)

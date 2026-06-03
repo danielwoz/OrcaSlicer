@@ -191,7 +191,7 @@ if (NOT IS_CROSS_COMPILE OR NOT APPLE)
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5
             -DCMAKE_INSTALL_PREFIX:STRING=${DESTDIR}
             -DCMAKE_MODULE_PATH:STRING=${PROJECT_SOURCE_DIR}/../cmake/modules
-            -DCMAKE_PREFIX_PATH:STRING=${DESTDIR}
+            -DCMAKE_PREFIX_PATH:STRING="${DESTDIR};${CMAKE_PREFIX_PATH}"
             -DCMAKE_IGNORE_PREFIX_PATH:STRING=${CMAKE_IGNORE_PREFIX_PATH}
             -DCMAKE_DEBUG_POSTFIX:STRING=d
             -DCMAKE_C_COMPILER:STRING=${CMAKE_C_COMPILER}
@@ -239,7 +239,7 @@ else()
         CMAKE_ARGS
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5
             -DCMAKE_INSTALL_PREFIX:STRING=${DESTDIR}
-            -DCMAKE_PREFIX_PATH:STRING=${DESTDIR}
+            -DCMAKE_PREFIX_PATH:STRING="${DESTDIR};${CMAKE_PREFIX_PATH}"
             -DCMAKE_IGNORE_PREFIX_PATH:STRING=${CMAKE_IGNORE_PREFIX_PATH}
             -DBUILD_SHARED_LIBS:BOOL=OFF
             ${_cmake_osx_arch}
@@ -298,17 +298,15 @@ else()
     include("deps-linux.cmake")
 endif()
 
-if(FLATPAK)
+if(WIN32 OR FLATPAK)
     # flatpak bundles some deps with the layer, so attempt to find them first
     # also, yes, this reduces CI by not needing to vendor certain deps
     find_package(ZLIB)
     find_package(PNG)
-    find_package(EXPAT)
     find_package(CURL)
     find_package(JPEG)
     find_package(Freetype)
-    find_package(OpenSSL 1.1...<3.2)
-    find_package(CURL)
+    find_package(OpenSSL)
 endif()
 
 set(ZLIB_PKG "")

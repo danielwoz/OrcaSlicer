@@ -15,7 +15,7 @@
 
 namespace Slic3r {
 static constexpr char ORCA_PRINTER_AGENT_ID[] = "orca";
-static constexpr char BBL_PRINTER_AGENT_ID[] = "bbl";
+static constexpr char BBL_PRINTER_AGENT_ID[] = "BBL";
 
 // Factory function type for creating printer agents
 using PrinterAgentFactory =

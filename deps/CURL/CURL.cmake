@@ -26,7 +26,7 @@ set(_curl_platform_flags
 
 if (WIN32)
   #set(_curl_platform_flags  ${_curl_platform_flags} -DCMAKE_USE_SCHANNEL=ON)
-  set(_curl_platform_flags  ${_curl_platform_flags} -DCMAKE_USE_OPENSSL=ON -DCURL_CA_PATH:STRING=none)
+  set(_curl_platform_flags  ${_curl_platform_flags} -DCMAKE_USE_OPENSSL=ON -DCURL_CA_PATH:STRING=none -DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR})
 elseif (APPLE)
   set(_curl_platform_flags 
     
@@ -46,6 +46,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
     -DCURL_CA_PATH:STRING=none
     -DCURL_CA_BUNDLE:STRING=none
+    -DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}
     -DCURL_CA_FALLBACK:BOOL=ON
   )
 endif ()

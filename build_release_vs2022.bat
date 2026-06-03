@@ -1,5 +1,6 @@
 @REM OrcaSlicer build script for Windows
 @echo off
+set "PATH=C:\Program Files\Git\usr\bin;%PATH%"
 set WP=%CD%
 
 @REM Pack deps
@@ -48,7 +49,7 @@ echo "building deps.."
 echo on
 REM Set minimum CMake policy to avoid <3.5 errors
 set CMAKE_POLICY_VERSION_MINIMUM=3.5
-cmake ../ -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=%build_type%
+cmake ../ -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=%build_type% -DCMAKE_IGNORE_PATH="C:/Strawberry" -DCMAKE_IGNORE_PREFIX_PATH="C:/Strawberry" -DOPENSSL_ROOT_DIR:PATH="D:/vcpkg/installed/x64-windows"
 cmake --build . --config %build_type% --target deps -- -m
 @echo off
 
@@ -62,8 +63,9 @@ cd %build_dir%
 
 echo on
 set CMAKE_POLICY_VERSION_MINIMUM=3.5
-cmake .. -G "Visual Studio 17 2022" -A x64 -DORCA_TOOLS=ON %SIG_FLAG% -DCMAKE_BUILD_TYPE=%build_type%
+cmake .. -G "Visual Studio 17 2022" -A x64 -DORCA_TOOLS=ON  -DCMAKE_BUILD_TYPE=%build_type% -DOPENSSL_ROOT_DIR="D:/vcpkg/installed/x64-windows" -DPNG_LIBRARY="%WP%\deps\build\OrcaSlicer_dep\usr\local\lib\libpng16_static.lib" -DPNG_INCLUDE_DIR="%WP%\deps\build\OrcaSlicer_dep\usr\local\include" -DEXPAT_LIBRARY="%WP%\deps\build\OrcaSlicer_dep\usr\local\lib\expat.lib" -DEXPAT_INCLUDE_DIR="%WP%\deps\build\OrcaSlicer_dep\usr\local\include"
 cmake --build . --config %build_type% --target ALL_BUILD -- -m
+
 @echo off
 cd ..
 call scripts/run_gettext.bat
