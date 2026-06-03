@@ -11239,8 +11239,13 @@ static std::map<t_custom_gcode_key, t_config_option_keys> s_CustomGcodeSpecificP
     {"machine_start_gcode",         {}},
     {"machine_end_gcode",           {"layer_num", "layer_z", "max_layer_z", "filament_extruder_id"}},
     {"before_layer_change_gcode",   {"layer_num", "layer_z", "max_layer_z"}},
-    {"layer_change_gcode",          {"layer_num", "layer_z", "max_layer_z"}},
-    {"timelapse_gcode",             {"layer_num", "layer_z", "max_layer_z"}},
+    {"layer_change_gcode",          {"layer_num", "layer_z", "max_layer_z",
+                                     "most_used_physical_extruder_id"}},
+    {"timelapse_gcode",             {"layer_num", "layer_z", "max_layer_z",
+                                     "most_used_physical_extruder_id", "curr_physical_extruder_id",
+                                     "timelapse_pos_x", "timelapse_pos_y", "has_timelapse_safe_pos"}},
+    {"wrapping_detection_gcode",    {"layer_num", "layer_z", "max_layer_z",
+                                     "most_used_physical_extruder_id", "curr_physical_extruder_id"}},
     {"change_filament_gcode",       {"layer_num", "layer_z", "max_layer_z", "next_extruder", "previous_extruder", "fan_speed",
                                "first_flush_volume", "flush_length_1", "flush_length_2", "flush_length_3", "flush_length_4",
                                "new_filament_e_feedrate", "new_filament_temp", "new_retract_length",
@@ -11255,7 +11260,10 @@ static std::map<t_custom_gcode_key, t_config_option_keys> s_CustomGcodeSpecificP
     {"machine_pause_gcode",         {}},
     {"template_custom_gcode",       {}},
     // Filament G-code
-    {"filament_start_gcode",        {"filament_extruder_id"}},
+    {"filament_start_gcode",        {"filament_extruder_id", "layer_num", "layer_z", "max_layer_z",
+                                     "retraction_distance_when_cut", "long_retraction_when_cut",
+                                     "temperature", "nozzle_temperature",
+                                     "first_layer_temperature", "nozzle_temperature_initial_layer"}},
     {"filament_end_gcode",          {"layer_num", "layer_z", "max_layer_z", "filament_extruder_id"}},
 };
 
@@ -11322,6 +11330,27 @@ CustomGcodeSpecificConfigDef::CustomGcodeSpecificConfigDef()
 
     new_def("extrusion_role", coString, "Extrusion role", "The new extrusion role/type that is going to be used\n" + extrusion_role_types);
     new_def("last_extrusion_role", coString, "Last extrusion role", "The previously used extrusion role/type\nPossible Values:\n" + extrusion_role_types);
+
+// layer_change_gcode / timelapse_gcode / wrapping_detection_gcode common defs
+    new_def("most_used_physical_extruder_id", coInt, "Most used physical extruder ID",
+            "Physical extruder ID of the extruder used most on this layer.");
+    new_def("curr_physical_extruder_id", coInt, "Current physical extruder ID",
+            "Physical extruder ID of the current extruder.");
+
+// timelapse_gcode
+    new_def("timelapse_pos_x", coInt, "Timelapse safe X", "Safe X position the timelapse macro can park at.");
+    new_def("timelapse_pos_y", coInt, "Timelapse safe Y", "Safe Y position the timelapse macro can park at.");
+    new_def("has_timelapse_safe_pos", coBool, "Has timelapse safe pos", "True when a timelapse safe parking position is defined.");
+
+// filament_start_gcode
+    new_def("retraction_distance_when_cut", coFloat, "Retraction distance when cut",
+            "Retraction distance applied before a filament cut.");
+    new_def("long_retraction_when_cut", coBool, "Long retraction when cut",
+            "Whether the long-retraction-when-cut feature is active for this filament.");
+    new_def("temperature", coInts, "Temperature", "Nozzle temperature array (one per filament).");
+    new_def("nozzle_temperature", coInts, "Nozzle temperature", "Nozzle temperature array (one per filament).");
+    new_def("first_layer_temperature", coInts, "First layer temperature", "First-layer nozzle temperature array.");
+    new_def("nozzle_temperature_initial_layer", coInts, "Nozzle temperature initial layer", "Nozzle temperature for the initial layer.");
 }
 
 const CustomGcodeSpecificConfigDef custom_gcode_specific_config_def;
