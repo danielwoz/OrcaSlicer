@@ -621,6 +621,19 @@ void MediaFilePanel::fetchUrl(boost::weak_ptr<PrinterFileSystem> wfs)
                 if (!fs || fs != m_image_grid->GetFileSystem()) return;
                 if (boost::algorithm::starts_with(url, "bambu:///")) {
                     fs->SetUrl(url);
+                } else if (m_local_proto && !m_lan_ip.empty()) {
+                    // Some printers (e.g. H2S) advertise a remote file protocol but
+                    // only actually expose file transfer over LAN, so get_camera_url
+                    // for files returns empty. Fall back to the direct LAN tunnel we
+                    // already have (lan_ip is only set when the printer is on the LAN).
+                    std::string lurl = "bambu:///local/" + m_lan_ip + ".?port=6000&user=" + m_lan_user + "&passwd=" + m_lan_passwd;
+                    lurl += "&device=" + m_machine;
+                    lurl += "&net_ver=" + v;
+                    lurl += "&dev_ver=" + m_dev_ver;
+                    lurl += "&cli_id=" + wxGetApp().app_config->get("slicer_uuid");
+                    lurl += "&cli_ver=" + std::string(SLIC3R_VERSION);
+                    BOOST_LOG_TRIVIAL(info) << "MediaFilePanel::fetchUrl: remote file unavailable, falling back to LAN";
+                    fs->SetUrl(lurl);
                 } else {
                     m_image_grid->SetStatus(m_bmp_failed, _L("Connection Failed. Please check the network and try again"));
                     std::string res = "3";
