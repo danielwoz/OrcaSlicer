@@ -115,7 +115,11 @@ bool enabled()
         return forced;
 
 #if defined(_MSC_VER) || defined(_WIN32)
-    return true;
+    // Native Windows uses the IN-PROCESS PluginVerifyRedirect backend (the Bambu
+    // plugin runs natively), not the out-of-process forwarder — so the bridge is off
+    // by default here. BBLNetworkPlugin::initialize handles the Windows path
+    // (redirect + direct load). Set PJARCZAK_LINUX_BRIDGE_ENABLED=1 to override.
+    return false;
 #elif defined(__WXMAC__) || defined(__APPLE__)
     return true;
 #else
@@ -126,7 +130,11 @@ bool enabled()
 bool use_bridge_network_module()
 {
 #if defined(_MSC_VER) || defined(_WIN32)
-    return true;
+    // Windows uses the in-process PluginVerifyRedirect backend, which loads the
+    // genuine networking plugin AND BambuSource as separate modules (just like a
+    // normal native build). The source module is therefore NOT the networking
+    // module here, unlike the out-of-process forwarder used on Linux/Mac.
+    return false;
 #elif defined(__WXMAC__) || defined(__APPLE__)
     return true;
 #else
@@ -375,7 +383,9 @@ std::string sha256_file_hex(const std::string& file_path, std::string* reason)
 
 std::string expected_network_abi_version()
 {
-    return env_or("PJARCZAK_EXPECTED_BAMBU_NETWORK_VERSION", BAMBU_NETWORK_AGENT_VERSION);
+    // 02.07 OrcaSlicer dropped the BAMBU_NETWORK_AGENT_VERSION macro; the current
+    // expected version is the latest entry in AVAILABLE_NETWORK_VERSIONS.
+    return env_or("PJARCZAK_EXPECTED_BAMBU_NETWORK_VERSION", Slic3r::get_latest_network_version());
 }
 
 bool abi_version_matches_expected(const std::string& actual_version, std::string* reason)

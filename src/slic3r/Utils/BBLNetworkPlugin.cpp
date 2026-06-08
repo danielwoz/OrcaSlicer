@@ -1,5 +1,6 @@
 #include "BBLNetworkPlugin.hpp"
 #include "NetworkAgent.hpp"
+#include "PJarczakLinuxBridge/PJarczakLinuxBridgeConfig.hpp"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,6 +69,18 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
         plugin_folder = plugin_folder / "backup";
     }
 
+    const bool pj_bridge = Slic3r::PJarczakLinuxBridge::enabled();
+
+    if (pj_bridge) {
+#if defined(_MSC_VER) || defined(_WIN32)
+        _putenv_s("PJARCZAK_BAMBU_PLUGIN_DIR", plugin_folder.string().c_str());
+        _putenv_s("PJARCZAK_EXPECTED_BAMBU_NETWORK_VERSION", version.c_str());
+#else
+        setenv("PJARCZAK_BAMBU_PLUGIN_DIR", plugin_folder.string().c_str(), 1);
+        setenv("PJARCZAK_EXPECTED_BAMBU_NETWORK_VERSION", version.c_str(), 1);
+#endif
+    }
+
     if (version.empty()) {
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": version is required but not provided";
         set_load_error(
@@ -78,77 +91,56 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
         return -1;
     }
 
-    // Auto-migration: If loading legacy version and versioned library doesn't exist,
-    // but unversioned legacy library does exist, copy it to versioned format
-    if (version == BAMBU_NETWORK_AGENT_VERSION_LEGACY) {
-        boost::filesystem::path versioned_path;
-        boost::filesystem::path legacy_path;
 #if defined(_MSC_VER) || defined(_WIN32)
-        versioned_path = plugin_folder / (std::string(BAMBU_NETWORK_LIBRARY) + "_" + version + ".dll");
-        legacy_path = plugin_folder / (std::string(BAMBU_NETWORK_LIBRARY) + ".dll");
-#elif defined(__WXMAC__)
-        versioned_path = plugin_folder / (std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + "_" + version + ".dylib");
-        legacy_path = plugin_folder / (std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + ".dylib");
-#else
-        versioned_path = plugin_folder / (std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + "_" + version + ".so");
-        legacy_path = plugin_folder / (std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + ".so");
-#endif
-        if (!boost::filesystem::exists(versioned_path) && boost::filesystem::exists(legacy_path)) {
-            try {
-                boost::filesystem::copy(legacy_path, versioned_path);
-            } catch (const std::exception& e) {
-                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to copy legacy library: " << e.what();
+    {
+        // Native Windows backend of the bridge = our IN-PROCESS approach: the Bambu
+        // plugin runs natively here, so instead of the out-of-process forwarder we
+        // satisfy the plugin's "signed studio" Authenticode gate with
+        // PluginVerifyRedirect and load the genuine plugin directly. (The forwarder is
+        // only needed on Linux/Mac where the Windows-only plugin can't run natively.)
+        (void) pj_bridge;
+        Slic3r::install_plugin_verify_redirect();
+        library = plugin_folder.string() + "\\" + std::string(BAMBU_NETWORK_LIBRARY) + "_" + version + ".dll";
+        wchar_t lib_wstr[256];
+        memset(lib_wstr, 0, sizeof(lib_wstr));
+        ::MultiByteToWideChar(CP_UTF8, NULL, library.c_str(), strlen(library.c_str()) + 1, lib_wstr, sizeof(lib_wstr) / sizeof(lib_wstr[0]));
+        m_networking_module = LoadLibrary(lib_wstr);
+        if (!m_networking_module) {
+            std::string library_path = get_libpath_in_current_directory(std::string(BAMBU_NETWORK_LIBRARY));
+            if (library_path.empty()) {
+                set_load_error(
+                    "Network library not found",
+                    "Could not locate versioned library: " + library,
+                    library
+                );
+                return -1;
             }
+            memset(lib_wstr, 0, sizeof(lib_wstr));
+            ::MultiByteToWideChar(CP_UTF8, NULL, library_path.c_str(), strlen(library_path.c_str()) + 1, lib_wstr, sizeof(lib_wstr) / sizeof(lib_wstr[0]));
+            m_networking_module = LoadLibrary(lib_wstr);
         }
     }
-
-    // Load versioned library
-#if defined(_MSC_VER) || defined(_WIN32)
-    library = plugin_folder.string() + "\\" + std::string(BAMBU_NETWORK_LIBRARY) + "_" + version + ".dll";
 #else
+    if (pj_bridge) {
+        library = Slic3r::PJarczakLinuxBridge::bridge_network_library_path(plugin_folder);
+        m_networking_module = dlopen(library.c_str(), RTLD_LAZY);
+    } else {
     #if defined(__WXMAC__)
-    std::string lib_ext = ".dylib";
+        std::string lib_ext = ".dylib";
     #else
-    std::string lib_ext = ".so";
+        std::string lib_ext = ".so";
     #endif
-    library = plugin_folder.string() + "/" + std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + "_" + version + lib_ext;
-#endif
-
-#if defined(_MSC_VER) || defined(_WIN32)
-    // Satisfy the proprietary plugin's "signed studio" Authenticode gate for our
-    // forked/unsigned studio DLL: redirect the plugin's check of OUR dll to the
-    // genuine official BambuStudio.dll. Must run BEFORE the plugin loads.
-    // No-op when the genuine dll is absent. (Ported from the bridge.)
-    Slic3r::install_plugin_verify_redirect();
-
-    wchar_t lib_wstr[256];
-    memset(lib_wstr, 0, sizeof(lib_wstr));
-    ::MultiByteToWideChar(CP_UTF8, NULL, library.c_str(), strlen(library.c_str())+1, lib_wstr, sizeof(lib_wstr) / sizeof(lib_wstr[0]));
-    m_networking_module = LoadLibrary(lib_wstr);
-    if (!m_networking_module) {
-        std::string library_path = get_libpath_in_current_directory(std::string(BAMBU_NETWORK_LIBRARY));
-        if (library_path.empty()) {
+        library = plugin_folder.string() + "/" + std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + "_" + version + lib_ext;
+        m_networking_module = dlopen(library.c_str(), RTLD_LAZY);
+        if (!m_networking_module) {
+            char* dll_error = dlerror();
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": dlopen failed: " << (dll_error ? dll_error : "unknown error");
             set_load_error(
-                "Network library not found",
-                "Could not locate versioned library: " + library,
+                "Failed to load network library",
+                dll_error ? std::string(dll_error) : "Unknown dlopen error",
                 library
             );
-            return -1;
         }
-        memset(lib_wstr, 0, sizeof(lib_wstr));
-        ::MultiByteToWideChar(CP_UTF8, NULL, library_path.c_str(), strlen(library_path.c_str())+1, lib_wstr, sizeof(lib_wstr) / sizeof(lib_wstr[0]));
-        m_networking_module = LoadLibrary(lib_wstr);
-    }
-#else
-    m_networking_module = dlopen(library.c_str(), RTLD_LAZY);
-    if (!m_networking_module) {
-        char* dll_error = dlerror();
-        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": dlopen failed: " << (dll_error ? dll_error : "unknown error");
-        set_load_error(
-            "Failed to load network library",
-            dll_error ? std::string(dll_error) : "Unknown dlopen error",
-            library
-        );
     }
 #endif
 
@@ -163,13 +155,10 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
         return -1;
     }
 
-    // Load file transfer interface
     InitFTModule(m_networking_module);
 
-    // Load all function pointers
     load_all_function_pointers();
 
-    // Sync legacy network flag from NetworkAgent (set during GUI_App initialization)
     m_use_legacy_network = NetworkAgent::use_legacy_network;
 
     std::string loaded_version;
@@ -179,12 +168,12 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
 
     BOOST_LOG_TRIVIAL(info) << "BBLNetworkPlugin::initialize: legacy_mode="
         << (m_use_legacy_network ? "true" : "false")
+        << ", bridge_mode=" << (pj_bridge ? "true" : "false")
         << ", library=" << library
         << ", version=" << (loaded_version.empty() ? "unknown" : loaded_version)
         << ", send_message=" << (m_send_message ? "loaded" : "null")
         << ", start_print=" << (m_start_print ? "loaded" : "null")
-        << ", start_local_print=" << (m_start_local_print ? "loaded" : "null")
-        << ", get_my_token=" << (m_get_my_token ? "loaded" : "null");
+        << ", start_local_print=" << (m_start_local_print ? "loaded" : "null");
 
     return 0;
 }
@@ -194,25 +183,28 @@ int BBLNetworkPlugin::unload()
     UnloadFTModule();
 
 #if defined(_MSC_VER) || defined(_WIN32)
+    const bool same_handles = m_source_module && (m_source_module == m_networking_module);
+    if (m_source_module && !same_handles) {
+        FreeLibrary(m_source_module);
+        m_source_module = NULL;
+    }
     if (m_networking_module) {
         FreeLibrary(m_networking_module);
         m_networking_module = NULL;
     }
-    if (m_source_module) {
-        FreeLibrary(m_source_module);
+#else
+    const bool same_handles = m_source_module && (m_source_module == m_networking_module);
+    if (m_source_module && !same_handles) {
+        dlclose(m_source_module);
         m_source_module = NULL;
     }
-#else
     if (m_networking_module) {
         dlclose(m_networking_module);
         m_networking_module = NULL;
     }
-    if (m_source_module) {
-        dlclose(m_source_module);
-        m_source_module = NULL;
-    }
 #endif
 
+    m_source_module = NULL;
     clear_all_function_pointers();
 
     return 0;
@@ -284,6 +276,11 @@ void* BBLNetworkPlugin::get_source_module()
 {
     if ((m_source_module) || (!m_networking_module))
         return m_source_module;
+
+    if (Slic3r::PJarczakLinuxBridge::enabled() && Slic3r::PJarczakLinuxBridge::source_module_is_network_module()) {
+        m_source_module = m_networking_module;
+        return m_source_module;
+    }
 
     std::string library;
     std::string data_dir_str = data_dir();
