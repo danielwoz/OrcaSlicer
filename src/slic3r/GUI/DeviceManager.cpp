@@ -1716,6 +1716,24 @@ int MachineObject::command_ams_drying_start(int ams_id, std::string filament_typ
     return this->publish_json(j);
 }
 
+int MachineObject::command_ams_drying_stop(int ams_id)
+{
+    BOOST_LOG_TRIVIAL(info) << "command: ams_filament_drying stop, ams_id=" << ams_id;
+    json j;
+    j["print"]["command"]              = "ams_filament_drying";
+    j["print"]["sequence_id"]          = std::to_string(MachineObject::m_sequence_id++);
+    j["print"]["ams_id"]               = ams_id;
+    j["print"]["mode"]                 = 0; // DryCtrlMode::Off
+    j["print"]["filament"]             = "";
+    j["print"]["temp"]                 = 0;
+    j["print"]["duration"]             = 0;
+    j["print"]["humidity"]             = 0;
+    j["print"]["rotate_tray"]          = false;
+    j["print"]["cooling_temp"]         = 0;
+    j["print"]["close_power_conflict"] = false;
+    return this->publish_json(j);
+}
+
 int MachineObject::command_start_extrusion_cali(int tray_index, int nozzle_temp, int bed_temp, float max_volumetric_speed, std::string setting_id)
 {
     BOOST_LOG_TRIVIAL(trace) << "extrusion_cali: tray_id = " << tray_index << ", nozzle_temp = " << nozzle_temp << ", bed_temp = " << bed_temp

@@ -233,7 +233,9 @@ void uiAmsPercentHumidityDryPopup::OnStopDrying(wxCommandEvent &e)
     auto *dev = wxGetApp().getDeviceManager();
     MachineObject *obj = dev ? dev->get_selected_machine() : nullptr;
     if (!obj) return;
-    obj->command_ams_drying_stop();
+    int ams_id = 0;
+    try { ams_id = std::stoi(m_ams_id); } catch (...) {}
+    obj->command_ams_drying_stop(ams_id);
     EndModal(wxID_OK);
 }
 

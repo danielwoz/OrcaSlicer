@@ -746,6 +746,7 @@ public:
     int command_ams_refresh_rfid2(int ams_id, int slot_id);
     int command_ams_control(std::string action);
     int command_ams_drying_stop();
+    int command_ams_drying_stop(int ams_id); // ams_filament_drying mode=Off (counterpart to command_ams_drying_start)
     int command_ams_drying_start(int ams_id, std::string filament_type, int temp, int duration_hour, bool rotate_tray = false, int cooling_temp = 0);
     int command_start_extrusion_cali(int tray_index, int nozzle_temp, int bed_temp, float max_volumetric_speed, std::string setting_id = "");
     int command_stop_extrusion_cali();
