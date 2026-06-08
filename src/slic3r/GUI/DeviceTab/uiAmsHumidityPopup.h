@@ -83,6 +83,8 @@ private:
     // active drying control (Start/Stop) — shown only on printers that support remote AMS drying
     void OnStartDrying(wxCommandEvent &e);
     void OnStopDrying(wxCommandEvent &e);
+    // set temp/time inputs to a safe default = the lowest-temp filament currently in this AMS
+    void set_safe_drying_defaults();
     wxBoxSizer* m_dry_ctrl_sizer = nullptr;
     wxTextCtrl* m_dry_temp_input = nullptr;
     wxTextCtrl* m_dry_time_input = nullptr;
