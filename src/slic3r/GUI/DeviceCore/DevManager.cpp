@@ -253,6 +253,16 @@ namespace Slic3r
                         }
                     }
                     /* ip changed reconnect mqtt */
+                    if (obj->dev_connection_type != "cloud") {
+                        BOOST_LOG_TRIVIAL(info) << "Triggering reconnect due to IP change for " << dev_id;
+                        obj->disconnect();
+#if !BBL_RELEASE_TO_PUBLIC
+                        obj->connect(Slic3r::GUI::wxGetApp().app_config->get("enable_ssl_for_mqtt") == "true" ? true : false);
+#else
+                        obj->connect(obj->local_use_ssl);
+#endif
+                        obj->set_lan_mode_connection_state(true);
+                    }
                 }
 
                 if (obj->wifi_signal != printer_signal ||

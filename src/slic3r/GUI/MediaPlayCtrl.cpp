@@ -489,18 +489,18 @@ void MediaPlayCtrl::Stop(wxString const &msg, wxString const &msg2)
 
 void MediaPlayCtrl::TogglePlay()
 {
-    BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::TogglePlay";
+    BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::TogglePlay called.";
     if (m_last_state != MEDIASTATE_IDLE) {
         m_next_retry = wxDateTime();
-        Stop();
-    } else {
-        m_failed_retry = 0;
-        m_user_triggered = true;
+        Stop(_L("Connecting..."));
+    }
+    else {
         if (m_last_user_play + wxTimeSpan::Minutes(5) < wxDateTime::Now()) {
             m_last_failed_codes.clear();
             m_last_user_play = wxDateTime::Now();
         }
         m_next_retry = wxDateTime::Now();
+        BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::TogglePlay -> calling Play()";
         Play();
     }
 }
