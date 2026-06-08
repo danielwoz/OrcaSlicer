@@ -47,7 +47,7 @@ const char* probe_rtsp_scheme(const std::string& host, uint16_t port) {
             ba::ip::tcp::endpoint(ba::ip::make_address(host), port),
             [&](const boost::system::error_code& e) { cec = e; });
         io.run_for(milliseconds(500));
-        if (cec || !sock.is_open()) return scheme;
+        if (cec || !sock.is_open()) return nullptr; // Signal failure
 
         const std::string req =
             "OPTIONS rtsp://" + host + "/streaming/live/1 RTSP/1.0\r\nCSeq: 1\r\n\r\n";
@@ -79,7 +79,7 @@ const char* probe_rtsp_scheme(const std::string& host, uint16_t port) {
         boost::system::error_code ig;
         sock.close(ig);
     } catch (...) {
-        scheme = "rtsp";
+        return nullptr;
     }
     return scheme;
 }
@@ -107,7 +107,7 @@ std::string build_virtual_live_url(MachineObject* mo) {
     if (!mo) return {};
     const std::string dev_id = mo->get_dev_id();
     if (!NetworkAgent::is_virtual_dev_id(dev_id)) return {};
-    const std::string lan_ip = mo->get_dev_ip();
+    std::string lan_ip = mo->get_dev_ip();
     if (lan_ip.empty()) return {};
     // Standard PLAIN RTSP served by the bridge's own C++ RtspServer (the
     // relay lives in the bridge codebase — server/RtspServer.cpp — not an
@@ -118,14 +118,51 @@ std::string build_virtual_live_url(MachineObject* mo) {
     // cache -> persisted store -> unicast probe of the bridge — matching
     // MQTT/FTPS/vtun. (Was store-only, which silently defaulted to the A1's
     // 38322 whenever the store hadn't captured this dev's mqtt_port yet.)
-    const uint16_t rtsp_port =
+    uint16_t rtsp_port =
         Slic3r::VirtualSsdpDiscovery::port_for(dev_id, kBridgeRtspPort, lan_ip);
     // Transport (rtsp vs rtsps) is detected by probing the bridge — no
     // slicer-side flag needed; the bridge's BAMBU_BRIDGE_RTSP_TLS is the
     // single source of truth.
     const char* scheme = probe_rtsp_scheme(lan_ip, rtsp_port);
+
+    if (scheme == nullptr) {
+        // Connection failed. The IP address likely changed and our cache is stale.
+        // Force a multicast rediscovery of the bridge.
+        BBL_LOG("media-url", "probe_failed_triggering_rediscovery")
+            .str("dev_id", dev_id)
+            .str("stale_ip", lan_ip);
+        
+        Slic3r::VirtualSsdpDiscovery::invalidate_ip(dev_id);
+        auto found = Slic3r::VirtualSsdpDiscovery::rediscover_bridge(dev_id);
+        if (!found.ip.empty()) {
+            lan_ip = found.ip;
+            mo->set_dev_ip(lan_ip);
+            rtsp_port = Slic3r::VirtualSsdpDiscovery::port_for(dev_id, kBridgeRtspPort, lan_ip);
+            scheme = probe_rtsp_scheme(lan_ip, rtsp_port);
+        }
+        if (scheme == nullptr) scheme = "rtsp"; // Final fallback
+    }
+#ifdef _WIN32
+    // Windows: a plain rtsp(s):// URL would be handed to wxMediaCtrl2's native
+    // backend = Windows Media Player, which CANNOT play RTSP (it sends
+    // OPTIONS/DESCRIBE then hangs at "Loading…" forever). Real printers avoid
+    // this by using the bambu:/// scheme, which wxMediaCtrl2 routes to the
+    // registered BambuSource.dll DirectShow filter (live555 RTSP client) — the
+    // one client that handles RTP-over-TCP on Windows. Point that same client
+    // at the bridge's relay so virtual cameras play exactly like real ones.
+    // (Linux keeps the plain rtsp:// form below, played by GStreamer rtspsrc.)
+    const std::string passwd = mo->get_access_code();
+    const std::string esc_scheme =
+        std::string(scheme) + "___";   // bambu:/// encodes "://" as "___"
+    const std::string url =
+        "bambu:///" + esc_scheme + "bblp:" + passwd + "@" + lan_ip + ":" +
+        std::to_string(rtsp_port) + "/streaming/live/1" +
+        "?proto=" + scheme +
+        "&device=" + dev_id;
+#else
     const std::string url = std::string(scheme) + "://" + lan_ip + ":" +
                             std::to_string(rtsp_port) + "/streaming/live/1";
+#endif
     BBL_LOG("media-url", "virtual_live_url_built")
         .str("dev_id",    dev_id)
         .str("lan_ip",    lan_ip)
