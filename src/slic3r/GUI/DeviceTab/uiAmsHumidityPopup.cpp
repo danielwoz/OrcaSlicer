@@ -12,10 +12,14 @@
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/I18N.hpp"
 #include "slic3r/GUI/Widgets/StateColor.hpp"
+#include "slic3r/GUI/DeviceManager.hpp"
+#include "slic3r/GUI/DeviceCore/DevManager.h"
 
 
 #include <wx/dcgraph.h>
 #include <wx/grid.h>
+#include <wx/button.h>
+#include <wx/textctrl.h>
 
 namespace Slic3r { namespace GUI {
 
@@ -86,12 +90,32 @@ void uiAmsPercentHumidityDryPopup::Create()
     m_sizer->AddSpacer(FromDIP(10));
     m_sizer->Add(dry_state_sizer, 1 ,wxEXPAND | wxHORIZONTAL);
     m_sizer->Add(grid_sizer, 1, wxEXPAND | wxHORIZONTAL, FromDIP(15));
+
+    // active drying control row (Start/Stop). Shown only when the selected printer
+    // supports remote AMS drying (see UpdateContents()).
+    m_dry_ctrl_sizer = new wxBoxSizer(wxHORIZONTAL);
+    m_dry_temp_input = new wxTextCtrl(this, wxID_ANY, "45", wxDefaultPosition, wxSize(FromDIP(40), -1));
+    m_dry_time_input = new wxTextCtrl(this, wxID_ANY, "8",  wxDefaultPosition, wxSize(FromDIP(40), -1));
+    m_dry_start_btn  = new wxButton(this, wxID_ANY, _L("Start Drying"));
+    m_dry_stop_btn   = new wxButton(this, wxID_ANY, _L("Stop Drying"));
+    m_dry_ctrl_sizer->Add(new Label(this, _L("Temp")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(3));
+    m_dry_ctrl_sizer->Add(m_dry_temp_input, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(2));
+    m_dry_ctrl_sizer->Add(new Label(this, wxString::FromUTF8(u8"℃")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
+    m_dry_ctrl_sizer->Add(new Label(this, _L("Time")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(3));
+    m_dry_ctrl_sizer->Add(m_dry_time_input, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(2));
+    m_dry_ctrl_sizer->Add(new Label(this, _L("h")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+    m_dry_ctrl_sizer->Add(m_dry_start_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(4));
+    m_dry_ctrl_sizer->Add(m_dry_stop_btn, 0, wxALIGN_CENTER_VERTICAL);
+    m_dry_start_btn->Bind(wxEVT_BUTTON, &uiAmsPercentHumidityDryPopup::OnStartDrying, this);
+    m_dry_stop_btn->Bind(wxEVT_BUTTON, &uiAmsPercentHumidityDryPopup::OnStopDrying, this);
+    m_sizer->Add(m_dry_ctrl_sizer, 0, wxALIGN_CENTER_HORIZONTAL | wxALL, FromDIP(8));
+
     m_sizer->AddSpacer(FromDIP(10));
     SetSizer(m_sizer);
 
-    SetSize(wxSize(FromDIP(400), FromDIP(270)));
-    SetMinSize(wxSize(FromDIP(400), FromDIP(270)));
-    SetMaxSize(wxSize(FromDIP(400), FromDIP(270)));
+    SetSize(wxSize(FromDIP(400), FromDIP(330)));
+    SetMinSize(wxSize(FromDIP(400), FromDIP(330)));
+    SetMaxSize(wxSize(FromDIP(400), FromDIP(330)));
 
     Fit();
     Layout();
@@ -176,9 +200,41 @@ void uiAmsPercentHumidityDryPopup::UpdateContents()
         left_dry_time_label->SetLabel(_L("Idle"));
     }
 
+    // show the active-drying controls only when the selected printer supports remote AMS drying
+    bool support_dry = false;
+    if (auto *dev = wxGetApp().getDeviceManager()) {
+        if (MachineObject *obj = dev->get_selected_machine())
+            support_dry = obj->is_support_remote_dry;
+    }
+    if (m_dry_ctrl_sizer)
+        m_sizer->Show(m_dry_ctrl_sizer, support_dry, true);
+
     Fit();
     Layout();
     Refresh();
+}
+
+void uiAmsPercentHumidityDryPopup::OnStartDrying(wxCommandEvent &e)
+{
+    auto *dev = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev ? dev->get_selected_machine() : nullptr;
+    if (!obj) return;
+    long temp = 45, hours = 8;
+    if (m_dry_temp_input) m_dry_temp_input->GetValue().ToLong(&temp);
+    if (m_dry_time_input) m_dry_time_input->GetValue().ToLong(&hours);
+    int ams_id = 0;
+    try { ams_id = std::stoi(m_ams_id); } catch (...) {}
+    obj->command_ams_drying_start(ams_id, std::string(), (int) temp, (int) hours);
+    EndModal(wxID_OK);
+}
+
+void uiAmsPercentHumidityDryPopup::OnStopDrying(wxCommandEvent &e)
+{
+    auto *dev = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev ? dev->get_selected_machine() : nullptr;
+    if (!obj) return;
+    obj->command_ams_drying_stop();
+    EndModal(wxID_OK);
 }
 
 void uiAmsPercentHumidityDryPopup::msw_rescale()

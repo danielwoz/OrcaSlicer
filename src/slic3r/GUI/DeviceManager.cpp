@@ -1698,6 +1698,24 @@ int MachineObject::command_ams_drying_stop()
     return this->publish_json(j);
 }
 
+int MachineObject::command_ams_drying_start(int ams_id, std::string filament_type, int temp, int duration_hour, bool rotate_tray, int cooling_temp)
+{
+    BOOST_LOG_TRIVIAL(info) << "command: ams_filament_drying start, ams_id=" << ams_id << " temp=" << temp << " hours=" << duration_hour;
+    json j;
+    j["print"]["command"]              = "ams_filament_drying";
+    j["print"]["sequence_id"]          = std::to_string(MachineObject::m_sequence_id++);
+    j["print"]["ams_id"]               = ams_id;
+    j["print"]["mode"]                 = 1; // DryCtrlMode::OnTime
+    j["print"]["filament"]             = filament_type;
+    j["print"]["temp"]                 = temp;
+    j["print"]["duration"]             = duration_hour;
+    j["print"]["humidity"]             = 0;
+    j["print"]["rotate_tray"]          = rotate_tray;
+    j["print"]["cooling_temp"]         = cooling_temp;
+    j["print"]["close_power_conflict"] = false;
+    return this->publish_json(j);
+}
+
 int MachineObject::command_start_extrusion_cali(int tray_index, int nozzle_temp, int bed_temp, float max_volumetric_speed, std::string setting_id)
 {
     BOOST_LOG_TRIVIAL(trace) << "extrusion_cali: tray_id = " << tray_index << ", nozzle_temp = " << nozzle_temp << ", bed_temp = " << bed_temp
@@ -5031,6 +5049,8 @@ void MachineObject::parse_new_info(json print)
     // fun2 may have infinite length, use get_flag_bits_no_border
     if (!fun2.empty()) {
         is_support_print_with_emmc = get_flag_bits_no_border(fun2, 0) == 1;
+        is_support_remote_dry = (get_flag_bits_no_border(fun2, 5) == 1);
+        is_support_model_internal_storage = (get_flag_bits_no_border(fun2, 17) == 1);
     }
 
     /*aux*/
