@@ -642,6 +642,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/BBLPrinterAgent.hpp
     Utils/BBLNetworkPlugin.cpp
     Utils/BBLNetworkPlugin.hpp
+    Utils/PluginVerifyRedirect.cpp
+    Utils/PluginVerifyRedirect.hpp
     Utils/Obico.cpp
     Utils/Obico.hpp
     Utils/OctoPrint.cpp
@@ -769,6 +771,16 @@ target_link_libraries(libslic3r_gui libslic3r cereal::cereal imgui imguizmo mini
 
 if (MSVC)
     target_link_libraries(libslic3r_gui Setupapi.lib)
+    # MinHook (vendored) for PluginVerifyRedirect.cpp — the Bambu network
+    # plugin's "signed studio" Authenticode gate redirect. Compiled straight
+    # into libslic3r_gui (Windows x64 only).
+    set(_MINHOOK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../deps/minhook)
+    target_sources(libslic3r_gui PRIVATE
+        ${_MINHOOK_DIR}/src/buffer.c
+        ${_MINHOOK_DIR}/src/hook.c
+        ${_MINHOOK_DIR}/src/trampoline.c
+        ${_MINHOOK_DIR}/src/hde/hde64.c)
+    target_include_directories(libslic3r_gui PRIVATE ${_MINHOOK_DIR}/include)
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     FIND_LIBRARY(WAYLAND_SERVER_LIBRARIES NAMES wayland-server)
     FIND_LIBRARY(WAYLAND_EGL_LIBRARIES    NAMES wayland-egl)
