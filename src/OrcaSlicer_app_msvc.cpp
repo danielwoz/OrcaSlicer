@@ -557,14 +557,9 @@ int wmain(int argc, wchar_t **argv)
     // path — resolve to our module. Its signature is handled by the redirect.
     wchar_t path_to_slic3r[MAX_PATH + 1] = { 0 };
     wcscpy(path_to_slic3r, path_to_exe);
-    wcscat(path_to_slic3r, L"OrcaSlicer.dll");
+    wcscat(path_to_slic3r, L"BambuStudio.dll");
 //	printf("Loading Slic3r library: %S\n", path_to_slic3r);
     HINSTANCE hInstance_Slic3r = LoadLibraryExW(path_to_slic3r, nullptr, 0);
-    if (hInstance_Slic3r == nullptr) {
-        // a Bambu install ships the studio dll as BambuStudio.dll -- try that name too.
-        wcscpy(path_to_slic3r, path_to_exe); wcscat(path_to_slic3r, L"BambuStudio.dll");
-        hInstance_Slic3r = LoadLibraryExW(path_to_slic3r, nullptr, 0);
-    }
     if (hInstance_Slic3r == nullptr) {
         printf("BambuStudio.dll was not loaded, error=%d\n", GetLastError());
         return -1;
