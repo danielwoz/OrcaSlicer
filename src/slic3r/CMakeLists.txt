@@ -765,12 +765,10 @@ if (NOT _bvc_wx_inc AND TARGET wx::core)
 endif()
 set(BAMBU_VIRTUAL_CLIENT_WX_INCLUDE_DIRS    "${_bvc_wx_inc}"
     CACHE STRING "wxWidgets include dirs for bambu_virtual_client" FORCE)
-# Generated headers (libslic3r_version.h, libslic3r/Config.hpp, etc.) and
-# headers libslic3r/Utils.hpp transitively pulls in (Eigen, dev-utils).
-set(BAMBU_VIRTUAL_CLIENT_EXTRA_INCLUDE_DIRS
-    "${CMAKE_BINARY_DIR}/src/libslic3r;${CMAKE_BINARY_DIR}/src/slic3r;${CMAKE_BINARY_DIR}/src/dev-utils/platform;${CMAKE_SOURCE_DIR}/src/eigen;${CMAKE_SOURCE_DIR}/deps_src/eigen"
-    CACHE STRING "extra include dirs (generated headers) for bambu_virtual_client" FORCE)
-# Built independently — don't double-build its CLI testbed in slicer trees.
+# Discover Eigen FIRST (upstream moved it from deps_src/eigen to deps/Eigen
+# in the PR13567 merge; the in-tree src/eigen path went away too). Tries
+# EIGEN3_INCLUDE_DIR (legacy), Eigen3_INCLUDE_DIRS (newer find_package),
+# and finally the Eigen3::Eigen target's INTERFACE_INCLUDE_DIRECTORIES.
 set(_bvc_eigen_inc "${EIGEN3_INCLUDE_DIR}")
 if (NOT _bvc_eigen_inc)
     set(_bvc_eigen_inc "${Eigen3_INCLUDE_DIRS}")
@@ -780,6 +778,13 @@ if (NOT _bvc_eigen_inc AND TARGET Eigen3::Eigen)
 endif()
 set(BAMBU_VIRTUAL_CLIENT_EIGEN_INCLUDE_DIR "${_bvc_eigen_inc}"
     CACHE PATH "Eigen include dir for bambu_virtual_client" FORCE)
+# Generated headers (libslic3r_version.h, libslic3r/Config.hpp, etc.) and
+# headers libslic3r/Utils.hpp transitively pulls in (Eigen, dev-utils).
+# The discovered Eigen path feeds in via _bvc_eigen_inc.
+set(BAMBU_VIRTUAL_CLIENT_EXTRA_INCLUDE_DIRS
+    "${CMAKE_BINARY_DIR}/src/libslic3r;${CMAKE_BINARY_DIR}/src/slic3r;${CMAKE_BINARY_DIR}/src/dev-utils/platform;${_bvc_eigen_inc}"
+    CACHE STRING "extra include dirs (generated headers) for bambu_virtual_client" FORCE)
+# Built independently — don't double-build its CLI testbed in slicer trees.
 set(BAMBU_VIRTUAL_CLIENT_BUILD_CLI OFF CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/Utils/bambu_virtual_client
                  ${CMAKE_BINARY_DIR}/bambu_virtual_client)
