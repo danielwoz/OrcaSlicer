@@ -546,7 +546,7 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
     // Orca: clamp outer_wall_count to a sensible range relative to wall_loops, and warn when
     // surface_wall_override_filament is combined with the inner-outer-inner wall sequence.
     const int wall_loops_v        = config->opt_int("wall_loops");
-    const int wall_filament_v     = config->opt_int("wall_filament");
+    const int wall_filament_v     = config->opt_int("outer_wall_filament_id");
     const int surface_wall_override_filament = config->opt_int("surface_wall_override_filament");
     const int outer_wall_count    = config->opt_int("outer_wall_count");
     if (surface_wall_override_filament > 0 && wall_loops_v > 0) {
