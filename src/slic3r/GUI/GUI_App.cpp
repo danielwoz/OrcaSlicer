@@ -3252,7 +3252,7 @@ void GUI_App::copy_network_if_available()
 
 bool GUI_App::on_init_network(bool try_backup)
 {
-    auto should_load_networking_plugin = app_config->get_bool("installed_networking");
+    auto should_load_networking_plugin = app_config->get_bool("installed_networking") && Slic3r::is_bambu_host_mode();
 
     std::string config_version = app_config->get_network_plugin_version();
 
