@@ -773,10 +773,14 @@ target_link_libraries(libslic3r_gui libslic3r cereal::cereal imgui imguizmo mini
 
 if (MSVC)
     target_link_libraries(libslic3r_gui Setupapi.lib)
-    # MinHook (vendored) for PluginVerifyRedirect.cpp — the Bambu network
-    # plugin's "signed studio" Authenticode gate redirect. Compiled straight
-    # into libslic3r_gui (Windows x64 only).
+    # MinHook (git submodule at deps/minhook) for PluginVerifyRedirect.cpp — the
+    # Bambu network plugin's "signed studio" Authenticode gate redirect. Compiled
+    # straight into libslic3r_gui (Windows x64 only). Run
+    # `git submodule update --init deps/minhook` before configuring.
     set(_MINHOOK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../deps/minhook)
+    if (NOT EXISTS ${_MINHOOK_DIR}/src/hook.c)
+        message(FATAL_ERROR "MinHook submodule missing — run: git submodule update --init deps/minhook")
+    endif ()
     target_sources(libslic3r_gui PRIVATE
         ${_MINHOOK_DIR}/src/buffer.c
         ${_MINHOOK_DIR}/src/hook.c
