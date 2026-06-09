@@ -129,6 +129,23 @@ if (MINGW)
     set_target_properties(OrcaSlicer PROPERTIES PREFIX "")
 endif (MINGW)
 
+if (MSVC)
+    # We reuse prebuilt OpenSSL/CURL (built against a dynamic zlib1.dll) next to
+    # OrcaSlicer's static zlib, so the link sees a duplicate zlib (import vs
+    # static objects). zlib's ABI is stable across 1.2.x; let the linker keep
+    # the first definition rather than erroring. /IGNORE:4006 mutes the spam.
+    target_link_options(OrcaSlicer PRIVATE /FORCE:MULTIPLE /IGNORE:4006)
+endif ()
+
+if (WIN32)
+    # Emit the studio DLL as BambuStudio.dll. The Bambu network plugin looks up
+    # the studio module by this exact name on its control-command signing path,
+    # so naming our forked DLL OrcaSlicer.dll connects but breaks control (e.g.
+    # filament color / AMS). The DLL's (missing) signature is handled by
+    # PluginVerifyRedirect; only the filename has to match.
+    set_target_properties(OrcaSlicer PROPERTIES OUTPUT_NAME "BambuStudio")
+endif ()
+
 if (NOT WIN32 AND NOT APPLE)
     # Binary name on unix like systems (Linux, Unix)
     set_target_properties(OrcaSlicer PROPERTIES OUTPUT_NAME "orca-slicer")
