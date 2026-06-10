@@ -16,6 +16,10 @@ endif()
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 if (WIN32)
+    # Disable vcpkg's user-wide auto-link ("vcpkg integrate install") to avoid unnecessary
+    # libs.
+    set(CMAKE_VS_GLOBALS "VcpkgEnabled=false")
+
     # Detect known CI environments
     set(IS_CI FALSE)
     if(DEFINED ENV{CI})
