@@ -37,7 +37,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: false
+
+      # Init only the submodules the default build needs. The Vulkan deps
+      # (deps_src/Vulkan-*, glslang) are pinned to non-fetchable SHAs and are
+      # only used when SLIC3R_VULKAN=ON (off here), so they're intentionally skipped.
+      - name: Init required submodules
+        shell: bash
+        run: git submodule update --init deps/minhook deps_src/mimalloc bambu_network_oss
 
       - uses: lukka/get-cmake@latest
         with:
