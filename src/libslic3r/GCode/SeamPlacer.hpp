@@ -10,7 +10,9 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #include "libslic3r/Point.hpp"
 #include "libslic3r/libslic3r.h"
@@ -127,6 +129,30 @@ struct PrintObjectSeamData
   {
     layers.clear();
   }
+};
+
+// Computes the part of the seam data that depends only on the model, the painted enforcers and blockers and
+// the occlusion of the surface, on a background thread while the print is being sliced. Each object is
+// computed from a copy of its model data. SeamPlacer::init() takes the results.
+class SeamPrecompute {
+public:
+  SeamPrecompute();
+  ~SeamPrecompute();
+  // Starts computing every object of the print, cancelling the computation started before.
+  void start(const Print &print);
+  // Stops the computation and waits for it.
+  void cancel();
+  // The result for the object, waiting for it if needed. nullptr if the computation was not started for the
+  // model data the object has now, or if it failed. While waiting, throw_if_canceled is polled; when it throws, the
+  // computation of the remaining objects is stopped and the exception is passed on.
+  std::shared_ptr<SeamPlacerImpl::GlobalModelInfo> take(const PrintObject &po, const std::function<void(void)> &throw_if_canceled = {});
+
+private:
+  struct Task;
+  std::mutex                         m_mutex;
+  std::vector<std::unique_ptr<Task>> m_tasks;
+  std::atomic<bool>                  m_canceled { false };
+  std::thread                        m_worker;
 };
 
 class SeamPlacer {

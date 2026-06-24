@@ -62,6 +62,7 @@ class Layer;
 class ModelObject;
 class Print;
 class PrintObject;
+class SeamPrecompute;
 class SupportLayer;
 // BBS
 class TreeSupportData;
@@ -1066,8 +1067,8 @@ public:
     // layer registers a dispatcher; libslic3r stays free of any plugin/Python dependency.
     static void set_slicing_pipeline_hook_fn(SlicingPipelineHookFn fn) { s_slicing_pipeline_hook_fn = std::move(fn); }
 
-    Print() = default;
-	virtual ~Print() { this->clear(); }
+    Print();
+	~Print() override;
 
 	PrinterTechnology	technology() const noexcept override { return ptFFF; }
 
@@ -1169,6 +1170,9 @@ public:
         // Brims stay separate unless Combine brims merges colliding brims inside this group.
         std::vector<Brim>         brims;
     };
+
+    // The model-only part of the seam data, computed while slicing, or nullptr.
+    SeamPrecompute*     seam_precompute() const { return m_seam_precompute.get(); }
 
     const ExtrusionEntityCollection& skirt() const { return m_skirt; }
     const std::vector<SkirtBrimGroup>& skirt_brim_groups() const { return m_skirt_brim_groups; }
@@ -1495,6 +1499,7 @@ private:
 
     static SlicingPipelineHookFn s_slicing_pipeline_hook_fn;
     bool m_pipeline_plugin_active { false };
+    std::unique_ptr<SeamPrecompute> m_seam_precompute;
     void run_pipeline_hook(SlicingPipelineStepPlugin step, const PrintObject* object) {
         if (m_pipeline_plugin_active && s_slicing_pipeline_hook_fn)
             s_slicing_pipeline_hook_fn(*this, object, step);

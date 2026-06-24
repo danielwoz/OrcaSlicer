@@ -27,7 +27,9 @@
 #include <igl/Hit.h>
 #include <optional>
 #include <cassert>
+#include <chrono>
 #include <functional>
+#include <future>
 #include <numeric>
 #include <memory>
 #include <random>
@@ -35,6 +37,7 @@
 #include <limits>
 #include <queue>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 #include <utility>
@@ -982,31 +985,70 @@ void process_perimeter_polygon(const Polygon &orig_polygon, float z_coord, const
 
 }
 
+// The model data the mesh-only part of the seam data is computed from: the model parts and negative volumes
+// of an object, in model order, and the transformation the object is sliced with. The data is copied, so
+// the computation can run while Print::apply() changes the model.
+struct SeamModelVolume {
+  bool                                    negative;
+  Transform3d                             matrix;
+  std::shared_ptr<const TriangleMesh>     mesh;
+  ObjectBase::Timestamp                   seam_timestamp;
+  bool                                    seam_painted;
+  TriangleSelector::TriangleSplittingData seam_paint;
+};
+
+struct SeamModel {
+  SeamPosition                 seam_position;
+  Transform3d                  trafo;
+  std::vector<SeamModelVolume> volumes;
+
+  explicit SeamModel(const PrintObject &po) : seam_position(po.config().seam_position.value), trafo(po.trafo_sliced()) {
+    for (const ModelVolume *mv : po.model_object()->volumes)
+      if (mv->is_model_part() || mv->is_negative_volume())
+        volumes.push_back({ mv->is_negative_volume(), mv->get_matrix(), mv->mesh_ptr(), mv->seam_facets.timestamp(), mv->is_seam_painted(),
+                            mv->is_seam_painted() ? mv->seam_facets.get_data() : TriangleSelector::TriangleSplittingData() });
+  }
+
+  // Whether the object still has this model data.
+  bool matches(const PrintObject &po) const {
+    if (po.config().seam_position.value != seam_position || po.trafo_sliced().matrix() != trafo.matrix())
+      return false;
+    size_t idx = 0;
+    for (const ModelVolume *mv : po.model_object()->volumes)
+      if (mv->is_model_part() || mv->is_negative_volume()) {
+        if (idx == volumes.size())
+          return false;
+        const SeamModelVolume &v = volumes[idx ++];
+        if (v.negative != mv->is_negative_volume() || v.matrix.matrix() != mv->get_matrix().matrix() || v.mesh != mv->mesh_ptr() ||
+            v.seam_timestamp != mv->seam_facets.timestamp())
+          return false;
+      }
+    return idx == volumes.size();
+  }
+};
+
 // Computes all global model info - transforms object, performs raycasting
-void compute_global_occlusion(GlobalModelInfo &result, const PrintObject *po,
+void compute_global_occlusion(GlobalModelInfo &result, const SeamModel &model,
                               std::function<void(void)> throw_if_canceled,
                               SeamPosition seam_position = spAligned) {
   BOOST_LOG_TRIVIAL(debug)
       << "SeamPlacer: gather occlusion meshes: start";
-  auto obj_transform = po->trafo_sliced();
+  auto obj_transform = model.trafo;
   indexed_triangle_set triangle_set;
   indexed_triangle_set negative_volumes_set;
   //add all parts
-  for (const ModelVolume *model_volume : po->model_object()->volumes) {
-    if (model_volume->type() == ModelVolumeType::MODEL_PART
-        || model_volume->type() == ModelVolumeType::NEGATIVE_VOLUME) {
-      auto model_transformation = model_volume->get_matrix();
-      indexed_triangle_set model_its = model_volume->mesh().its;
+  for (const SeamModelVolume &model_volume : model.volumes) {
+      auto model_transformation = model_volume.matrix;
+      indexed_triangle_set model_its = model_volume.mesh->its;
       // ORCA fix (not related to Precise Seam, discovered during its development):
       // Mirror transforms have negative determinant which flips triangle winding.
       // fix_left_handed=true swaps indices to keep normals pointing outward.
       its_transform(model_its, model_transformation, true);
-      if (model_volume->type() == ModelVolumeType::MODEL_PART) {
+      if (! model_volume.negative) {
         its_merge(triangle_set, model_its);
       } else {
         its_merge(negative_volumes_set, model_its);
       }
-    }
   }
   throw_if_canceled();
 
@@ -1096,25 +1138,24 @@ void append_painted_contour(PaintedContour &result, const indexed_triangle_set &
   }
 }
 
-void gather_enforcers_blockers(GlobalModelInfo &result, const PrintObject *po) {
+void gather_enforcers_blockers(GlobalModelInfo &result, const SeamModel &model) {
   BOOST_LOG_TRIVIAL(debug)
       << "SeamPlacer: build AABB trees for raycasting enforcers/blockers: start";
 
-  auto obj_transform = po->trafo_sliced();
+  auto obj_transform = model.trafo;
 
   indexed_triangle_set painted_non_green; // Used only if the object has green paint.
-  for (const ModelVolume *mv : po->model_object()->volumes) {
-    // Collect painting only from model parts (what the gizmo edits) and negative volumes (the only way
-    // to paint a hole's wall); painting left on modifiers and helpers after a type change is ignored.
-    // TODO: painting on negative volumes still affects the seam, but the gizmo neither shows nor edits it;
-    // making it editable also needs model_custom_seam_data_changed() to track it.
-    if (!mv->is_model_part() && !mv->is_negative_volume())
-      continue;
-    const auto model_transformation = obj_transform * mv->get_matrix();
-    if (mv->is_seam_painted()) {
+  // Collect painting only from model parts (what the gizmo edits) and negative volumes (the only way
+  // to paint a hole's wall), which are all SeamModel holds; painting left on modifiers and helpers after
+  // a type change is ignored.
+  // TODO: painting on negative volumes still affects the seam, but the gizmo neither shows nor edits it;
+  // making it editable also needs model_custom_seam_data_changed() to track it.
+  for (const SeamModelVolume &mv : model.volumes) {
+    const auto model_transformation = obj_transform * mv.matrix;
+    if (mv.seam_painted) {
       // One selector serves every paint state; each FacetsAnnotation query would rebuild it from the mesh.
-      TriangleSelector selector(mv->mesh());
-      selector.deserialize(mv->seam_facets.get_data(), false);
+      TriangleSelector selector(*mv.mesh);
+      selector.deserialize(mv.seam_paint, false);
       indexed_triangle_set enforcers = selector.get_facets(EnforcerBlockerType::ENFORCER);
       // ORCA fix (not related to Precise Seam): fix winding for mirrored transforms
       its_transform(enforcers, model_transformation, true);
@@ -1141,11 +1182,11 @@ void gather_enforcers_blockers(GlobalModelInfo &result, const PrintObject *po) {
   // Unpainted objects need no extra surface copy or tree; only green paint requires a coverage proof.
   if (!result.enforcers.empty()) {
     result.non_enforcers = std::move(painted_non_green);
-    for (const ModelVolume *mv : po->model_object()->volumes) {
-      if ((!mv->is_model_part() && !mv->is_negative_volume()) || mv->is_seam_painted())
+    for (const SeamModelVolume &mv : model.volumes) {
+      if (mv.seam_painted)
         continue;
-      indexed_triangle_set non_green = mv->mesh().its;
-      its_transform(non_green, obj_transform * mv->get_matrix(), true);
+      indexed_triangle_set non_green = mv.mesh->its;
+      its_transform(non_green, obj_transform * mv.matrix, true);
       its_merge(result.non_enforcers, non_green);
     }
     its_merge(result.non_enforcers, result.blockers); // Red paint must also prevent full-green normalization.
@@ -1162,6 +1203,17 @@ void gather_enforcers_blockers(GlobalModelInfo &result, const PrintObject *po) {
 
   BOOST_LOG_TRIVIAL(debug)
       << "SeamPlacer: build AABB trees for raycasting enforcers/blockers: end";
+}
+
+// The part of GlobalModelInfo that depends only on the model: enforcers / blockers and the occlusion.
+std::shared_ptr<GlobalModelInfo> build_global_model_info(const SeamModel &model, const std::function<void(void)> &throw_if_canceled) {
+  // Shared, not moved: mesh_samples_coordinate_functor points into the structure.
+  auto result = std::make_shared<GlobalModelInfo>();
+  gather_enforcers_blockers(*result, model);
+  throw_if_canceled();
+  if (model.seam_position == spAligned || model.seam_position == spNearest || model.seam_position == spAlignedBack)
+    compute_global_occlusion(*result, model, throw_if_canceled, model.seam_position);
+  return result;
 }
 
 struct SeamComparator {
@@ -2112,6 +2164,94 @@ void SeamPlacer::align_seam_points(const PrintObject *po, const SeamPlacerImpl::
 
 }
 
+struct SeamPrecompute::Task {
+  explicit Task(const PrintObject &po) : object(&po), model(po) {}
+
+  const PrintObject                                              *object;
+  SeamPlacerImpl::SeamModel                                       model;
+  std::promise<std::shared_ptr<SeamPlacerImpl::GlobalModelInfo>> promise;
+  std::future<std::shared_ptr<SeamPlacerImpl::GlobalModelInfo>>  result { promise.get_future() };
+};
+
+SeamPrecompute::SeamPrecompute() = default;
+
+SeamPrecompute::~SeamPrecompute() { this->cancel(); }
+
+void SeamPrecompute::start(const Print &print) {
+  using namespace SeamPlacerImpl;
+  this->cancel();
+  // The model data is copied here, on the slicing thread, which Print::apply() stops before changing the model.
+  std::vector<std::unique_ptr<Task>> tasks;
+  std::vector<Task*>                 todo;
+  for (const PrintObject *po : print.objects()) {
+    tasks.emplace_back(std::make_unique<Task>(*po));
+    todo.emplace_back(tasks.back().get());
+  }
+  std::lock_guard<std::mutex> lock(m_mutex);
+  m_canceled = false;
+  try {
+    // One thread for all objects, in the order SeamPlacer::init() takes them; each object uses TBB itself.
+    m_worker = std::thread([this, todo = std::move(todo)]() {
+      const std::function<void(void)> throw_if_canceled = [this]() {
+        if (m_canceled)
+          throw CanceledException();
+      };
+      for (Task *task : todo) {
+        std::shared_ptr<GlobalModelInfo> info;
+        if (! m_canceled) {
+          try {
+            info = build_global_model_info(task->model, throw_if_canceled);
+          } catch (...) {
+            // SeamPlacer::init() computes this object itself, and reports any error.
+          }
+        }
+        for (SeamModelVolume &volume : task->model.volumes)
+          volume.seam_paint = {};
+        task->promise.set_value(std::move(info));
+      }
+    });
+  } catch (const std::system_error &) {
+    // Without the thread SeamPlacer::init() computes everything itself.
+    return;
+  }
+  m_tasks = std::move(tasks);
+}
+
+void SeamPrecompute::cancel() {
+  std::thread                        worker;
+  std::vector<std::unique_ptr<Task>> tasks;
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_canceled = true;
+    worker     = std::move(m_worker);
+    tasks      = std::move(m_tasks);
+  }
+  if (worker.joinable())
+    worker.join();
+}
+
+std::shared_ptr<SeamPlacerImpl::GlobalModelInfo> SeamPrecompute::take(const PrintObject &po, const std::function<void(void)> &throw_if_canceled) {
+  std::future<std::shared_ptr<SeamPlacerImpl::GlobalModelInfo>> result;
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = std::find_if(m_tasks.begin(), m_tasks.end(), [&po](const std::unique_ptr<Task> &task) { return task->object == &po; });
+    if (it == m_tasks.end() || ! (*it)->result.valid() || ! (*it)->model.matches(po))
+      return nullptr;
+    result = std::move((*it)->result);
+  }
+  if (throw_if_canceled)
+    while (result.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) {
+      try {
+        throw_if_canceled();
+      } catch (...) {
+        // Stops the worker after its current object; the next start() or cancel() joins it.
+        m_canceled = true;
+        throw;
+      }
+    }
+  return result.get();
+}
+
 void SeamPlacer::init(const Print &print, std::function<void(void)> throw_if_canceled_func) {
   using namespace SeamPlacerImpl;
   m_seam_per_object.clear();
@@ -2120,14 +2260,18 @@ void SeamPlacer::init(const Print &print, std::function<void(void)> throw_if_can
   // Warning flags for Precise Seam processing — shared across all objects
   PreciseSeam::PreciseSeamWarnings precise_seam_warnings;
 
+  SeamPrecompute *precompute = print.seam_precompute();
   for (const PrintObject *po : print.objects()) {
     throw_if_canceled_func();
     SeamPosition configured_seam_preference = po->config().seam_position.value;
     SeamComparator comparator { configured_seam_preference };
 
     {
-      GlobalModelInfo global_model_info { };
-      gather_enforcers_blockers(global_model_info, po);
+      // Enforcers, blockers and occlusion, computed while slicing or else here.
+      std::shared_ptr<GlobalModelInfo> global_model_info_ptr = precompute ? precompute->take(*po, throw_if_canceled_func) : nullptr;
+      if (! global_model_info_ptr)
+        global_model_info_ptr = build_global_model_info(SeamModel(*po), throw_if_canceled_func);
+      GlobalModelInfo &global_model_info = *global_model_info_ptr;
       PreciseSeam::init_precise_seam_data(
           global_model_info.precise_seam_strong_volumes,
           global_model_info.precise_seam_weak_volumes,
@@ -2146,10 +2290,6 @@ void SeamPlacer::init(const Print &print, std::function<void(void)> throw_if_can
       for (const ModelVolume* vol : global_model_info.precise_seam_weak_volumes)
           precise_seam_warnings.modifier_usage.try_emplace(vol);
 
-      throw_if_canceled_func();
-      if (configured_seam_preference == spAligned || configured_seam_preference == spNearest || configured_seam_preference == spAlignedBack) {
-        compute_global_occlusion(global_model_info, po, throw_if_canceled_func, configured_seam_preference);
-      }
       throw_if_canceled_func();
 
       BOOST_LOG_TRIVIAL(debug)

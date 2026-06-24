@@ -235,11 +235,17 @@ struct FilamentType {
     std::string temp_type;
 };
 
+Print::Print() = default;
+
+Print::~Print() { this->clear(); }
+
 void Print::clear()
 {
 	std::scoped_lock<std::mutex> lock(this->state_mutex());
     // The following call should stop background processing if it is running.
     this->invalidate_all_steps();
+    if (m_seam_precompute)
+        m_seam_precompute->cancel();
 	for (PrintObject *object : m_objects)
 		delete object;
 	m_objects.clear();
@@ -3338,6 +3344,13 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
         ctx.code = LifecycleEvtCode::Ok;
         ctx.cancellation_check = [this]() { return canceled(); };
         fire_lifecycle_event(LifecycleEvent::SliceStarted, ctx);
+    }
+
+    // The seam enforcers, blockers and occlusion depend on the model only: compute them while slicing.
+    if (! this->is_step_done(psGCodeExport)) {
+        if (! m_seam_precompute)
+            m_seam_precompute = std::make_unique<SeamPrecompute>();
+        m_seam_precompute->start(*this);
     }
 
     for (PrintObject *obj : m_objects)
