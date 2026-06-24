@@ -213,4 +213,33 @@ ExPolygons offset2_ex_2(const ExPolygons& expolygons, double delta1, double delt
     return results;
 }
 
+ExPolygons clipper2_clip_ex(Clipper2Lib::ClipType clipType, Clipper2Lib::FillRule fillRule,
+                            const Clipper2Lib::Paths64 &subject, const Clipper2Lib::Paths64 &clip)
+{
+    Clipper2Lib::Clipper64 c;
+    c.AddSubject(subject);
+    if (!clip.empty())
+        c.AddClip(clip);
+    Clipper2Lib::PolyTree64 solution;
+    c.Execute(clipType, fillRule, solution);
+    return PolyTreeToExPolygons(std::move(solution));
+}
+
+Polygons clipper2_clip_polygons(Clipper2Lib::ClipType clipType, Clipper2Lib::FillRule fillRule,
+                                const Clipper2Lib::Paths64 &subject, const Clipper2Lib::Paths64 &clip)
+{
+    Clipper2Lib::Clipper64 c;
+    c.AddSubject(subject);
+    if (!clip.empty())
+        c.AddClip(clip);
+    Clipper2Lib::Paths64 solution;
+    c.Execute(clipType, fillRule, solution);
+
+    Polygons out;
+    out.reserve(solution.size());
+    for (const Clipper2Lib::Path64 &path : solution)
+        out.emplace_back(Path64ToPoints(path));
+    return out;
+}
+
 }

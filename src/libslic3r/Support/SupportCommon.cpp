@@ -8,6 +8,7 @@
 #include "../Geometry.hpp"
 #include "../Point.hpp"
 #include "clipper/clipper_z.hpp"
+#include "../Clipper2ZUtils.hpp"
 
 #include <cmath>
 #include <boost/container/static_vector.hpp>
@@ -474,6 +475,27 @@ static Polylines draw_perimeters(const ExPolygon &expoly, double clip_length)
     return polylines;
 }
 
+// ---- Clipper2-Z support-anchor hole subtraction ----
+// Subtract the offsetted holes from the offsetted outer contour while threading the source
+// contour index through Z. The ZFill callback simply marks every new intersection vertex with
+// Z = -1, using Clipper2Lib_Z::Clipper64. Boundary types stay ClipperLib_Z (a plain int64+z
+// data container) so the caller is unaffected; the offsetter above still uses ClipperLib.
+static ClipperLib_Z::Paths support_anchor_difference_clipper2(const ClipperLib_Z::Paths &contours, const ClipperLib_Z::Paths &holes)
+{
+    using namespace Clipper2ZUtils;
+    Clipper2Lib_Z::Clipper64 clipper;
+    clipper.SetZCallback([](const ZPoint64 & /*e1bot*/, const ZPoint64 & /*e1top*/, const ZPoint64 & /*e2bot*/,
+                            const ZPoint64 & /*e2top*/, ZPoint64 &pt) {
+        // Just mark the intersection.
+        pt.z = -1;
+    });
+    clipper.AddSubject(zpaths_c1_to_c2(contours));
+    clipper.AddClip(zpaths_c1_to_c2(holes));
+    ZPaths64 output;
+    clipper.Execute(Clipper2Lib_Z::ClipType::Difference, Clipper2Lib_Z::FillRule::NonZero, output);
+    return zpaths_c2_to_c1(output);
+}
+
 void tree_supports_generate_paths(
     ExtrusionEntitiesPtr    &dst,
     const Polygons          &polygons,
@@ -546,16 +568,7 @@ void tree_supports_generate_paths(
             } else {
                 // Negative offset. There is a chance, that the offsetted hole intersects the outer contour.
                 // Subtract the offsetted holes from the offsetted contours.
-                ClipperLib_Z::Clipper clipper;
-                clipper.ZFillFunction([](const ClipperLib_Z::IntPoint &e1bot, const ClipperLib_Z::IntPoint &e1top, const ClipperLib_Z::IntPoint &e2bot, const ClipperLib_Z::IntPoint &e2top, ClipperLib_Z::IntPoint &pt) {
-                        //pt.z() = std::max(std::max(e1bot.z(), e1top.z()), std::max(e2bot.z(), e2top.z()));
-                        // Just mark the intersection.
-                        pt.z() = -1;
-                    });
-                clipper.AddPaths(contours, ClipperLib_Z::ptSubject, true);
-                clipper.AddPaths(holes,    ClipperLib_Z::ptClip,    true);
-                ClipperLib_Z::Paths output;
-                clipper.Execute(ClipperLib_Z::ctDifference, output, ClipperLib_Z::pftNonZero, ClipperLib_Z::pftNonZero);
+                ClipperLib_Z::Paths output = support_anchor_difference_clipper2(contours, holes);
                 if (! output.empty()) {
                     append(out, std::move(output));
                 } else {

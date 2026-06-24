@@ -1299,11 +1299,15 @@ static inline std::vector<std::vector<ExPolygons>> segmentation_top_and_bottom_l
     }
 #endif // MM_SEGMENTATION_DEBUG_TOP_BOTTOM
 
-    // When the upper surface of an object is occluded, it should no longer be considered the upper surface
-    {
-        for (size_t extruder_idx = 0; extruder_idx < num_facets_states; ++extruder_idx) {
-            for (size_t layer_idx = 0; layer_idx < layers.size(); ++layer_idx) {
-                if (!top_raw[extruder_idx].empty() && !top_raw[extruder_idx][layer_idx].empty() && layer_idx + 1 < layers.size()) {
+    // When the upper surface of an object is occluded, it should no longer be considered the upper surface.
+    // Parallel over layers: each (extruder, layer) cell only writes top_raw[e][layer]/bottom_raw[e][layer]
+    // and reads the read-only input_expolygons[layer +/- 1]. Distinct layer indices touch disjoint cells, so
+    // the result is identical to the previous serial double loop (this phase did not scale with cores before).
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, num_layers), [&num_facets_states, &top_raw, &bottom_raw, &input_expolygons, &num_layers, &throw_on_cancel_callback](const tbb::blocked_range<size_t> &range) {
+        for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++layer_idx) {
+            throw_on_cancel_callback();
+            for (size_t extruder_idx = 0; extruder_idx < num_facets_states; ++extruder_idx) {
+                if (!top_raw[extruder_idx].empty() && !top_raw[extruder_idx][layer_idx].empty() && layer_idx + 1 < num_layers) {
                     top_raw[extruder_idx][layer_idx] = diff(top_raw[extruder_idx][layer_idx], input_expolygons[layer_idx + 1]);
                 }
                 if (!bottom_raw[extruder_idx].empty() && !bottom_raw[extruder_idx][layer_idx].empty() && layer_idx > 0) {
@@ -1311,7 +1315,7 @@ static inline std::vector<std::vector<ExPolygons>> segmentation_top_and_bottom_l
                 }
             }
         }
-    }
+    });
 
     std::vector<std::vector<ExPolygons>> triangles_by_color_bottom(num_facets_states);
     std::vector<std::vector<ExPolygons>> triangles_by_color_top(num_facets_states);

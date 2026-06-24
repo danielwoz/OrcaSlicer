@@ -2933,6 +2933,12 @@ bool GUI_App::on_init_inner()
 
 
 
+#ifdef ORCA_OSS_NETWORK_PLUGIN
+    // Provision the bundled open-source network plugin and point the config at it
+    // (legacy ABI) BEFORE the version/mode is read below, so we run in legacy mode.
+    ensure_oss_network_plugin();
+#endif
+
     // Orca: select network plugin version based on configured version string
     std::string configured_version = app_config->get_network_plugin_version();
     NetworkAgent::use_legacy_network = (configured_version == BAMBU_NETWORK_AGENT_VERSION_LEGACY);
@@ -3249,6 +3255,47 @@ void GUI_App::copy_network_if_available()
         fs::remove(changelog_file);
     app_config->set("update_network_plugin", "false");
 }
+
+#ifdef ORCA_OSS_NETWORK_PLUGIN
+// Provision the bundled open-source network plugin: copy it from the app's
+// resources into the user's plugins dir (if missing/stale) and point app_config
+// at it so on_init_network() loads it in legacy mode — no proprietary download.
+void GUI_App::ensure_oss_network_plugin()
+{
+    namespace fs = boost::filesystem;
+    const std::string ver = BAMBU_NETWORK_AGENT_VERSION_LEGACY;
+    const std::string fname = "libbambu_networking_" + ver + ".so";
+
+    fs::path src = fs::path(resources_dir()) / "plugins" / fname;
+    if (!fs::exists(src)) {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": bundled OSS network plugin not found at " << src
+                                   << " — leaving network config untouched";
+        return;
+    }
+
+    boost::system::error_code ec;
+    fs::path dst_dir = fs::path(data_dir()) / "plugins";
+    fs::create_directories(dst_dir, ec);
+    fs::path dst = dst_dir / fname;
+
+    bool need_copy = !fs::exists(dst) ||
+                     fs::file_size(src, ec) != fs::file_size(dst, ec) ||
+                     fs::last_write_time(src, ec) != fs::last_write_time(dst, ec);
+    if (need_copy) {
+        fs::copy_file(src, dst, fs::copy_option::overwrite_if_exists, ec);
+        if (ec) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to copy OSS plugin to " << dst << ": " << ec.message();
+            return;
+        }
+        fs::last_write_time(dst, fs::last_write_time(src, ec), ec);
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": provisioned OSS network plugin " << fname << " into " << dst_dir;
+    }
+
+    app_config->set_bool("installed_networking", true);
+    app_config->set_network_plugin_version(ver);
+    app_config->save();
+}
+#endif // ORCA_OSS_NETWORK_PLUGIN
 
 bool GUI_App::on_init_network(bool try_backup)
 {

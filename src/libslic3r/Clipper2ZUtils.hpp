@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include <clipper2/clipper2_z.hpp>
+#include <clipper/clipper_z.hpp>
 #include <libslic3r/Point.hpp>
 namespace Slic3r { namespace Clipper2ZUtils {
 
@@ -12,6 +13,45 @@ using ZPoint64  = Clipper2Lib_Z::Point64;
 using ZPoints64 = Clipper2Lib_Z::Path64;
 using ZPath64  = Clipper2Lib_Z::Path64;
 using ZPaths64 = Clipper2Lib_Z::Paths64;
+
+// Boundary conversions between the ClipperLib_Z int64+z *data container* (kept as the
+// boundary type so the Z-callback call sites are unaffected) and Clipper2-Z (Clipper2Lib_Z)
+// path types, which drive the actual sweepline. These are straight int64 + z copies.
+inline ZPath64 zpath_c1_to_c2(const ClipperLib_Z::Path &in)
+{
+    ZPath64 out;
+    out.reserve(in.size());
+    for (const ClipperLib_Z::IntPoint &p : in)
+        out.emplace_back(p.x(), p.y(), p.z());
+    return out;
+}
+
+inline ZPaths64 zpaths_c1_to_c2(const ClipperLib_Z::Paths &in)
+{
+    ZPaths64 out;
+    out.reserve(in.size());
+    for (const ClipperLib_Z::Path &p : in)
+        out.emplace_back(zpath_c1_to_c2(p));
+    return out;
+}
+
+inline ClipperLib_Z::Path zpath_c2_to_c1(const ZPath64 &in)
+{
+    ClipperLib_Z::Path out;
+    out.reserve(in.size());
+    for (const ZPoint64 &p : in)
+        out.emplace_back(ClipperLib_Z::cInt(p.x), ClipperLib_Z::cInt(p.y), ClipperLib_Z::cInt(p.z));
+    return out;
+}
+
+inline ClipperLib_Z::Paths zpaths_c2_to_c1(const ZPaths64 &in)
+{
+    ClipperLib_Z::Paths out;
+    out.reserve(in.size());
+    for (const ZPath64 &p : in)
+        out.emplace_back(zpath_c2_to_c1(p));
+    return out;
+}
 
 inline bool zpoint64_lower(const ZPoint64 &l, const ZPoint64 &r) {
     return l.x < r.x || (l.x == r.x && (l.y < r.y || (l.y == r.y && l.z < r.z)));

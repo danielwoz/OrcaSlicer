@@ -125,7 +125,21 @@ option(SLIC3R_STATIC            "Compile OrcaSlicer with static libraries (Boost
 option(SLIC3R_GUI               "Compile OrcaSlicer with GUI components (OpenGL, wxWidgets)" 1)
 option(SLIC3R_FHS               "Assume OrcaSlicer is to be installed in a FHS directory structure" 0)
 option(SLIC3R_PROFILE           "Compile OrcaSlicer with an invasive Shiny profiler" 0)
-option(SLIC3R_PCH               "Use precompiled headers" 1)
+# Precompiled headers don't cache/distribute cleanly, and sccache's distributed
+# mode corrupts the PCH (observed: "unknown type name 'CPCH'", invalid UTF-8 — the
+# PCH input gets garbled in transport). So default PCH OFF whenever a compiler-cache
+# launcher (sccache/ccache) is configured — via -DCMAKE_*_COMPILER_LAUNCHER or the
+# env vars — and ON for plain cacheless local builds. Override with -DSLIC3R_PCH=ON/OFF.
+# (OrcaSlicer's own build_linux.sh -p documents the same: PCH off boosts cache hits.)
+set(_slic3r_pch_default 1)
+if (CMAKE_CXX_COMPILER_LAUNCHER MATCHES "sccache|ccache"
+        OR CMAKE_C_COMPILER_LAUNCHER MATCHES "sccache|ccache"
+        OR DEFINED ENV{CMAKE_CXX_COMPILER_LAUNCHER}
+        OR DEFINED ENV{CMAKE_C_COMPILER_LAUNCHER})
+    set(_slic3r_pch_default 0)
+    message(STATUS "SLIC3R_PCH: defaulting OFF (compiler cache detected; PCH corrupts under sccache-dist). Override with -DSLIC3R_PCH=ON.")
+endif()
+option(SLIC3R_PCH               "Use precompiled headers" ${_slic3r_pch_default})
 option(SLIC3R_MSVC_COMPILE_PARALLEL "Compile on Visual Studio in parallel" 1)
 option(SLIC3R_MSVC_PDB          "Generate PDB files on MSVC in Release mode" 1)
 option(SLIC3R_ASAN              "Enable ASan on Clang and GCC" 0)
@@ -170,6 +184,14 @@ endif ()
 option(SLIC3R_BUILD_SANDBOXES   "Build development sandboxes" OFF)
 option(BUILD_TESTS       "Build unit tests" OFF)
 option(ORCA_TOOLS       "Build Orca tools" OFF)
+option(ORCA_MIMALLOC "Use mimalloc as the global allocator (static, overrides new/delete) for faster allocation-heavy slicing" ON)
+option(SLIC3R_LTO "Enable ThinLTO on the first-party slicer targets (clang, Release)" OFF)
+option(SLIC3R_VULKAN "Optional vendored static Vulkan GPU SLA rasterizer" OFF)
+option(ORCA_OSS_NETWORK_PLUGIN "Build and bundle the open-source bambu-network-oss plugin and load it instead of downloading the proprietary network plugin" ON)
+if (ORCA_OSS_NETWORK_PLUGIN)
+    # Used by GUI_App (provisioning + load) and PresetUpdater (download bypass).
+    add_compile_definitions(ORCA_OSS_NETWORK_PLUGIN)
+endif()
 
 if (FLATPAK)
     set(SLIC3R_FHS ON CACHE BOOL "" FORCE)
@@ -255,6 +277,21 @@ endif ()
 if (NOT MSVC)
     # ARMs (Raspberry PI) use an unsigned char by default. Let's make it consistent for OrcaSlicer on all platforms.
     add_compile_options(-fsigned-char)
+    # Target a modern x86-64 ISA level (AVX2/FMA/BMI2) instead of the default
+    # baseline SSE2. x86-64-v3 is supported by essentially every CPU from ~2015+.
+    # Use an explicit level (NOT -march=native) so distributed/sccache builds on
+    # heterogeneous build nodes stay correct. Override with -DORCA_MARCH=<arch>
+    # (e.g. native, x86-64-v4, znver3) or OFF to use the compiler default.
+    # Default OFF: measured -march=x86-64-v3 to be +3% SLOWER on the slicing
+    # benchmark (branchy hot paths don't vectorize; Zen2 double-pumps AVX2) and it
+    # changes FP output. Kept as an opt-in knob only.
+    set(ORCA_MARCH "OFF" CACHE STRING "Target -march arch level (e.g. x86-64-v3); OFF (default, measured faster)")
+    if (NOT ORCA_MARCH STREQUAL "OFF" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+        # -ffp-contract=off keeps FP bit-identical to the non-FMA baseline (no
+        # a*b+c -> FMA fusion), so enabling AVX2 does NOT change slicing output.
+        add_compile_options(-march=${ORCA_MARCH} -ffp-contract=off)
+        message(STATUS "ORCA_MARCH: building for -march=${ORCA_MARCH} (ffp-contract=off, output-preserving)")
+    endif ()
 endif ()
 
 if ("${DEP_BUILD_DIR}" STREQUAL "")
@@ -316,6 +353,11 @@ endif ()
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/modules/)
 message(STATUS "PROJECT_SOURCE_DIR: ${PROJECT_SOURCE_DIR}")
 message(STATUS "CMAKE_MODULE_PATH: ${CMAKE_MODULE_PATH}")
+
+# Build + bundle the open-source network plugin (after CMAKE_PREFIX_PATH is set).
+if (ORCA_OSS_NETWORK_PLUGIN)
+    include(OrcaOSSNetworkPlugin)
+endif()
 
 enable_testing ()
 
@@ -886,6 +928,63 @@ endfunction()
 # libslic3r, OrcaSlicer GUI and the OrcaSlicer executable.
 add_subdirectory(deps_src)
 add_subdirectory(src)
+
+if (SLIC3R_LTO)
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # LTO on the first-party slicing targets only. The heavy/LTO-fragile
+        # deps (CGAL, OCCT, TBB, OpenVDB) are opaque prebuilt static archives, so
+        # cross-module optimization stays within our own code — reasonably safe.
+        # SLIC3R_LTO_MODE=thin (fast parallel links, default) or full (monolithic
+        # whole-module LTO — slower/heavier link, potentially better optimization).
+        set(SLIC3R_LTO_MODE "thin" CACHE STRING "LTO mode for SLIC3R_LTO: thin or full")
+        if (SLIC3R_LTO_MODE STREQUAL "full")
+            set(_lto_flag "-flto")
+        else()
+            set(_lto_flag "-flto=thin")
+        endif()
+        message(STATUS "SLIC3R_LTO: enabling ${SLIC3R_LTO_MODE} LTO (clang) on first-party targets")
+        foreach(_lto_target libslic3r libslic3r_cgal libslic3r_gui OrcaSlicer)
+            if (TARGET ${_lto_target})
+                target_compile_options(${_lto_target} PRIVATE $<$<CONFIG:Release>:${_lto_flag}>)
+                target_link_options(${_lto_target} PRIVATE $<$<CONFIG:Release>:${_lto_flag} -fuse-ld=lld>)
+            endif()
+        endforeach()
+    else()
+        message(WARNING "SLIC3R_LTO requested but compiler is not Clang; skipping.")
+    endif()
+endif()
+
+# Profile-Guided Optimization on the slicing core (libslic3r + cgal). Three-stage:
+#   1. configure -DORCA_PGO=generate, build, run bench/slice_bench.sh (training)
+#   2. llvm-profdata merge -o <data> build/pgo-raw/*.profraw
+#   3. configure -DORCA_PGO=use -DORCA_PGO_DATA=<data> (+ SLIC3R_LTO=ON), rebuild
+set(ORCA_PGO "" CACHE STRING "PGO mode: <empty>|generate|use")
+set(ORCA_PGO_DIR  "${CMAKE_BINARY_DIR}/pgo-raw" CACHE PATH "directory for raw profiles (generate)")
+set(ORCA_PGO_DATA "${CMAKE_BINARY_DIR}/orca.profdata" CACHE FILEPATH "merged profile (use)")
+if (ORCA_PGO)
+    if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(WARNING "ORCA_PGO requested but compiler is not Clang; skipping.")
+    else()
+        if (ORCA_PGO STREQUAL "generate")
+            set(_pgo_flags -fprofile-generate=${ORCA_PGO_DIR})
+        elseif (ORCA_PGO STREQUAL "use")
+            set(_pgo_flags -fprofile-use=${ORCA_PGO_DATA} -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled)
+        else()
+            message(FATAL_ERROR "ORCA_PGO must be 'generate' or 'use', got '${ORCA_PGO}'")
+        endif()
+        message(STATUS "ORCA_PGO: ${ORCA_PGO} on libslic3r/libslic3r_cgal")
+        foreach(_pgo_target libslic3r libslic3r_cgal)
+            if (TARGET ${_pgo_target})
+                target_compile_options(${_pgo_target} PRIVATE $<$<CONFIG:Release>:${_pgo_flags}>)
+                target_link_options(${_pgo_target} PRIVATE $<$<CONFIG:Release>:${_pgo_flags}>)
+            endif()
+        endforeach()
+        # The executable must link the profile runtime when generating.
+        if (ORCA_PGO STREQUAL "generate" AND TARGET OrcaSlicer)
+            target_link_options(OrcaSlicer PRIVATE $<$<CONFIG:Release>:-fprofile-generate=${ORCA_PGO_DIR}>)
+        endif()
+    endif()
+endif()
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT OrcaSlicer_app_gui)
 
 add_dependencies(gettext_make_pot hintsToPot)

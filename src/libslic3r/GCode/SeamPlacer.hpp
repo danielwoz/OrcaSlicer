@@ -143,6 +143,17 @@ public:
 
   void init(const Print &print, std::function<void(void)> throw_if_canceled_func);
 
+  // ORCA perf-campaign (gcode-tail): the seam-visibility occlusion pass
+  // (compute_global_occlusion + gather_enforcers_blockers) is the dominant serial
+  // cost of g-code export (~250-300 ms) yet it depends ONLY on the input mesh
+  // geometry, not on slicing results. precompute_global_model_info_async() kicks
+  // that work off as a background task at the start of Print::process() so it
+  // overlaps the (multi-second) slicing pipeline; SeamPlacer::init() then consumes
+  // the cached result instead of recomputing it. Output is byte-identical: the same
+  // function runs on the same inputs, only earlier and concurrently. No-op / safe
+  // fallback if the cache is missing or stale (init recomputes inline).
+  static void precompute_global_model_info_async(const Print &print);
+
   void place_seam(const Layer *layer, ExtrusionLoop &loop, const Point &last_pos, float& overhang) const;
 private:
   void gather_seam_candidates(const PrintObject *po, const SeamPlacerImpl::GlobalModelInfo &global_model_info);

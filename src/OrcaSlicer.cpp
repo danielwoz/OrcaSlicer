@@ -18,6 +18,19 @@
     #endif /* SLIC3R_GUI */
 #endif /* WIN32 */
 
+#ifdef ORCA_MIMALLOC
+// Route operator new/delete (and thus all std container / string allocation)
+// through mimalloc. Included once, in the TU that owns main(). See CMake option
+// ORCA_MIMALLOC.
+#include <mimalloc.h>
+#include <mimalloc-new-delete.h>
+// Slicing is short-lived with heavy alloc/free churn of polygon/mesh data.
+// Disable mimalloc's purge (returning freed memory to the OS) so freed pages are
+// retained and reused instead of madvise'd away and re-faulted. Measured a small
+// but consistent win and zero effect on output. Runs before main()/any slicing.
+namespace { struct OrcaMiTune { OrcaMiTune() { mi_option_set(mi_option_purge_delay, -1); } } _orca_mi_tune; }
+#endif
+
 #include <cstdio>
 #include <string>
 #include <cstring>
@@ -52,6 +65,7 @@ using namespace nlohmann;
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/GCode.hpp"
 #include "libslic3r/GCode/PostProcessor.hpp"
+#include "libslic3r/GCode/GPU/SeamRayCaster.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/Platform.hpp"
@@ -1190,6 +1204,14 @@ int CLI::run(int argc, char **argv)
     set_current_thread_name("orcaslicer_main");
     // Save the thread ID of the main thread.
     save_main_thread_id();
+
+    // Start the GPU seam-visibility ray-query backend warming up as early as
+    // possible (detached thread). This is the universal entry for both headless
+    // slicing and GUI launch, so the device/context init overlaps with model load
+    // and slicing (CLI) or the user's setup time before slicing (GUI) and is hidden
+    // by the time seam placement runs. No-op when SLIC3R_VULKAN is off or the GPU
+    // seam path is disabled (ORCA_SEAM_GPU=0).
+    Slic3r::seam_gpu::SeamRayCaster::warmup_async();
 
 #ifdef __WXGTK__
     // ------------------------------------------------------------------
@@ -6607,7 +6629,7 @@ int CLI::run(int argc, char **argv)
                         }
                     }
 
-                    ThumbnailsParams thumbnail_params;
+                    ThumbnailsParams thumbnail_params = {{}, false, true, true, true, 0};
                     GLShaderProgram* shader = opengl_mgr.get_shader("thumbnail");
                     if (!shader) {
                         BOOST_LOG_TRIVIAL(error) << boost::format("can not get shader for rendering thumbnail");

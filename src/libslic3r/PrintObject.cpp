@@ -910,6 +910,17 @@ void PrintObject::estimate_curled_extrusions()
 
             // Estimate curling of support material and add it to the malformaition lines of each layer
             float support_flow_width = support_material_flow(this, this->config().layer_height).width();
+            // NOTE (caching invariant): the posEstimateCurledExtrusions invalidation cascade
+            // (posSlice/posPerimeters + the option->step table) covers only the geometry/flow
+            // inputs that estimate_malformations() actually reads (external-perimeter geometry,
+            // get_flow_width, layer height, lower-layer lslices). The filament_type /
+            // inner_wall_acceleration / raft_layers / brim_* fields passed in this Params{} are
+            // currently consumed ONLY by the unrelated support-spots force-balance path, NOT by
+            // the curl estimate, so changing them does not affect curled_lines and need not
+            // invalidate this cached step. If a future change makes estimate_malformations()
+            // depend on any of those Params fields, this cache will go stale on a g-code-only
+            // edit of them — extend the invalidation cascade (or wire those options into the
+            // posEstimateCurledExtrusions option->step entry) at that time.
             SupportSpotsGenerator::Params params{this->print()->m_config.filament_type.values,
                                                  float(this->print()->default_object_config().inner_wall_acceleration.getFloat()),
                                                  this->config().raft_layers.getInt(), this->config().brim_type.value,
@@ -917,7 +928,20 @@ void PrintObject::estimate_curled_extrusions()
             SupportSpotsGenerator::estimate_malformations(this->layers(), params);
             m_print->throw_if_canceled();
         }
-        //this->set_done(posEstimateCurledExtrusions);
+        // ORCA perf-campaign (experiment/incremental): mark the step DONE so it is
+        // properly cached. Previously this set_done() was commented out, which made
+        // set_started() return true on every process() call, re-running the (often
+        // ~0.5s) malformation estimate on every incremental re-slice even when no
+        // geometry changed (e.g. a g-code-only setting tweak). The step's output is
+        // the per-extrusion curl height written into this->layers(); its only inputs
+        // are the layer/perimeter geometry, layer_height, flow and a few object
+        // params. It is now invalidated explicitly whenever its inputs change:
+        //  - posSlice / posPerimeters cascade to it (see PrintObject::invalidate_step),
+        //    covering perimeter regeneration and enable_overhang_speed changes;
+        //  - the option->step table (Print::invalidate_state_by_config_options) already
+        //    lists posEstimateCurledExtrusions for layer-height / arc-fitting / etc.
+        // so caching it is output-preserving versus a cold slice.
+        this->set_done(posEstimateCurledExtrusions);
     }
 }
 
@@ -1483,7 +1507,7 @@ bool PrintObject::invalidate_step(PrintObjectStep step)
 
     // propagate to dependent steps
     if (step == posPerimeters) {
-		invalidated |= this->invalidate_steps({ posPrepareInfill, posInfill, posIroning, posContouring, posSimplifyPath, posSimplifyInfill });
+		invalidated |= this->invalidate_steps({ posEstimateCurledExtrusions, posPrepareInfill, posInfill, posIroning, posContouring, posSimplifyPath, posSimplifyInfill });
         invalidated |= m_print->invalidate_steps({ psSkirtBrim });
     } else if (step == posPrepareInfill) {
         invalidated |= this->invalidate_steps({ posInfill, posIroning, posContouring, posSimplifyPath, posSimplifyInfill });
@@ -1491,7 +1515,7 @@ bool PrintObject::invalidate_step(PrintObjectStep step)
         invalidated |= this->invalidate_steps({ posIroning, posContouring, posSimplifyInfill });
         invalidated |= m_print->invalidate_steps({ psSkirtBrim });
     } else if (step == posSlice) {
-		invalidated |= this->invalidate_steps({ posPerimeters, posPrepareInfill, posInfill, posIroning, posContouring, posSupportMaterial, posSimplifyPath, posSimplifyInfill });
+		invalidated |= this->invalidate_steps({ posPerimeters, posEstimateCurledExtrusions, posPrepareInfill, posInfill, posIroning, posContouring, posSupportMaterial, posSimplifyPath, posSimplifyInfill });
         invalidated |= m_print->invalidate_steps({ psSkirtBrim });
         m_slicing_params.valid = false;
     } else if (step == posSupportMaterial) {
@@ -2219,15 +2243,20 @@ void PrintObject::discover_vertical_shells()
                         else
                             holes = intersection(holes, holes2);
                     };
+                    // OPT (experiment/vertical-shells): the original combine_shells re-ran
+                    // union_(shell) on the WHOLE growing accumulator at *every* window step,
+                    // i.e. O(window) full unions per layer over a strictly-growing polygon set
+                    // (top_shell_layers=9 / bottom=7 here). Instead just append the window
+                    // pieces and union once, after both windows are gathered, immediately
+                    // before the terminal trim. The terminal consumer is
+                    //   intersection(shell, polygonsInternal, ApplySafetyOffset::Yes)
+                    // which uses Clipper2's NonZero fill rule, so an overlapping (un-pre-unioned)
+                    // subject already represents its own union region — the single terminal
+                    // union_ here yields the identical canonical polygon set. Validated
+                    // byte-identical on the deterministic handy_models (see VERTICAL_SHELLS_RESULTS.md).
                     auto combine_shells = [&shell](const Polygons &shells2) {
-                        if (shell.empty())
-                            shell = std::move(shells2);
-                        else if (! shells2.empty()) {
+                        if (! shells2.empty())
                             polygons_append(shell, shells2);
-                            // Running the union_ using the Clipper library piece by piece is cheaper 
-                            // than running the union_ all at once.
-                            shell = union_(shell);
-                        }
                     };
                     static constexpr const bool one_more_layer_below_top_bottom_surfaces = false;
 			        if (int n_top_layers = region_config.top_shell_layers.value; n_top_layers > 0) {
@@ -2340,6 +2369,12 @@ void PrintObject::discover_vertical_shells()
                         svg.Close();
                     }
 #endif /* SLIC3R_DEBUG_SLICE_PROCESSING */
+
+                    // OPT (experiment/vertical-shells): single terminal union of the gathered
+                    // window pieces (replaces the per-window-step union_ formerly done inside
+                    // combine_shells). Idempotent: union_ of the overlapping accumulator yields
+                    // the same canonical region the per-step unions did.
+                    shell = union_(shell);
 
                     // Trim the shells region by the internal & internal void surfaces.
                     const Polygons polygonsInternal = to_polygons(layerm->fill_surfaces.filter_by_types({ stInternal, stInternalVoid, stInternalSolid }));

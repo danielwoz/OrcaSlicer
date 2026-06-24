@@ -24,6 +24,14 @@
 
 #include "libslic3r/Utils.hpp"
 
+#include "libslic3r/GCode/GPU/SeamRayCaster.hpp"
+#include <cstdlib>
+#include <cstring>
+#include <future>
+#include <map>
+#include <memory>
+#include <mutex>
+
 //#define DEBUG_FILES
 
 #ifdef DEBUG_FILES
@@ -148,6 +156,56 @@ std::vector<float> raycast_visibility(const AABBTreeIndirect::Tree<3, float> &ra
   }
 
   bool model_contains_negative_parts = negative_volumes_start_index < triangles.indices.size();
+
+  // ---- GPU ray-query fast path (VK_KHR_ray_query / RT cores) --------------
+  // Only the common non-negative-volumes branch is offloaded; the rarer
+  // all-hits/parity path stays on the CPU. Gated by SLIC3R_VULKAN, a usable
+  // ray-query device, and an env toggle. Falls back to CPU on any failure so
+  // behaviour is identical when the GPU is absent or disabled.
+#ifdef SLIC3R_VULKAN
+  if (!model_contains_negative_parts) {
+    const char *off = std::getenv("ORCA_SEAM_GPU");
+    const bool enabled = (off == nullptr) || (std::strcmp(off, "0") != 0);
+    if (enabled) {
+      // GPU default N=16 (256 rays/sample) vs the CPU's 5 (25). The GPU cost is
+      // essentially flat in ray count (the kernel is setup/bandwidth-bound, not
+      // ray-bound -- measured: 25..4096 rays all ~equal wall-time), so the extra
+      // rays are FREE and reduce Monte-Carlo noise in the per-sample visibility
+      // estimate -> a more accurate, less-jittery seam score than the CPU's 25-ray
+      // budget allows. (No hard convergence point -- diminishing returns; 256 is a
+      // comfortable margin.) ORCA_SEAM_GPU_RAYS overrides N (1..64).
+      uint32_t sqr_rays = 16;
+      if (const char *r = std::getenv("ORCA_SEAM_GPU_RAYS")) {
+        int v = std::atoi(r);
+        if (v >= 1 && v <= 64) sqr_rays = (uint32_t)v;
+      }
+      if (auto rc = seam_gpu::SeamRayCaster::get()) {
+        if (rc->is_usable()) {
+          std::vector<float> gpu_result;
+          if (rc->compute_visibility(triangles, samples, sqr_rays, 0.01f, gpu_result) &&
+              gpu_result.size() == samples.positions.size()) {
+            // spAlignedBack adds a normal-based front adjustment that does not
+            // depend on ray casting; apply it here to match the CPU path.
+            if (seam_position == spAlignedBack) {
+              for (size_t i = 0; i < gpu_result.size(); ++i) {
+                const Vec3f &normal = samples.normals[i];
+                const float front_adjustment = std::clamp(
+                    (normal.dot(Vec3f(0.0f, -1.0f, 0.0f)) + 1.2f) * 0.5f, 0.0f, 1.0f);
+                gpu_result[i] += front_adjustment;
+              }
+            }
+            BOOST_LOG_TRIVIAL(debug)
+                << "SeamPlacer: raycast visibility on GPU (" << rc->device_name()
+                << "), N=" << sqr_rays;
+            return gpu_result;
+          }
+          BOOST_LOG_TRIVIAL(warning)
+              << "SeamPlacer: GPU raycast failed; falling back to CPU.";
+        }
+      }
+    }
+  }
+#endif // SLIC3R_VULKAN
 
   std::vector<float> result(samples.positions.size());
   tbb::parallel_for(tbb::blocked_range<size_t>(0, result.size()),
@@ -737,6 +795,57 @@ void gather_enforcers_blockers(GlobalModelInfo &result, const PrintObject *po) {
 
   BOOST_LOG_TRIVIAL(debug)
       << "SeamPlacer: build AABB trees for raycasting enforcers/blockers: end";
+}
+
+// ORCA perf-campaign (gcode-tail): build the mesh-only GlobalModelInfo (enforcers/
+// blockers + occlusion visibility). Extracted so it can be run BOTH inline from
+// SeamPlacer::init (fallback) and ahead of time as a background task that overlaps
+// the slicing pipeline. The whole computation depends only on po->model_object()
+// geometry and the per-object seam_position; it is order-deterministic (raycast
+// writes one independent value per sample), so the result is identical whether it
+// runs inline or concurrently.
+static std::shared_ptr<GlobalModelInfo> build_global_model_info(
+        const PrintObject *po, SeamPosition seam_position,
+        const std::function<void(void)> &throw_if_canceled) {
+    auto info = std::make_shared<GlobalModelInfo>();
+    gather_enforcers_blockers(*info, po);
+    throw_if_canceled();
+    if (seam_position == spAligned || seam_position == spNearest || seam_position == spAlignedBack)
+        compute_global_occlusion(*info, po, throw_if_canceled, seam_position);
+    return info;
+}
+
+// Per-PrintObject cache of precomputed GlobalModelInfo, keyed by object pointer and
+// guarded by a geometry/config signature so a stale entry (object reused, mesh or
+// seam mode changed) is never consumed. Holds a shared_future so init() can wait on
+// a still-running background task. Module-local, mirrors the existing static
+// async-warmup pattern (seam_gpu::SeamRayCaster::warmup_async).
+struct PrecomputedOcclusion {
+    size_t                                          signature = 0;
+    SeamPosition                                    seam_position = spAligned;
+    std::shared_future<std::shared_ptr<GlobalModelInfo>> future;
+};
+static std::mutex                                          s_occlusion_mutex;
+static std::map<const PrintObject*, PrecomputedOcclusion>  s_occlusion_cache;
+
+// Cheap signature of the inputs build_global_model_info() actually depends on:
+// the object's centered transform and, per volume, mesh identity + transform +
+// seam-paint state. If any of these differ from a cached entry the entry is invalid.
+static size_t occlusion_signature(const PrintObject *po, SeamPosition seam_position) {
+    size_t h = std::hash<int>{}(static_cast<int>(seam_position));
+    auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2); };
+    const Transform3d trafo = po->trafo_centered();
+    for (int i = 0; i < 16; ++i) mix(std::hash<double>{}(trafo.matrix().data()[i]));
+    for (const ModelVolume *mv : po->model_object()->volumes) {
+        if (mv->type() != ModelVolumeType::MODEL_PART && mv->type() != ModelVolumeType::NEGATIVE_VOLUME && !mv->is_seam_painted())
+            continue;
+        mix(std::hash<const void*>{}(static_cast<const void*>(mv->mesh_ptr().get())));
+        mix(std::hash<int>{}(static_cast<int>(mv->type())));
+        mix(mv->is_seam_painted() ? 0x5151u : 0u);
+        const Transform3d m = mv->get_matrix();
+        for (int i = 0; i < 16; ++i) mix(std::hash<double>{}(m.matrix().data()[i]));
+    }
+    return h;
 }
 
 struct SeamComparator {
@@ -1424,6 +1533,68 @@ void SeamPlacer::align_seam_points(const PrintObject *po, const SeamPlacerImpl::
 
 }
 
+// ORCA perf-campaign (gcode-tail): launch the mesh-only occlusion precompute for
+// every object as background tasks so the work overlaps the slicing pipeline.
+// Called from Print::process(). Safe to call repeatedly; a fresh signature replaces
+// any stale entry. The std::async tasks run on the default executor (separate from
+// the TBB slicing pool) so they fill otherwise-idle cores during slicing.
+void SeamPlacer::precompute_global_model_info_async(const Print &print) {
+  using namespace SeamPlacerImpl;
+  // Safety valve: ORCA_NO_SEAM_PRECOMPUTE=1 disables the background precompute so
+  // SeamPlacer::init() computes occlusion inline exactly as upstream does. Output is
+  // identical either way; this exists for A/B timing and as a fallback.
+  static const bool disabled = [] { const char* v = std::getenv("ORCA_NO_SEAM_PRECOMPUTE"); return v && v[0] && v[0] != '0'; }();
+  if (disabled)
+    return;
+  std::lock_guard<std::mutex> lk(s_occlusion_mutex);
+  // Drop entries for objects no longer in this print (keeps the cache bounded).
+  for (auto it = s_occlusion_cache.begin(); it != s_occlusion_cache.end();) {
+    bool present = false;
+    for (const PrintObject *po : print.objects()) if (po == it->first) { present = true; break; }
+    it = present ? std::next(it) : s_occlusion_cache.erase(it);
+  }
+  for (const PrintObject *po : print.objects()) {
+    const SeamPosition seam_position = po->config().seam_position.value;
+    const size_t sig = occlusion_signature(po, seam_position);
+    auto it = s_occlusion_cache.find(po);
+    if (it != s_occlusion_cache.end() && it->second.signature == sig && it->second.future.valid())
+      continue; // already (being) computed for the current geometry
+    PrecomputedOcclusion entry;
+    entry.signature = sig;
+    entry.seam_position = seam_position;
+    entry.future = std::async(std::launch::async, [po, seam_position]() {
+      // No cancellation hook: the task is short relative to slicing and its result
+      // is simply discarded if it ends up unused. A no-op keeps the builder sig.
+      static const std::function<void(void)> noop = []() {};
+      return build_global_model_info(po, seam_position, noop);
+    }).share();
+    s_occlusion_cache[po] = std::move(entry);
+  }
+}
+
+// Consume the precomputed GlobalModelInfo for an object if a valid entry exists,
+// otherwise compute it inline (preserving the original behaviour exactly).
+static std::shared_ptr<SeamPlacerImpl::GlobalModelInfo> take_global_model_info(
+        const PrintObject *po, SeamPosition seam_position,
+        const std::function<void(void)> &throw_if_canceled) {
+  using namespace SeamPlacerImpl;
+  std::shared_future<std::shared_ptr<GlobalModelInfo>> fut;
+  {
+    std::lock_guard<std::mutex> lk(s_occlusion_mutex);
+    auto it = s_occlusion_cache.find(po);
+    if (it != s_occlusion_cache.end() && it->second.signature == occlusion_signature(po, seam_position)
+        && it->second.seam_position == seam_position && it->second.future.valid())
+      fut = it->second.future;
+  }
+  if (fut.valid()) {
+    auto info = fut.get(); // blocks only if the background task is still running
+    std::lock_guard<std::mutex> lk(s_occlusion_mutex);
+    s_occlusion_cache.erase(po); // single-use; force recompute next slice
+    return info;
+  }
+  return build_global_model_info(po, seam_position, throw_if_canceled);
+}
+
 void SeamPlacer::init(const Print &print, std::function<void(void)> throw_if_canceled_func) {
   using namespace SeamPlacerImpl;
   m_seam_per_object.clear();
@@ -1434,12 +1605,14 @@ void SeamPlacer::init(const Print &print, std::function<void(void)> throw_if_can
     SeamComparator comparator { configured_seam_preference };
 
     {
-      GlobalModelInfo global_model_info { };
-      gather_enforcers_blockers(global_model_info, po);
-      throw_if_canceled_func();
-      if (configured_seam_preference == spAligned || configured_seam_preference == spNearest || configured_seam_preference == spAlignedBack) {
-        compute_global_occlusion(global_model_info, po, throw_if_canceled_func, configured_seam_preference);
-      }
+      // Occlusion (enforcers/blockers + visibility) depends only on the input mesh,
+      // so it is precomputed in the background during slicing (see
+      // precompute_global_model_info_async). take_global_model_info() consumes the
+      // ready result, or computes it inline if no cache entry exists. The result is
+      // identical to computing it here inline (same functions, same inputs/order).
+      std::shared_ptr<GlobalModelInfo> global_model_info_ptr =
+          take_global_model_info(po, configured_seam_preference, throw_if_canceled_func);
+      const GlobalModelInfo &global_model_info = *global_model_info_ptr;
       throw_if_canceled_func();
       BOOST_LOG_TRIVIAL(debug)
           << "SeamPlacer: gather_seam_candidates: start";

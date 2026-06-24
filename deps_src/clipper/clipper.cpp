@@ -147,6 +147,26 @@ bool PolyNode::IsHole() const
   return result;
 }
 
+void PolyTree::BuildFromNesting(const std::vector<int> &parents, std::vector<Path> &&contours)
+{
+  Clear();
+  const size_t n = contours.size();
+  // Reserve so that emplace_back never reallocates; node pointers must stay stable.
+  AllNodes.reserve(n);
+  for (size_t i = 0; i < n; ++i) {
+    AllNodes.emplace_back();
+    AllNodes.back().Contour = std::move(contours[i]);
+  }
+  for (size_t i = 0; i < n; ++i) {
+    int parent = parents[i];
+    PolyNode &node = AllNodes[i];
+    if (parent < 0)
+      this->AddChild(node);
+    else
+      AllNodes[parent].AddChild(node);
+  }
+}
+
 void PolyTree::RemoveOutermostPolygon()
 {
     if (this->ChildCount() == 1 && this->Childs[0]->ChildCount() > 0) {

@@ -6,6 +6,7 @@
 #include "libslic3r.h"
 #include "I18N.hpp"
 #include "GCode.hpp"
+#include "StageTimer.hpp"
 #include "Exception.hpp"
 #include "ExtrusionEntity.hpp"
 #include "EdgeGrid.hpp"
@@ -2090,7 +2091,9 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
     }
 
     try {
+        { StageTimer _st("GCode::_do_export (toolpaths)");
         this->_do_export(*print, file, thumbnail_cb);
+        }
         file.flush();
         if (file.is_error()) {
             file.close();
@@ -2169,7 +2172,9 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
                                                  extruder_unprintable_polys, m_print->get_extruder_printable_height(),  m_print->get_filament_maps(),
                                                  m_print->get_physical_unprintable_filaments(m_print->get_slice_used_filaments(false)));
 
+    { StageTimer _st("GCodeProcessor::finalize+postproc");
     m_processor.finalize(true);
+    }
 //    DoExport::update_print_estimated_times_stats(m_processor, print->m_print_statistics);
     DoExport::update_print_estimated_stats(m_processor, m_writer.extruders(), print->m_print_statistics, print->config());
     if (result != nullptr) {
@@ -3414,7 +3419,9 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             // Process all layers of all objects (non-sequential mode) with a parallel pipeline:
             // Generate G-code, run the filters (vase mode, cooling buffer), run the G-code analyser
             // and export G-code into file.
+            { StageTimer _st("  process_layers (pipeline)");
             this->process_layers(print, tool_ordering, print_object_instances_ordering, layers_to_print, file);
+            }
             {
                 //save the flush statitics stored in tool ordering
                 print.m_statistics_by_extruder_count.stats_by_single_extruder = tool_ordering.get_filament_change_stats(ToolOrdering::FilamentChangeMode::SingleExt);

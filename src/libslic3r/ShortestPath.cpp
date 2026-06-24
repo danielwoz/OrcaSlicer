@@ -13,6 +13,8 @@
 
 #include <cmath>
 #include <cassert>
+#include <climits>
+#include <cstdlib>
 
 namespace Slic3r {
 
@@ -1023,11 +1025,204 @@ std::vector<std::pair<size_t, bool>> chain_segments_greedy2(SegmentEndPointFunc 
 	return chain_segments_greedy_constrained_reversals2_<PointType, SegmentEndPointFunc, false, decltype(could_reverse_func)>(end_point_func, could_reverse_func, num_segments, start_near);
 }
 
+// ----------------------------------------------------------------------------
+// ORCA_OPT_ORDER : opt-in CPU per-block 2-opt + or-opt path-ordering refinement.
+//
+// A CPU port of the GPU "diffusion" path ordering (P3, branch gpu-diffusion-
+// pipeline). The GPU experiment proved a per-block 2-opt+or-opt local search
+// converges to a strictly better local optimum than OrcaSlicer's greedy multi-
+// fragment chainer (-4..7% travel; validity perfect: same extrusions, only the
+// travel ORDER changes). On the GPU it lost on wall-time only because per-block
+// tours are tiny and Vulkan dispatch overhead dominated -- exactly the case
+// where a serial CPU 2-opt is trivially cheap. So we capture the QUALITY win on
+// the CPU with negligible time cost.
+//
+// Operates on the chain representation `out` = vector<(segment idx, reversed)>
+// already produced by the greedy chainer, so it refines the SAME segment set:
+//   * entry/exit of a chain slot depend on its `reversed` flag (an open path's
+//     two orientations; a loop has first==last so orientation is a no-op).
+//   * `could_reverse_func(idx)` gates whether a non-loop segment may flip
+//     orientation (some support/thin paths must keep their direction).
+// Moves (the P3 objective -- minimise total travel from `start_near`):
+//   * 2-opt : reverse a tour sub-range, flipping the orientation of every
+//     reversible/loop segment in it (skipped if any segment can't reverse).
+//   * or-opt: relocate a single segment to a nearby better gap (trying both
+//     feasible orientations at the destination).
+//   * flip  : per-segment best feasible orientation given its tour neighbours.
+// Bounded: neighbour window W and a capped number of passes, so cost is O(n*W*K)
+// per block -- a few microseconds on the ~10-segment blocks that dominate.
+// Gated OFF by default; set env ORCA_OPT_ORDER=1 to enable. perf-campaign
+// behaviour is unchanged when off.
+static inline bool opt_order_enabled()
+{
+    static const int v = []() -> int {
+        const char *e = ::getenv("ORCA_OPT_ORDER");
+        return (e && e[0] && e[0] != '0') ? 1 : 0;
+    }();
+    return v != 0;
+}
+
+template<typename PointType, typename SegmentEndPointFunc, typename CouldReverseFunc>
+void refine_chain_2opt_oropt(std::vector<std::pair<size_t, bool>> &chain,
+                             SegmentEndPointFunc end_point_func,
+                             CouldReverseFunc   could_reverse_func,
+                             const PointType   *start_near)
+{
+    const int n = (int)chain.size();
+    if (n < 3)
+        return;
+
+    // entry/exit point of chain slot k given its reversed flag.
+    auto entry_pt = [&](int k) -> PointType {
+        const auto &c = chain[k];
+        return end_point_func(c.first, !c.second); // reversed=false -> first_point
+    };
+    auto exit_pt = [&](int k) -> PointType {
+        const auto &c = chain[k];
+        return end_point_func(c.first, c.second);  // reversed=false -> last_point
+    };
+    auto reversible = [&](int k) -> bool {
+        return could_reverse_func(chain[k].first);
+    };
+    auto distf = [](const PointType &a, const PointType &b) -> double {
+        double dx = double(b.x() - a.x()), dy = double(b.y() - a.y());
+        return std::sqrt(dx * dx + dy * dy);
+    };
+    // start anchor (exit of the "virtual" slot before position 0).
+    PointType start = (start_near != nullptr) ? *start_near : entry_pt(0);
+    auto prev_exit = [&](int k) -> PointType { return (k == 0) ? start : exit_pt(k - 1); };
+
+    // P3 convergence curve: ~all the 2-opt/or-opt gain lands by K~8-12; returns
+    // past K~12 are <0.2%. The improving-set empties (the `improved` early-out
+    // below usually fires well before MAX_PASS), so this cap rarely binds; it
+    // only bounds worst-case cost on large blocks. WIN bounds per-slot work.
+    const int  WIN      = 12;          // neighbour window (bounded work / slot)
+    const int  MAX_PASS = 12;          // P3 quality/time knee (k_passes)
+    const double EPS     = 1.0;        // require > 1 nm gain to avoid churn
+
+    // pass 0: best feasible orientation per slot given current neighbours.
+    auto flip_pass = [&]() {
+        for (int k = 0; k < n; ++k) {
+            if (!reversible(k))
+                continue;
+            PointType p = prev_exit(k);
+            bool has_next = (k + 1 < n);
+            PointType nx = has_next ? entry_pt(k + 1) : PointType();
+            // cost with current orientation vs flipped.
+            auto cost_for = [&](bool rev) {
+                PointType en = end_point_func(chain[k].first, !rev);
+                PointType ex = end_point_func(chain[k].first, rev);
+                double c = distf(p, en);
+                if (has_next) c += distf(ex, nx);
+                return c;
+            };
+            double c_cur = cost_for(chain[k].second);
+            double c_flp = cost_for(!chain[k].second);
+            if (c_flp + EPS < c_cur)
+                chain[k].second = !chain[k].second;
+        }
+    };
+
+    for (int pass = 0; pass < MAX_PASS; ++pass) {
+        bool improved = false;
+        flip_pass();
+
+        // 2-opt: reverse tour range [i+1 .. j]; flip orientation of every segment
+        // in it (legal only if all are reversible-or-loop; loop flip is a no-op).
+        for (int i = -1; i < n - 1; ++i) {
+            PointType ex_i = (i < 0) ? start : exit_pt(i);
+            int jmax = std::min(i + WIN, n - 1);
+            for (int j = i + 1; j <= jmax; ++j) {
+                bool has_jn = (j + 1 < n);
+                // current boundary cost.
+                double cur = distf(ex_i, entry_pt(i + 1));
+                if (has_jn) cur += distf(exit_pt(j), entry_pt(j + 1));
+                // after reversing [i+1..j] each segment flips; the new boundary
+                // connects ex_i -> (flipped entry of old j) and (flipped exit of
+                // old i+1) -> entry of j+1. Flipped entry of slot s = exit_pt(s)
+                // if it can flip; a loop's entry==exit so unchanged.
+                auto can_all_reverse = [&]() {
+                    for (int s = i + 1; s <= j; ++s)
+                        if (!reversible(s)) return false;
+                    return true;
+                };
+                if (!can_all_reverse())
+                    continue;
+                // flipped endpoints: new-entry(old j) = exit_pt(j); new-exit(old i+1)=entry_pt(i+1)
+                double nw = distf(ex_i, exit_pt(j));
+                if (has_jn) nw += distf(entry_pt(i + 1), entry_pt(j + 1));
+                if (cur - nw > EPS) {
+                    // perform: reverse order of [i+1..j] and toggle each reversed flag.
+                    int lo = i + 1, hi = j;
+                    while (lo < hi) { std::swap(chain[lo], chain[hi]); ++lo; --hi; }
+                    for (int s = i + 1; s <= j; ++s)
+                        chain[s].second = !chain[s].second;
+                    improved = true;
+                }
+            }
+        }
+
+        // or-opt: relocate single segment s to be inserted after slot t (window).
+        for (int s = 0; s < n; ++s) {
+            PointType p  = prev_exit(s);
+            bool has_n   = (s + 1 < n);
+            PointType nx = has_n ? entry_pt(s + 1) : PointType();
+            double remove = distf(p, entry_pt(s));
+            if (has_n) remove += distf(exit_pt(s), nx);
+            double close = has_n ? distf(p, nx) : 0.0;
+            double freed = remove - close;
+
+            int   best_t = INT_MIN;
+            bool  best_rev = chain[s].second;
+            double best_g = EPS;
+            int t0 = std::max(-1, s - WIN), t1 = std::min(n - 1, s + WIN);
+            for (int t = t0; t <= t1; ++t) {
+                if (t == s || t == s - 1) continue;          // no-op positions (t+1==s excluded)
+                PointType gx = (t < 0) ? start : exit_pt(t);
+                bool has_tn  = (t + 1 < n);
+                PointType hx = has_tn ? entry_pt(t + 1) : PointType();
+                double gap = has_tn ? distf(gx, hx) : 0.0;
+                // try both orientations of s at the gap (if reversible).
+                int norient = reversible(s) ? 2 : 1;
+                for (int o = 0; o < norient; ++o) {
+                    bool rev = (o == 0) ? chain[s].second : !chain[s].second;
+                    PointType en = end_point_func(chain[s].first, !rev);
+                    PointType ex = end_point_func(chain[s].first, rev);
+                    double ins = distf(gx, en) + (has_tn ? distf(ex, hx) : 0.0);
+                    double g = freed + gap - ins;
+                    if (g > best_g) { best_g = g; best_t = t; best_rev = rev; }
+                }
+            }
+            if (best_t == INT_MIN)
+                continue;
+            // perform relocation: remove at s, insert after t.
+            std::pair<size_t, bool> moved = chain[s];
+            moved.second = best_rev;
+            int t = best_t;
+            if (t > s) {
+                for (int k = s; k < t; ++k) chain[k] = chain[k + 1];
+                chain[t] = moved;
+            } else { // t < s-1  (t >= -1)
+                for (int k = s; k > t + 1; --k) chain[k] = chain[k - 1];
+                chain[t + 1] = moved;
+            }
+            improved = true;
+        }
+
+        if (!improved)
+            break;
+    }
+}
+
 std::vector<std::pair<size_t, bool>> chain_extrusion_entities(std::vector<ExtrusionEntity*> &entities, const Point *start_near)
 {
 	auto segment_end_point = [&entities](size_t idx, bool first_point) -> Point { return first_point ? entities[idx]->first_point() : entities[idx]->last_point(); };
 	auto could_reverse = [&entities](size_t idx) { const ExtrusionEntity *ee = entities[idx]; return ee->is_loop() || ee->can_reverse(); };
 	std::vector<std::pair<size_t, bool>> out = chain_segments_greedy_constrained_reversals<Point, decltype(segment_end_point), decltype(could_reverse)>(segment_end_point, could_reverse, entities.size(), start_near);
+	// ORCA_OPT_ORDER: opt-in CPU 2-opt+or-opt refinement of the greedy order
+	// (same segments, only travel order changes). OFF by default.
+	if (opt_order_enabled())
+		refine_chain_2opt_oropt<Point>(out, segment_end_point, could_reverse, start_near);
 	for (std::pair<size_t, bool> &segment : out) {
 		ExtrusionEntity *ee = entities[segment.first];
 		if (ee->is_loop())

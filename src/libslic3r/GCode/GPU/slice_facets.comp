@@ -1,0 +1,222 @@
+#version 460
+#extension GL_ARB_gpu_shader_int64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_ARB_gpu_shader_fp64 : require
+
+// GPU mesh slicing (plain Vulkan compute, NO ray tracing / acceleration structures).
+//
+// One invocation per mesh facet. Each facet loops over the layer Z-planes it
+// spans and replicates TriangleMeshSlicer.cpp::slice_facet() EXACTLY:
+//  * vertices arrive already XY-scaled (coord units) with UNSCALED Z, matching
+//    the multi-z CPU path (transform_mesh_vertices_for_slicing), so the shader
+//    does no transform; transform_vertex_fn is identity there.
+//  * Z comparisons use exact ==, like the CPU.
+//  * The general-edge intersection interpolation is done in DOUBLE precision and
+//    floor(x+0.5)'d to a 64-bit integer coordinate (coord_t == int64_t) so the
+//    output matches the CPU bit-for-bit on hardware with fp64.
+//
+// Produced segments are atomic-appended into a single flat output buffer (one
+// global counter) so there is exactly ONE bulk readback. Each record carries its
+// own layer index; the CPU buckets them per layer after readback. This is the
+// "variable-length copy-back" design the plan flagged as the risk to measure.
+
+layout(local_size_x = 64) in;
+
+// Vertices: vec3 per vertex, XY already scaled to coord units, Z unscaled.
+layout(set = 0, binding = 0, std430) readonly buffer Verts   { float verts[];   };
+// Indices: 3 x int32 (vertex ids) per face.
+layout(set = 0, binding = 1, std430) readonly buffer Indices { int   indices[]; };
+// Edge ids: 3 x int32 per face (Vec3i32 face_edge_ids).
+layout(set = 0, binding = 2, std430) readonly buffer EdgeIds { int   edge_ids[]; };
+// Slice z planes (unscaled), sorted ascending.
+layout(set = 0, binding = 3, std430) readonly buffer Zs      { float zs[];       };
+
+// Output record. std430: 64-bit members are 8-byte aligned. Layout chosen so the
+// struct packs to 48 bytes with the int64 pair first.
+struct OutLine {
+    int64_t ax;   // 0
+    int64_t ay;   // 8
+    int64_t bx;   // 16
+    int64_t by;   // 24
+    int      layer;     // 32
+    int      a_id;      // 36
+    int      b_id;      // 40
+    int      edge_a_id; // 44
+    int      edge_b_id; // 48
+    int      edge_type; // 52  (0=General,1=Top,2=Bottom,3=TopBottom,4=Horizontal,5=Slab)
+    int      pad0;      // 56
+    int      pad1;      // 60  -> 64 bytes, 8-byte aligned
+};
+layout(set = 0, binding = 4, std430) writeonly buffer OutBuf  { OutLine outlines[]; };
+// counter[0] = number of produced records (atomic append cursor).
+layout(set = 0, binding = 5, std430) buffer Counter { uint counter[]; };
+
+layout(push_constant) uniform PC {
+    uint n_faces;
+    uint n_zs;
+    uint out_capacity;
+} pc;
+
+vec3 vget(int vid) { return vec3(verts[vid*3], verts[vid*3+1], verts[vid*3+2]); }
+
+// edge_type enum values matching IntersectionLine::FacetEdgeType
+const int FE_General = 0;
+const int FE_Top     = 1;
+const int FE_Bottom  = 2;
+
+void emit(int layer, int64_t ax, int64_t ay, int64_t bx, int64_t by,
+          int a_id, int b_id, int edge_a_id, int edge_b_id, int edge_type) {
+    uint slot = atomicAdd(counter[0], 1u);
+    if (slot >= pc.out_capacity) return; // overflow guard; CPU detects & falls back
+    outlines[slot].ax = ax;
+    outlines[slot].ay = ay;
+    outlines[slot].bx = bx;
+    outlines[slot].by = by;
+    outlines[slot].layer     = layer;
+    outlines[slot].a_id      = a_id;
+    outlines[slot].b_id      = b_id;
+    outlines[slot].edge_a_id = edge_a_id;
+    outlines[slot].edge_b_id = edge_b_id;
+    outlines[slot].edge_type = edge_type;
+}
+
+// Replicates slice_facet() for one (facet, slice_z). horizontal is always false
+// in the slice_facet_at_zs path (min_z != max_z guaranteed by the caller below).
+// Returns true and emits a General segment when num_points==2.
+void slice_one(int layer, float slice_z, vec3 v[3], int idx[3], int eid[3], int idx_vertex_lowest) {
+    // Intersection points (up to 2 used). Store as int64 coords + ids.
+    int64_t px[3]; int64_t py[3];
+    int     pid[3];  // point_id (vertex id) or -1
+    int     peid[3]; // edge_id or -1
+    int     num_points = 0;
+    int     point_on_layer = -1; // index into p* arrays, or -1
+
+    for (int j = 0; j < 3; ++j) {
+        int k = (idx_vertex_lowest + j) % 3;
+        int l = (k + 1) % 3;
+        int edge_id = eid[k];
+        int a_id = idx[k];
+        int b_id = idx[l];
+        vec3 a = v[k];
+        vec3 b = v[l];
+
+        if (a.z == slice_z && b.z == slice_z) {
+            // Horizontal edge belonging to this layer. horizontal==false here:
+            // third vertex below -> Top (Slicing, swap a/b); else Bottom (Cutting).
+            // Cutting results are NOT emitted by slice_facet_at_zs, only Slicing.
+            bool third_below = v[0].z < slice_z || v[1].z < slice_z || v[2].z < slice_z;
+            if (third_below) {
+                // Top: swap a,b. Emit as General-style direct edge segment.
+                emit(layer,
+                     int64_t(b.x), int64_t(b.y), int64_t(a.x), int64_t(a.y),
+                     b_id, a_id, -1, -1, FE_Top);
+            }
+            // Bottom -> Cutting, not emitted. Either way, done with this facet/layer.
+            return;
+        }
+
+        if (a.z == slice_z) {
+            if (point_on_layer == -1 || pid[point_on_layer] != a_id) {
+                point_on_layer = num_points;
+                px[num_points]  = int64_t(a.x);
+                py[num_points]  = int64_t(a.y);
+                pid[num_points] = a_id;
+                peid[num_points]= -1;
+                num_points++;
+            }
+        } else if (b.z == slice_z) {
+            if (point_on_layer == -1 || pid[point_on_layer] != b_id) {
+                point_on_layer = num_points;
+                px[num_points]  = int64_t(b.x);
+                py[num_points]  = int64_t(b.y);
+                pid[num_points] = b_id;
+                peid[num_points]= -1;
+                num_points++;
+            }
+        } else if ((a.z < slice_z && b.z > slice_z) || (b.z < slice_z && a.z > slice_z)) {
+            // General edge crossing. Sort edge by id for a consistent answer.
+            if (a_id > b_id) {
+                int ti = a_id; a_id = b_id; b_id = ti;
+                vec3 tv = a; a = b; b = tv;
+            }
+            double t = (double(slice_z) - double(b.z)) / (double(a.z) - double(b.z));
+            if (t <= 0.0) {
+                if (point_on_layer == -1 || pid[point_on_layer] != a_id) {
+                    px[num_points]  = int64_t(a.x);
+                    py[num_points]  = int64_t(a.y);
+                    point_on_layer  = num_points;
+                    pid[num_points] = a_id;
+                    peid[num_points]= -1;
+                    num_points++;
+                }
+            } else if (t >= 1.0) {
+                if (point_on_layer == -1 || pid[point_on_layer] != b_id) {
+                    px[num_points]  = int64_t(b.x);
+                    py[num_points]  = int64_t(b.y);
+                    point_on_layer  = num_points;
+                    pid[num_points] = b_id;
+                    peid[num_points]= -1;
+                    num_points++;
+                }
+            } else {
+                double xv = floor(double(b.x) + (double(a.x) - double(b.x)) * t + 0.5);
+                double yv = floor(double(b.y) + (double(a.y) - double(b.y)) * t + 0.5);
+                px[num_points]  = int64_t(xv);
+                py[num_points]  = int64_t(yv);
+                pid[num_points] = -1;
+                peid[num_points]= edge_id;
+                num_points++;
+            }
+        }
+        if (num_points >= 3) break; // safety; CPU asserts num_points < 3
+    }
+
+    if (num_points == 2) {
+        // line_out.a = points[1], line_out.b = points[0]  (note the order)
+        emit(layer,
+             px[1], py[1], px[0], py[0],
+             pid[1], pid[0], peid[1], peid[0], FE_General);
+    }
+}
+
+void main() {
+    uint face = gl_GlobalInvocationID.x;
+    if (face >= pc.n_faces) return;
+
+    int idx[3];
+    idx[0] = indices[face*3+0];
+    idx[1] = indices[face*3+1];
+    idx[2] = indices[face*3+2];
+    int eid[3];
+    eid[0] = edge_ids[face*3+0];
+    eid[1] = edge_ids[face*3+1];
+    eid[2] = edge_ids[face*3+2];
+
+    vec3 v[3];
+    v[0] = vget(idx[0]);
+    v[1] = vget(idx[1]);
+    v[2] = vget(idx[2]);
+
+    float min_z = min(v[0].z, min(v[1].z, v[2].z));
+    float max_z = max(v[0].z, max(v[1].z, v[2].z));
+    if (min_z == max_z) return; // horizontal triangle ignored (matches CPU)
+
+    int idx_vertex_lowest = (v[1].z == min_z) ? 1 : ((v[2].z == min_z) ? 2 : 0);
+
+    // Layer span: first layer with zs[i] >= min_z .. last with zs[i] <= max_z.
+    // CPU uses lower_bound(min_z) .. upper_bound(max_z). Replicate via linear-ish
+    // binary search bounds. n_zs is small; a linear scan would be fine but binary
+    // keeps it cheap for tall meshes.
+    uint lo = 0u, hi = pc.n_zs;
+    // lower_bound(min_z): first index with zs[idx] >= min_z
+    while (lo < hi) { uint mid = (lo + hi) >> 1; if (zs[mid] < min_z) lo = mid + 1u; else hi = mid; }
+    uint first = lo;
+    // upper_bound(max_z): first index with zs[idx] > max_z
+    lo = first; hi = pc.n_zs;
+    while (lo < hi) { uint mid = (lo + hi) >> 1; if (zs[mid] <= max_z) lo = mid + 1u; else hi = mid; }
+    uint last = lo;
+
+    for (uint li = first; li < last; ++li) {
+        slice_one(int(li), zs[li], v, idx, eid, idx_vertex_lowest);
+    }
+}

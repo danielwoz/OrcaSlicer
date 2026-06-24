@@ -632,6 +632,18 @@ if(SLIC3R_PROFILE)
     target_link_libraries(libslic3r PRIVATE Shiny)
 endif()
 
+if(SLIC3R_VULKAN)
+    # Optional vendored GPU SLA rasterizer backend. Linked PRIVATE so it is an
+    # implementation detail of libslic3r; SLIC3R_VULKAN is defined PUBLIC on this
+    # target so the (otherwise inert) VulkanRaster header is active where needed.
+    add_subdirectory(SLA/GPU)
+    target_link_libraries(libslic3r PRIVATE libslic3r_sla_gpu)
+    # GPU seam-visibility ray caster (VK_KHR_ray_query). Same option gate.
+    add_subdirectory(GCode/GPU)
+    target_link_libraries(libslic3r PRIVATE libslic3r_seam_gpu)
+    target_compile_definitions(libslic3r PUBLIC SLIC3R_VULKAN)
+endif()
+
 if (SLIC3R_PCH AND NOT SLIC3R_SYNTAXONLY)
     add_precompiled_header(libslic3r pchheader.hpp FORCEINCLUDE)
 endif ()

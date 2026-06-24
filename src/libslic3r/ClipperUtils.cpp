@@ -1,6 +1,7 @@
 #include "ClipperUtils.hpp"
 #include "Geometry.hpp"
 #include "ShortestPath.hpp"
+#include "Clipper2Utils.hpp"
 
 // #define CLIPPER_UTILS_DEBUG
 
@@ -261,93 +262,274 @@ bool has_duplicate_points(const ClipperLib::PolyTree &polytree)
 }
 #endif
 
+// ---- Clipper2 boolean / offset engine ------------------------------------------
+// Coords are identical int64, so the provider->Paths64 conversion is a straight copy.
+// The boolean family (_clipper/_clipper_ex/union_) and the raw_offset funnel run on
+// Clipper2. Safety-offset cases still go through the ClipperLib path below (the safety
+// offset is itself a ClipperLib op), as do the offset helpers that drive ClipperLib's
+// ClipperOffset / Clipper directly (shrink_paths, offset_expolygon_inner, etc.).
+template<typename PathsProvider>
+static Clipper2Lib::Paths64 provider_to_paths64(PathsProvider &&provider)
+{
+    Clipper2Lib::Paths64 out;
+    for (const Slic3r::Points &path : provider) {
+        Clipper2Lib::Path64 p;
+        p.reserve(path.size());
+        for (const Slic3r::Point &pt : path)
+            p.emplace_back(pt.x(), pt.y());
+        out.emplace_back(std::move(p));
+    }
+    return out;
+}
+
+static inline Clipper2Lib::FillRule to_clipper2_fillrule(ClipperLib::PolyFillType ft)
+{
+    switch (ft) {
+    case ClipperLib::pftEvenOdd:  return Clipper2Lib::FillRule::EvenOdd;
+    case ClipperLib::pftPositive: return Clipper2Lib::FillRule::Positive;
+    case ClipperLib::pftNegative: return Clipper2Lib::FillRule::Negative;
+    default:                      return Clipper2Lib::FillRule::NonZero;
+    }
+}
+
+static inline Clipper2Lib::ClipType to_clipper2_cliptype(ClipperLib::ClipType ct)
+{
+    switch (ct) {
+    case ClipperLib::ctIntersection: return Clipper2Lib::ClipType::Intersection;
+    case ClipperLib::ctUnion:        return Clipper2Lib::ClipType::Union;
+    case ClipperLib::ctDifference:   return Clipper2Lib::ClipType::Difference;
+    case ClipperLib::ctXor:          return Clipper2Lib::ClipType::Xor;
+    default:                         return Clipper2Lib::ClipType::Union;
+    }
+}
+
+static inline Clipper2Lib::JoinType to_clipper2_jointype(ClipperLib::JoinType jt)
+{
+    switch (jt) {
+    case ClipperLib::jtSquare: return Clipper2Lib::JoinType::Square;
+    case ClipperLib::jtMiter:  return Clipper2Lib::JoinType::Miter;
+    case ClipperLib::jtRound:  return Clipper2Lib::JoinType::Round;
+    default:                   return Clipper2Lib::JoinType::Round;
+    }
+}
+
+static inline Clipper2Lib::EndType to_clipper2_endtype(ClipperLib::EndType et)
+{
+    switch (et) {
+    case ClipperLib::etClosedPolygon: return Clipper2Lib::EndType::Polygon;
+    case ClipperLib::etClosedLine:    return Clipper2Lib::EndType::Joined;
+    case ClipperLib::etOpenButt:      return Clipper2Lib::EndType::Butt;
+    case ClipperLib::etOpenSquare:    return Clipper2Lib::EndType::Square;
+    case ClipperLib::etOpenRound:     return Clipper2Lib::EndType::Round;
+    default:                          return Clipper2Lib::EndType::Polygon;
+    }
+}
+
+// Convert a single Clipper2 Path64 to a ClipperLib::Path (identical int64 coords).
+static inline ClipperLib::Path path64_to_clipper1(const Clipper2Lib::Path64 &in)
+{
+    ClipperLib::Path out;
+    out.reserve(in.size());
+    for (const Clipper2Lib::Point64 &p : in)
+        out.emplace_back(ClipperLib::cInt(p.x), ClipperLib::cInt(p.y));
+    return out;
+}
+
+// Clipper2 mirror of raw_offset (below). Reproduces Clipper1's exact per-path
+// CCW-orientation semantics. Clipper1 reorients each contour so the outermost has
+// positive area (CCW), applies the offset to that CCW form (hence the sign is
+// reversed for CW input), and reverses the result back for CW inputs -- so CCW
+// contours grow/shrink with the offset sign while CW (hole) contours offset in the
+// opposite sense, all output staying CCW for original-CCW and CW for original-CW.
+//
+// Clipper2's ClipperOffset does its own orientation handling (is_reversed =
+// Area < 0), which would double-handle and invert holes. To get an exact mirror we
+// neutralize it: feed Clipper2 a forced-CCW copy of the path (so is_reversed is
+// always false / a no-op), apply the same signed offset Clipper1 uses
+// (ccw ? offset : -offset), then reverse the result for CW inputs. Verified to
+// match Clipper1 area + orientation on CCW/CW squares for +/- offset.
+//
+// There is no ShortestEdgeLength analog in Clipper2 (its offsetter merges short
+// edges internally); ArcTolerance/MiterLimit map directly. Returns ClipperLib::Paths
+// so the (many) raw_offset callers are unaffected. Open end types (etOpen*/
+// etClosedLine) are never reoriented (matches Clipper1's ccw=true for non-Polygon).
+template<typename PathsProvider>
+static ClipperLib::Paths raw_offset_clipper2(PathsProvider &&paths, float offset, ClipperLib::JoinType joinType, double miterLimit, ClipperLib::EndType endType)
+{
+    const Clipper2Lib::JoinType jt = to_clipper2_jointype(joinType);
+    const Clipper2Lib::EndType  et = to_clipper2_endtype(endType);
+    const bool is_closed_polygon = (endType == ClipperLib::etClosedPolygon);
+
+    ClipperLib::Paths out;
+    out.reserve(paths.size());
+    for (const auto &path : paths) {
+        Clipper2Lib::Path64 p;
+        p.reserve(path.size());
+        for (const auto &pt : path)
+            p.emplace_back(pt.x(), pt.y());
+
+        // Mirror Clipper1: ccw orientation only considered for closed polygons.
+        const bool ccw = is_closed_polygon ? Clipper2Lib::IsPositive(p) : true;
+        if (!ccw)
+            // Force CCW input so Clipper2's internal orientation handling is a no-op.
+            std::reverse(p.begin(), p.end());
+
+        Clipper2Lib::ClipperOffset co;
+        if (joinType == jtRound)
+            co.ArcTolerance(miterLimit);
+        else
+            co.MiterLimit(miterLimit);
+        co.AddPath(p, jt, et);
+        Clipper2Lib::Paths64 sol;
+        co.Execute(ccw ? double(offset) : -double(offset), sol);
+        // Clipper2's ClipperOffset has no ShortestEdgeLength, so the round-join arc
+        // approximation leaves many micro-edges that Clipper1 merged away. Restore
+        // that by simplifying the offset result (epsilon = |offset| * the same
+        // ShortestEdgeFactor) -- thins vertex density back toward Clipper1's, which
+        // cuts the downstream per-point work (perimeters/fill/gcode) that profiling
+        // showed dominates the Clipper2 regression. Offset results are closed polygons.
+        if (const double eps = std::abs(double(offset)) * ClipperOffsetShortestEdgeFactor; eps > 0.0)
+            sol = Clipper2Lib::SimplifyPaths(sol, eps);
+        for (Clipper2Lib::Path64 &c2 : sol) {
+            if (!ccw)
+                std::reverse(c2.begin(), c2.end());
+            out.emplace_back(path64_to_clipper1(c2));
+        }
+    }
+    return out;
+}
+
+// ---- Clipper2 boolean helpers operating on ClipperLib::Paths -------------------
+// These mirror the old Clipper1 boolean cores but run on Clipper2Lib::Clipper64.
+// Coordinates are identical int64, so the conversion is a straight copy. They return
+// ClipperLib::Paths so the (many) callers that consume Paths are unaffected.
+
+// Convert any path container (ClipperLib::Paths, or a PathsProvider yielding Slic3r::Points)
+// into Clipper2Lib::Paths64.
+template<typename PathContainer>
+static inline Clipper2Lib::Paths64 to_paths64(const PathContainer &in)
+{
+    Clipper2Lib::Paths64 out;
+    out.reserve(in.size());
+    for (const auto &path : in) {
+        Clipper2Lib::Path64 p;
+        p.reserve(path.size());
+        for (const auto &pt : path)
+            p.emplace_back(pt.x(), pt.y());
+        out.emplace_back(std::move(p));
+    }
+    return out;
+}
+
+static inline ClipperLib::Paths paths64_to_clipper1(const Clipper2Lib::Paths64 &in)
+{
+    ClipperLib::Paths out;
+    out.reserve(in.size());
+    for (const Clipper2Lib::Path64 &p : in)
+        out.emplace_back(path64_to_clipper1(p));
+    return out;
+}
+
+template<typename PointContainer>
+static inline Clipper2Lib::Path64 path_to_path64(const PointContainer &in)
+{
+    Clipper2Lib::Path64 out;
+    out.reserve(in.size());
+    for (const auto &pt : in)
+        out.emplace_back(pt.x(), pt.y());
+    return out;
+}
+
+// Boolean on Clipper2, both inputs treated as closed subject/clip, Paths output.
+template<typename TSubj, typename TClip>
+static ClipperLib::Paths clipper2_do_paths(
+    const ClipperLib::ClipType     clipType,
+    const TSubj                   &subject,
+    const TClip                   &clip,
+    const ClipperLib::PolyFillType fillType)
+{
+    Clipper2Lib::Clipper64 c;
+    Clipper2Lib::Paths64 subj = to_paths64(subject);
+    if (!subj.empty())
+        c.AddSubject(subj);
+    Clipper2Lib::Paths64 cl = to_paths64(clip);
+    if (!cl.empty())
+        c.AddClip(cl);
+    Clipper2Lib::Paths64 sol;
+    c.Execute(to_clipper2_cliptype(clipType), to_clipper2_fillrule(fillType), sol);
+    return paths64_to_clipper1(sol);
+}
+
+// Union on Clipper2, single (already-prepared) subject, Paths output.
+template<typename TSubj>
+static ClipperLib::Paths clipper2_union_paths(
+    const TSubj                   &subject,
+    const ClipperLib::PolyFillType fillType = ClipperLib::pftNonZero)
+{
+    Clipper2Lib::Clipper64 c;
+    Clipper2Lib::Paths64 subj = to_paths64(subject);
+    if (!subj.empty())
+        c.AddSubject(subj);
+    Clipper2Lib::Paths64 sol;
+    c.Execute(Clipper2Lib::ClipType::Union, to_clipper2_fillrule(fillType), sol);
+    return paths64_to_clipper1(sol);
+}
+
+// Apply the safety offset (10um outward, one path at a time) on Clipper2. The safety
+// offset is a small ClipperOffset on the clip before an intersection/difference.
+static inline ClipperLib::Paths clipper2_safety_offset(const ClipperLib::Paths &clip)
+{
+    return raw_offset_clipper2(clip, ClipperSafetyOffset, DefaultJoinType, DefaultMiterLimit, ClipperLib::etClosedPolygon);
+}
+
+// Union a set of ClipperLib::Paths on Clipper2 into nested ExPolygons.
+static inline ExPolygons clipper2_union_ex(const ClipperLib::Paths &paths, ClipperLib::PolyFillType fillType = ClipperLib::pftNonZero)
+{
+    return clipper2_clip_ex(Clipper2Lib::ClipType::Union, to_clipper2_fillrule(fillType), to_paths64(paths), Clipper2Lib::Paths64{});
+}
+
 // Offset CCW contours outside, CW contours (holes) inside.
 // Don't calculate union of the output paths.
 template<typename PathsProvider>
 static ClipperLib::Paths raw_offset(PathsProvider &&paths, float offset, ClipperLib::JoinType joinType, double miterLimit, ClipperLib::EndType endType = ClipperLib::etClosedPolygon)
 {
-    ClipperLib::ClipperOffset co;
-    ClipperLib::Paths out;
-    out.reserve(paths.size());
-    ClipperLib::Paths out_this;
-    if (joinType == jtRound)
-        co.ArcTolerance = miterLimit;
-    else
-        co.MiterLimit = miterLimit;
-    co.ShortestEdgeLength = std::abs(offset * ClipperOffsetShortestEdgeFactor);
-    for (const ClipperLib::Path &path : paths) {
-        co.Clear();
-        // Execute reorients the contours so that the outer most contour has a positive area. Thus the output
-        // contours will be CCW oriented even though the input paths are CW oriented.
-        // Offset is applied after contour reorientation, thus the signum of the offset value is reversed.
-        co.AddPath(path, joinType, endType);
-        bool ccw = endType == ClipperLib::etClosedPolygon ? ClipperLib::Orientation(path) : true;
-        co.Execute(out_this, ccw ? offset : - offset);
-        if (! ccw) {
-            // Reverse the resulting contours.
-            for (ClipperLib::Path &path : out_this)
-                std::reverse(path.begin(), path.end());
-        }
-        append(out, std::move(out_this));
-    }
-    return out;
+    return raw_offset_clipper2(std::forward<PathsProvider>(paths), offset, joinType, miterLimit, endType);
 }
 
-// Offset outside by 10um, one by one.
+// Offset outside by 10um, one by one. Used as a clip-side safety offset before a
+// boolean. Runs on Clipper2 via raw_offset (raw_offset_clipper2). Materializes the
+// provider into ClipperLib::Paths so the result is reusable by the Clipper2 boolean.
 template<typename PathsProvider>
 static ClipperLib::Paths safety_offset(PathsProvider &&paths)
 {
     return raw_offset(std::forward<PathsProvider>(paths), ClipperSafetyOffset, DefaultJoinType, DefaultMiterLimit);
 }
 
-template<class TResult, class TSubj, class TClip>
-TResult clipper_do(
+// Boolean on Clipper2 producing nested ExPolygons. Clipper2 handles overlapping
+// edges efficiently, so the Clipper1 two-pass (Paths then re-Union to PolyTree)
+// workaround is unnecessary -- a single Execute to a PolyTree64 suffices. When the
+// safety offset is requested it is applied (on Clipper2) to the clip beforehand.
+template<typename TSubj, typename TClip>
+static ExPolygons clipper2_do_ex(
     const ClipperLib::ClipType     clipType,
-    TSubj &&                       subject,
-    TClip &&                       clip,
-    const ClipperLib::PolyFillType fillType)
-{
-    ClipperLib::Clipper clipper;
-    clipper.AddPaths(std::forward<TSubj>(subject), ClipperLib::ptSubject, true);
-    clipper.AddPaths(std::forward<TClip>(clip),    ClipperLib::ptClip,    true);
-    TResult retval;
-    clipper.Execute(clipType, retval, fillType, fillType);
-    return retval;
-}
-
-template<class TResult, class TSubj, class TClip>
-TResult clipper_do(
-    const ClipperLib::ClipType     clipType,
-    TSubj &&                       subject,
-    TClip &&                       clip,
+    TSubj                        &&subject,
+    TClip                        &&clip,
     const ClipperLib::PolyFillType fillType,
-    const ApplySafetyOffset        do_safety_offset)
+    const ApplySafetyOffset        do_safety_offset = ApplySafetyOffset::No)
 {
-    // Safety offset only allowed on intersection and difference.
     assert(do_safety_offset == ApplySafetyOffset::No || clipType != ClipperLib::ctUnion);
-    return do_safety_offset == ApplySafetyOffset::Yes ? 
-        clipper_do<TResult>(clipType, std::forward<TSubj>(subject), safety_offset(std::forward<TClip>(clip)), fillType) :
-        clipper_do<TResult>(clipType, std::forward<TSubj>(subject), std::forward<TClip>(clip), fillType);
-}
-
-template<class TResult, class TSubj>
-TResult clipper_union(
-    TSubj &&                       subject,
-    // fillType pftNonZero and pftPositive "should" produce the same result for "normalized with implicit union" set of polygons
-    const ClipperLib::PolyFillType fillType = ClipperLib::pftNonZero)
-{
-    ClipperLib::Clipper clipper;
-    clipper.AddPaths(std::forward<TSubj>(subject), ClipperLib::ptSubject, true);
-    TResult retval;
-    clipper.Execute(ClipperLib::ctUnion, retval, fillType, fillType);
-    return retval;
+    Clipper2Lib::Paths64 subj = provider_to_paths64(std::forward<TSubj>(subject));
+    Clipper2Lib::Paths64 cl   = do_safety_offset == ApplySafetyOffset::Yes ?
+        to_paths64(safety_offset(std::forward<TClip>(clip))) :
+        provider_to_paths64(std::forward<TClip>(clip));
+    return clipper2_clip_ex(to_clipper2_cliptype(clipType), to_clipper2_fillrule(fillType), subj, cl);
 }
 
 // Perform union of input polygons using the positive rule, convert to ExPolygons.
 //FIXME is there any benefit of not doing the boolean / using pftEvenOdd?
 inline ExPolygons ClipperPaths_to_Slic3rExPolygons(const ClipperLib::Paths &input, bool do_union)
 {
-    return PolyTreeToExPolygons(clipper_union<ClipperLib::PolyTree>(input, do_union ? ClipperLib::pftNonZero : ClipperLib::pftEvenOdd));
+    return clipper2_union_ex(input, do_union ? ClipperLib::pftNonZero : ClipperLib::pftEvenOdd);
 }
 
 template<typename PathsProvider>
@@ -357,66 +539,66 @@ static ClipperLib::Paths raw_offset_polyline(PathsProvider &&paths, float offset
     return raw_offset<PathsProvider>(std::forward<PathsProvider>(paths), offset, joinType, miterLimit, end_type);
 }
 
-template<class TResult, typename PathsProvider>
-static TResult expand_paths(PathsProvider &&paths, float offset, ClipperLib::JoinType joinType, double miterLimit)
+// Expand each contour outward then union the (possibly overlapping) offset paths.
+// raw_offset (Clipper2) already produces correctly oriented contours/holes; the
+// union below collapses overlaps. Returns ClipperLib::Paths.
+template<typename PathsProvider>
+static ClipperLib::Paths expand_paths(PathsProvider &&paths, float offset, ClipperLib::JoinType joinType, double miterLimit)
 {
     // BBS
     //assert(offset > 0);
-    return clipper_union<TResult>(raw_offset(std::forward<PathsProvider>(paths), offset, joinType, miterLimit));
+    return clipper2_union_paths(raw_offset(std::forward<PathsProvider>(paths), offset, joinType, miterLimit));
 }
 
-// used by shrink_paths()
-template<class Container> static void remove_outermost_polygon(Container & solution);
-template<> void remove_outermost_polygon<ClipperLib::Paths>(ClipperLib::Paths &solution)
-    { if (! solution.empty()) solution.erase(solution.begin()); }
-template<> void remove_outermost_polygon<ClipperLib::PolyTree>(ClipperLib::PolyTree &solution)
-    { solution.RemoveOutermostPolygon(); }
-
-template<class TResult, typename PathsProvider>
-static TResult shrink_paths(PathsProvider &&paths, float offset, ClipperLib::JoinType joinType, double miterLimit)
+// Inner (negative) offset. raw_offset already offsets contours/holes in the proper
+// inward sense and keeps Clipper1's per-path orientation (CCW contours, CW holes);
+// a Clipper2 NonZero union then cleans up the result. This replaces the Clipper1
+// "reversed bounding box + Negative fill + remove outermost" idiom, which existed
+// only to coax Clipper1 into the same union for already-correctly-oriented paths.
+template<typename PathsProvider>
+static ClipperLib::Paths shrink_paths(PathsProvider &&paths, float offset, ClipperLib::JoinType joinType, double miterLimit)
 {
     // BBS
     //assert(offset > 0);
-    TResult out;
-    if (auto raw = raw_offset(std::forward<PathsProvider>(paths), - offset, joinType, miterLimit); ! raw.empty()) {
-        ClipperLib::Clipper clipper;
-        clipper.AddPaths(raw, ClipperLib::ptSubject, true);
-        ClipperLib::IntRect r = clipper.GetBounds();
-        clipper.AddPath({ { r.left - 10, r.bottom + 10 }, { r.right + 10, r.bottom + 10 }, { r.right + 10, r.top - 10 }, { r.left - 10, r.top - 10 } }, ClipperLib::ptSubject, true);
-        clipper.ReverseSolution(true);
-        clipper.Execute(ClipperLib::ctUnion, out, ClipperLib::pftNegative, ClipperLib::pftNegative);
-        remove_outermost_polygon(out);
-    }
-    return out;
+    ClipperLib::Paths raw = raw_offset(std::forward<PathsProvider>(paths), - offset, joinType, miterLimit);
+    if (raw.empty())
+        return {};
+    return clipper2_union_paths(raw, ClipperLib::pftNonZero);
 }
 
-template<class TResult, typename PathsProvider>
-static TResult offset_paths(PathsProvider &&paths, float offset, ClipperLib::JoinType joinType, double miterLimit)
+template<typename PathsProvider>
+static ClipperLib::Paths offset_paths(PathsProvider &&paths, float offset, ClipperLib::JoinType joinType, double miterLimit)
 {
     // BBS
     //assert(offset != 0);
 
     return offset > 0 ?
-        expand_paths<TResult>(std::forward<PathsProvider>(paths),   offset, joinType, miterLimit) :
-        shrink_paths<TResult>(std::forward<PathsProvider>(paths), - offset, joinType, miterLimit);
+        expand_paths(std::forward<PathsProvider>(paths),   offset, joinType, miterLimit) :
+        shrink_paths(std::forward<PathsProvider>(paths), - offset, joinType, miterLimit);
+}
+
+template<typename PathsProvider>
+static ExPolygons offset_paths_ex(PathsProvider &&paths, float offset, ClipperLib::JoinType joinType, double miterLimit)
+{
+    return clipper2_union_ex(offset_paths(std::forward<PathsProvider>(paths), offset, joinType, miterLimit));
 }
 
 Slic3r::Polygons offset(const Slic3r::Polygon &polygon, const float delta, ClipperLib::JoinType joinType, double miterLimit)
     { return to_polygons(raw_offset(ClipperUtils::SinglePathProvider(polygon.points), delta, joinType, miterLimit)); }
 
 Slic3r::Polygons offset(const Slic3r::Polygons &polygons, const float delta, ClipperLib::JoinType joinType, double miterLimit)
-    { return to_polygons(offset_paths<ClipperLib::Paths>(ClipperUtils::PolygonsProvider(polygons), delta, joinType, miterLimit)); }
+    { return to_polygons(offset_paths(ClipperUtils::PolygonsProvider(polygons), delta, joinType, miterLimit)); }
 Slic3r::ExPolygons offset_ex(const Slic3r::Polygons &polygons, const float delta, ClipperLib::JoinType joinType, double miterLimit)
-    { return PolyTreeToExPolygons(offset_paths<ClipperLib::PolyTree>(ClipperUtils::PolygonsProvider(polygons), delta, joinType, miterLimit)); }
+    { return offset_paths_ex(ClipperUtils::PolygonsProvider(polygons), delta, joinType, miterLimit); }
 
 Slic3r::Polygons offset(const Slic3r::Polyline &polyline, const float delta, ClipperLib::JoinType joinType, double miterLimit, ClipperLib::EndType end_type)
-    { assert(delta > 0); return to_polygons(clipper_union<ClipperLib::Paths>(raw_offset_polyline(ClipperUtils::SinglePathProvider(polyline.points), delta, joinType, miterLimit, end_type))); }
+    { assert(delta > 0); return to_polygons(clipper2_union_paths(raw_offset_polyline(ClipperUtils::SinglePathProvider(polyline.points), delta, joinType, miterLimit, end_type))); }
 
 Slic3r::Polygons offset(const Slic3r::Polyline3 &polyline, const float delta, ClipperLib::JoinType joinType, double miterLimit, ClipperLib::EndType end_type)
 {
     assert(delta > 0);
     return to_polygons(
-        clipper_union<ClipperLib::Paths>(
+        clipper2_union_paths(
             raw_offset_polyline(
                 ClipperUtils::SinglePathProvider(polyline.to_polyline().points),
                 delta,
@@ -425,30 +607,55 @@ Slic3r::Polygons offset(const Slic3r::Polyline3 &polyline, const float delta, Cl
                 end_type)));
 }
 Slic3r::Polygons offset(const Slic3r::Polylines &polylines, const float delta, ClipperLib::JoinType joinType, double miterLimit, ClipperLib::EndType end_type)
-    { assert(delta > 0); return to_polygons(clipper_union<ClipperLib::Paths>(raw_offset_polyline(ClipperUtils::PolylinesProvider(polylines), delta, joinType, miterLimit, end_type))); }
+    { assert(delta > 0); return to_polygons(clipper2_union_paths(raw_offset_polyline(ClipperUtils::PolylinesProvider(polylines), delta, joinType, miterLimit, end_type))); }
 
 Polygons contour_to_polygons(const Polygon &polygon, const float line_width, ClipperLib::JoinType join_type, double miter_limit){
-    assert(line_width > 1.f); return to_polygons(clipper_union<ClipperLib::Paths>(
+    assert(line_width > 1.f); return to_polygons(clipper2_union_paths(
         raw_offset(ClipperUtils::SinglePathProvider(polygon.points), line_width/2, join_type, miter_limit, ClipperLib::etClosedLine)));}
 Polygons contour_to_polygons(const Polygons &polygons, const float line_width, ClipperLib::JoinType join_type, double miter_limit){
-    assert(line_width > 1.f); return to_polygons(clipper_union<ClipperLib::Paths>(
+    assert(line_width > 1.f); return to_polygons(clipper2_union_paths(
         raw_offset(ClipperUtils::PolygonsProvider(polygons), line_width/2, join_type, miter_limit, ClipperLib::etClosedLine)));}
 
 // returns number of expolygons collected (0 or 1).
 static int offset_expolygon_inner(const Slic3r::ExPolygon &expoly, const float delta, ClipperLib::JoinType joinType, double miterLimit, ClipperLib::Paths &out)
 {
     // 1) Offset the outer contour.
-    ClipperLib::Paths contours;
-    {
-        ClipperLib::ClipperOffset co;
+    // A single-path Clipper2 ClipperOffset with the engine's NATIVE orientation
+    // handling (is_reversed = Area<0) reproduces Clipper1's auto-reorientation that
+    // this routine relies on: Clipper1 reorients the path so the outermost contour
+    // has positive area, applies the offset to that CCW form, and so the offset sign
+    // is reversed for CW (hole) input. raw_offset_clipper2 deliberately neutralizes
+    // that reorientation, so it must NOT be used here. There is no ShortestEdgeLength
+    // analog in Clipper2 (it merges short edges internally).
+    auto offset_path_native = [&](const Points &path, double off) -> ClipperLib::Paths {
+        Clipper2Lib::Path64 p;
+        p.reserve(path.size());
+        for (const Slic3r::Point &pt : path)
+            p.emplace_back(pt.x(), pt.y());
+        Clipper2Lib::ClipperOffset co;
         if (joinType == jtRound)
-            co.ArcTolerance = miterLimit;
+            co.ArcTolerance(miterLimit);
         else
-            co.MiterLimit = miterLimit;
-        co.ShortestEdgeLength = std::abs(delta * ClipperOffsetShortestEdgeFactor);
-        co.AddPath(expoly.contour.points, joinType, ClipperLib::etClosedPolygon);
-        co.Execute(contours, delta);
-    }
+            co.MiterLimit(miterLimit);
+        co.AddPath(p, to_clipper2_jointype(joinType), Clipper2Lib::EndType::Polygon);
+        Clipper2Lib::Paths64 sol;
+        co.Execute(off, sol);
+        // Clipper1's ClipperOffset reorients so the outermost contour has positive area;
+        // the output is therefore CCW (positive area) for both contour and hole inputs.
+        // Clipper2 instead preserves the input orientation (it offsets CW holes in place),
+        // so force each output contour CCW here to reproduce Clipper1's invariant. The
+        // downstream NonZero difference depends on this orientation.
+        ClipperLib::Paths out_paths;
+        out_paths.reserve(sol.size());
+        for (Clipper2Lib::Path64 &c2 : sol) {
+            if (!Clipper2Lib::IsPositive(c2))
+                std::reverse(c2.begin(), c2.end());
+            out_paths.emplace_back(path64_to_clipper1(c2));
+        }
+        return out_paths;
+    };
+
+    ClipperLib::Paths contours = offset_path_native(expoly.contour.points, delta);
     if (contours.empty())
         // No need to try to offset the holes.
         return 0;
@@ -461,18 +668,10 @@ static int offset_expolygon_inner(const Slic3r::ExPolygon &expoly, const float d
         ClipperLib::Paths holes;
         {
             for (const Polygon &hole : expoly.holes) {
-                ClipperLib::ClipperOffset co;
-                if (joinType == jtRound)
-                    co.ArcTolerance = miterLimit;
-                else
-                    co.MiterLimit = miterLimit;
-                co.ShortestEdgeLength = std::abs(delta * ClipperOffsetShortestEdgeFactor);
-                co.AddPath(hole.points, joinType, ClipperLib::etClosedPolygon);
-                ClipperLib::Paths out2;
                 // Execute reorients the contours so that the outer most contour has a positive area. Thus the output
                 // contours will be CCW oriented even though the input paths are CW oriented.
                 // Offset is applied after contour reorientation, thus the signum of the offset value is reversed.
-                co.Execute(out2, - delta);
+                ClipperLib::Paths out2 = offset_path_native(hole.points, - delta);
                 append(holes, std::move(out2));
             }
         }
@@ -482,9 +681,9 @@ static int offset_expolygon_inner(const Slic3r::ExPolygon &expoly, const float d
             // No hole remaining after an offset. Just copy the outer contour.
             append(out, std::move(contours));
         } else if (delta < 0) {
-            // Negative offset. There is a chance, that the offsetted hole intersects the outer contour. 
-            // Subtract the offsetted holes from the offsetted contours.            
-            if (auto output = clipper_do<ClipperLib::Paths>(ClipperLib::ctDifference, contours, holes, ClipperLib::pftNonZero); ! output.empty()) {
+            // Negative offset. There is a chance, that the offsetted hole intersects the outer contour.
+            // Subtract the offsetted holes from the offsetted contours.
+            if (auto output = clipper2_do_paths(ClipperLib::ctDifference, contours, holes, ClipperLib::pftNonZero); ! output.empty()) {
                 append(out, std::move(output));
             } else {
                 // The offsetted holes have eaten up the offsetted outer contour.
@@ -543,18 +742,18 @@ static ClipperLib::Paths expolygons_offset(const ExPolygonVector &expolygons, co
     // Unite the offsetted expolygons.
     return expolygons_collected > 1 && delta > 0 ?
         // There is a chance that the outwards offsetted expolygons may intersect. Perform a union.
-        clipper_union<ClipperLib::Paths>(output) :
+        clipper2_union_paths(output) :
         // Negative offset. The shrunk expolygons shall not mutually intersect. Just copy the output.
         output;
 }
 
-// See comment on expolygons_offset_raw. In addition, the polygons are always united to conver to polytree.
+// See comment on expolygons_offset_raw. In addition, the polygons are always united into ExPolygons.
 template<typename ExPolygonVector>
-static ClipperLib::PolyTree expolygons_offset_pt(const ExPolygonVector &expolygons, const float delta, ClipperLib::JoinType joinType, double miterLimit)
+static ExPolygons expolygons_offset_ex(const ExPolygonVector &expolygons, const float delta, ClipperLib::JoinType joinType, double miterLimit)
 {
     auto [output, expolygons_collected] = expolygons_offset_raw(expolygons, delta, joinType, miterLimit);
-    // Unite the offsetted expolygons for both the 
-    return clipper_union<ClipperLib::PolyTree>(output);
+    // Unite the offsetted expolygons.
+    return clipper2_union_ex(output);
 }
 
 Slic3r::Polygons offset(const Slic3r::ExPolygon &expolygon, const float delta, ClipperLib::JoinType joinType, double miterLimit)
@@ -569,24 +768,24 @@ Slic3r::ExPolygons offset_ex(const Slic3r::ExPolygon &expolygon, const float del
     //FIXME one may spare one Clipper Union call.
     { return ClipperPaths_to_Slic3rExPolygons(expolygon_offset(expolygon, delta, joinType, miterLimit)); }
 Slic3r::ExPolygons offset_ex(const Slic3r::ExPolygons &expolygons, const float delta, ClipperLib::JoinType joinType, double miterLimit)
-    { return PolyTreeToExPolygons(expolygons_offset_pt(expolygons, delta, joinType, miterLimit)); }
+    { return expolygons_offset_ex(expolygons, delta, joinType, miterLimit); }
 Slic3r::ExPolygons offset_ex(const Slic3r::Surfaces &surfaces, const float delta, ClipperLib::JoinType joinType, double miterLimit)
-    { return PolyTreeToExPolygons(expolygons_offset_pt(surfaces, delta, joinType, miterLimit)); }
+    { return expolygons_offset_ex(surfaces, delta, joinType, miterLimit); }
 Slic3r::ExPolygons offset_ex(const Slic3r::SurfacesPtr &surfaces, const float delta, ClipperLib::JoinType joinType, double miterLimit)
-    { return PolyTreeToExPolygons(expolygons_offset_pt(surfaces, delta, joinType, miterLimit)); }
+    { return expolygons_offset_ex(surfaces, delta, joinType, miterLimit); }
 
 Polygons offset2(const ExPolygons &expolygons, const float delta1, const float delta2, ClipperLib::JoinType joinType, double miterLimit)
 {
-    return to_polygons(offset_paths<ClipperLib::Paths>(expolygons_offset(expolygons, delta1, joinType, miterLimit), delta2, joinType, miterLimit));
+    return to_polygons(offset_paths(expolygons_offset(expolygons, delta1, joinType, miterLimit), delta2, joinType, miterLimit));
 }
 ExPolygons offset2_ex(const ExPolygons &expolygons, const float delta1, const float delta2, ClipperLib::JoinType joinType, double miterLimit)
 {
-    return PolyTreeToExPolygons(offset_paths<ClipperLib::PolyTree>(expolygons_offset(expolygons, delta1, joinType, miterLimit), delta2, joinType, miterLimit));
+    return offset_paths_ex(expolygons_offset(expolygons, delta1, joinType, miterLimit), delta2, joinType, miterLimit);
 }
 ExPolygons offset2_ex(const Surfaces &surfaces, const float delta1, const float delta2, ClipperLib::JoinType joinType, double miterLimit)
 {
     //FIXME it may be more efficient to offset to_expolygons(surfaces) instead of to_polygons(surfaces).
-    return PolyTreeToExPolygons(offset_paths<ClipperLib::PolyTree>(expolygons_offset(surfaces, delta1, joinType, miterLimit), delta2, joinType, miterLimit));
+    return offset_paths_ex(expolygons_offset(surfaces, delta1, joinType, miterLimit), delta2, joinType, miterLimit);
 }
 
 // Offset outside, then inside produces morphological closing. All deltas should be positive.
@@ -594,20 +793,20 @@ Slic3r::Polygons closing(const Slic3r::Polygons &polygons, const float delta1, c
 {
     assert(delta1 > 0);
     assert(delta2 > 0);
-    return to_polygons(shrink_paths<ClipperLib::Paths>(expand_paths<ClipperLib::Paths>(ClipperUtils::PolygonsProvider(polygons), delta1, joinType, miterLimit), delta2, joinType, miterLimit));
+    return to_polygons(shrink_paths(expand_paths(ClipperUtils::PolygonsProvider(polygons), delta1, joinType, miterLimit), delta2, joinType, miterLimit));
 }
 Slic3r::ExPolygons closing_ex(const Slic3r::Polygons &polygons, const float delta1, const float delta2, ClipperLib::JoinType joinType, double miterLimit)
 {
     assert(delta1 > 0);
     assert(delta2 > 0);
-    return PolyTreeToExPolygons(shrink_paths<ClipperLib::PolyTree>(expand_paths<ClipperLib::Paths>(ClipperUtils::PolygonsProvider(polygons), delta1, joinType, miterLimit), delta2, joinType, miterLimit));
+    return clipper2_union_ex(shrink_paths(expand_paths(ClipperUtils::PolygonsProvider(polygons), delta1, joinType, miterLimit), delta2, joinType, miterLimit));
 }
 Slic3r::ExPolygons closing_ex(const Slic3r::Surfaces &surfaces, const float delta1, const float delta2, ClipperLib::JoinType joinType, double miterLimit)
 {
     assert(delta1 > 0);
     assert(delta2 > 0);
     //FIXME it may be more efficient to offset to_expolygons(surfaces) instead of to_polygons(surfaces).
-    return PolyTreeToExPolygons(shrink_paths<ClipperLib::PolyTree>(expand_paths<ClipperLib::Paths>(ClipperUtils::SurfacesProvider(surfaces), delta1, joinType, miterLimit), delta2, joinType, miterLimit));
+    return clipper2_union_ex(shrink_paths(expand_paths(ClipperUtils::SurfacesProvider(surfaces), delta1, joinType, miterLimit), delta2, joinType, miterLimit));
 }
 
 // Offset inside, then outside produces morphological opening. All deltas should be positive.
@@ -615,62 +814,33 @@ Slic3r::Polygons opening(const Slic3r::Polygons &polygons, const float delta1, c
 {
     assert(delta1 > 0);
     assert(delta2 > 0);
-    return to_polygons(expand_paths<ClipperLib::Paths>(shrink_paths<ClipperLib::Paths>(ClipperUtils::PolygonsProvider(polygons), delta1, joinType, miterLimit), delta2, joinType, miterLimit));
+    return to_polygons(expand_paths(shrink_paths(ClipperUtils::PolygonsProvider(polygons), delta1, joinType, miterLimit), delta2, joinType, miterLimit));
 }
 Slic3r::Polygons opening(const Slic3r::ExPolygons &expolygons, const float delta1, const float delta2, ClipperLib::JoinType joinType, double miterLimit)
 {
     assert(delta1 > 0);
     assert(delta2 > 0);
-    return to_polygons(expand_paths<ClipperLib::Paths>(shrink_paths<ClipperLib::Paths>(ClipperUtils::ExPolygonsProvider(expolygons), delta1, joinType, miterLimit), delta2, joinType, miterLimit));
+    return to_polygons(expand_paths(shrink_paths(ClipperUtils::ExPolygonsProvider(expolygons), delta1, joinType, miterLimit), delta2, joinType, miterLimit));
 }
 Slic3r::Polygons opening(const Slic3r::Surfaces &surfaces, const float delta1, const float delta2, ClipperLib::JoinType joinType, double miterLimit)
 {
     assert(delta1 > 0);
     assert(delta2 > 0);
     //FIXME it may be more efficient to offset to_expolygons(surfaces) instead of to_polygons(surfaces).
-    return to_polygons(expand_paths<ClipperLib::Paths>(shrink_paths<ClipperLib::Paths>(ClipperUtils::SurfacesProvider(surfaces), delta1, joinType, miterLimit), delta2, joinType, miterLimit));
-}
-
-// Fix of #117: A large fractal pyramid takes ages to slice
-// The Clipper library has difficulties processing overlapping polygons.
-// Namely, the function ClipperLib::JoinCommonEdges() has potentially a terrible time complexity if the output
-// of the operation is of the PolyTree type.
-// This function implemenets a following workaround:
-// 1) Peform the Clipper operation with the output to Paths. This method handles overlaps in a reasonable time.
-// 2) Run Clipper Union once again to extract the PolyTree from the result of 1).
-template<typename PathProvider1, typename PathProvider2>
-inline ClipperLib::PolyTree clipper_do_polytree(
-    const ClipperLib::ClipType       clipType,
-    PathProvider1                  &&subject,
-    PathProvider2                  &&clip,
-    const ClipperLib::PolyFillType   fillType)
-{
-    // Perform the operation with the output to input_subject.
-    // This pass does not generate a PolyTree, which is a very expensive operation with the current Clipper library
-    // if there are overapping edges.
-    if (auto output = clipper_do<ClipperLib::Paths>(clipType, subject, clip, fillType); ! output.empty())
-        // Perform an additional Union operation to generate the PolyTree ordering.
-        return clipper_union<ClipperLib::PolyTree>(output, fillType);
-    return ClipperLib::PolyTree();
-}
-template<typename PathProvider1, typename PathProvider2>
-inline ClipperLib::PolyTree clipper_do_polytree(
-    const ClipperLib::ClipType       clipType,
-    PathProvider1                  &&subject,
-    PathProvider2                  &&clip,
-    const ClipperLib::PolyFillType   fillType,
-    const ApplySafetyOffset          do_safety_offset)
-{
-    assert(do_safety_offset == ApplySafetyOffset::No || clipType != ClipperLib::ctUnion);
-    return do_safety_offset == ApplySafetyOffset::Yes ? 
-        clipper_do_polytree(clipType, std::forward<PathProvider1>(subject), safety_offset(std::forward<PathProvider2>(clip)), fillType) :
-        clipper_do_polytree(clipType, std::forward<PathProvider1>(subject), std::forward<PathProvider2>(clip), fillType);
+    return to_polygons(expand_paths(shrink_paths(ClipperUtils::SurfacesProvider(surfaces), delta1, joinType, miterLimit), delta2, joinType, miterLimit));
 }
 
 template<class TSubj, class TClip>
 static inline Polygons _clipper(ClipperLib::ClipType clipType, TSubj &&subject, TClip &&clip, ApplySafetyOffset do_safety_offset)
 {
-    return to_polygons(clipper_do<ClipperLib::Paths>(clipType, std::forward<TSubj>(subject), std::forward<TClip>(clip), ClipperLib::pftNonZero, do_safety_offset));
+    if (do_safety_offset == ApplySafetyOffset::No)
+        return clipper2_clip_polygons(to_clipper2_cliptype(clipType), Clipper2Lib::FillRule::NonZero,
+                                      provider_to_paths64(std::forward<TSubj>(subject)),
+                                      provider_to_paths64(std::forward<TClip>(clip)));
+    // Safety-offset path: apply the safety offset (Clipper2) to the clip, then the Clipper2 boolean.
+    return clipper2_clip_polygons(to_clipper2_cliptype(clipType), Clipper2Lib::FillRule::NonZero,
+                                  provider_to_paths64(std::forward<TSubj>(subject)),
+                                  to_paths64(safety_offset(std::forward<TClip>(clip))));
 }
 
 Slic3r::Polygons diff(const Slic3r::Polygon &subject, const Slic3r::Polygon &clip, ApplySafetyOffset do_safety_offset)
@@ -724,7 +894,11 @@ Slic3r::Polygons union_(const Slic3r::Polygons &subject)
 Slic3r::Polygons union_(const Slic3r::ExPolygons &subject)
     { return _clipper(ClipperLib::ctUnion, ClipperUtils::ExPolygonsProvider(subject), ClipperUtils::EmptyPathsProvider(), ApplySafetyOffset::No); }
 Slic3r::Polygons union_(const Slic3r::Polygons &subject, const ClipperLib::PolyFillType fillType)
-    { return to_polygons(clipper_do<ClipperLib::Paths>(ClipperLib::ctUnion, ClipperUtils::PolygonsProvider(subject), ClipperUtils::EmptyPathsProvider(), fillType, ApplySafetyOffset::No)); }
+    {
+        return clipper2_clip_polygons(Clipper2Lib::ClipType::Union, to_clipper2_fillrule(fillType),
+                                      provider_to_paths64(ClipperUtils::PolygonsProvider(subject)),
+                                      Clipper2Lib::Paths64{});
+    }
 Slic3r::Polygons union_(const Slic3r::Polygons &subject, const Slic3r::Polygons &subject2)
     {
         // BBS
@@ -736,7 +910,14 @@ Slic3r::Polygons union_(const Slic3r::Polygons &subject, const Slic3r::Polygons 
 
 template <typename TSubject, typename TClip>
 static ExPolygons _clipper_ex(ClipperLib::ClipType clipType, TSubject &&subject,  TClip &&clip, ApplySafetyOffset do_safety_offset, ClipperLib::PolyFillType fill_type = ClipperLib::pftNonZero)
-    { return PolyTreeToExPolygons(clipper_do_polytree(clipType, std::forward<TSubject>(subject), std::forward<TClip>(clip), fill_type, do_safety_offset)); }
+{
+    if (do_safety_offset == ApplySafetyOffset::No)
+        return clipper2_clip_ex(to_clipper2_cliptype(clipType), to_clipper2_fillrule(fill_type),
+                                provider_to_paths64(std::forward<TSubject>(subject)),
+                                provider_to_paths64(std::forward<TClip>(clip)));
+    // Safety-offset path: apply the safety offset (Clipper2) to the clip, then the Clipper2 boolean.
+    return clipper2_do_ex(clipType, std::forward<TSubject>(subject), std::forward<TClip>(clip), fill_type, do_safety_offset);
+}
 
 Slic3r::ExPolygons diff_ex(const Slic3r::Polygons &subject, const Slic3r::Polygons &clip, ApplySafetyOffset do_safety_offset)
     { return _clipper_ex(ClipperLib::ctDifference, ClipperUtils::PolygonsProvider(subject), ClipperUtils::PolygonsProvider(clip), do_safety_offset); }
@@ -813,11 +994,11 @@ Slic3r::ExPolygons intersection_ex(const Slic3r::SurfacesPtr &subject, const Sli
 Slic3r::ExPolygons union_ex(const Slic3r::Polygons &subject, ClipperLib::PolyFillType fill_type)
     { return _clipper_ex(ClipperLib::ctUnion, ClipperUtils::PolygonsProvider(subject), ClipperUtils::EmptyPathsProvider(), ApplySafetyOffset::No, fill_type); }
 Slic3r::ExPolygons union_ex(const Slic3r::ExPolygons &subject)
-    { return PolyTreeToExPolygons(clipper_do_polytree(ClipperLib::ctUnion, ClipperUtils::ExPolygonsProvider(subject), ClipperUtils::EmptyPathsProvider(), ClipperLib::pftNonZero)); }
+    { return clipper2_do_ex(ClipperLib::ctUnion, ClipperUtils::ExPolygonsProvider(subject), ClipperUtils::EmptyPathsProvider(), ClipperLib::pftNonZero); }
 Slic3r::ExPolygons union_ex(const Slic3r::ExPolygons &subject, const Slic3r::Polygons &subject2)
-    { return PolyTreeToExPolygons(clipper_do_polytree(ClipperLib::ctUnion, ClipperUtils::ExPolygonsProvider(subject), ClipperUtils::PolygonsProvider(subject2), ClipperLib::pftNonZero)); }
+    { return clipper2_do_ex(ClipperLib::ctUnion, ClipperUtils::ExPolygonsProvider(subject), ClipperUtils::PolygonsProvider(subject2), ClipperLib::pftNonZero); }
 Slic3r::ExPolygons union_ex(const Slic3r::Surfaces &subject)
-    { return PolyTreeToExPolygons(clipper_do_polytree(ClipperLib::ctUnion, ClipperUtils::SurfacesProvider(subject), ClipperUtils::EmptyPathsProvider(), ClipperLib::pftNonZero)); }
+    { return clipper2_do_ex(ClipperLib::ctUnion, ClipperUtils::SurfacesProvider(subject), ClipperUtils::EmptyPathsProvider(), ClipperLib::pftNonZero); }
 // BBS
 Slic3r::ExPolygons union_ex(const Slic3r::ExPolygons& poly1, const Slic3r::ExPolygons& poly2, bool safety_offset_)
     {
@@ -837,12 +1018,25 @@ Slic3r::ExPolygons xor_ex(const Slic3r::ExPolygons &subject, const Slic3r::ExPol
 template<typename PathsProvider1, typename PathsProvider2>
 Polylines _clipper_pl_open(ClipperLib::ClipType clipType, PathsProvider1 &&subject, PathsProvider2 &&clip)
 {
-    ClipperLib::Clipper clipper;
-    clipper.AddPaths(std::forward<PathsProvider1>(subject), ClipperLib::ptSubject, false);
-    clipper.AddPaths(std::forward<PathsProvider2>(clip), ClipperLib::ptClip, true);
-    ClipperLib::PolyTree retval;
-    clipper.Execute(clipType, retval, ClipperLib::pftNonZero, ClipperLib::pftNonZero);
-    return PolyTreeToPolylines(std::move(retval));
+    // Open-path clipping on Clipper2: the subject paths are open, the clip is closed.
+    // Clipper2 returns the closed and open portions of the solution separately; collect both.
+    Clipper2Lib::Clipper64 c;
+    Clipper2Lib::Paths64 subj = provider_to_paths64(std::forward<PathsProvider1>(subject));
+    if (!subj.empty())
+        c.AddOpenSubject(subj);
+    Clipper2Lib::Paths64 cl = provider_to_paths64(std::forward<PathsProvider2>(clip));
+    if (!cl.empty())
+        c.AddClip(cl);
+    Clipper2Lib::Paths64 solution, solution_open;
+    c.Execute(to_clipper2_cliptype(clipType), Clipper2Lib::FillRule::NonZero, solution, solution_open);
+
+    Polylines out;
+    out.reserve(solution.size() + solution_open.size());
+    for (const Clipper2Lib::Path64 &p : solution)
+        out.emplace_back(path64_to_clipper1(p));
+    for (const Clipper2Lib::Path64 &p : solution_open)
+        out.emplace_back(path64_to_clipper1(p));
+    return out;
 }
 
 // If the split_at_first_point() call above happens to split the polygon inside the clipping area
@@ -950,15 +1144,52 @@ Lines _clipper_ln(ClipperLib::ClipType clipType, const Lines &subject, const Pol
     return retval;
 }
 
-// Convert polygons / expolygons into ClipperLib::PolyTree using ClipperLib::pftEvenOdd, thus union will NOT be performed.
+// Run a Clipper2 union (EvenOdd) and assemble the result into a ClipperLib::PolyTree,
+// preserving the nesting (and thus IsHole() parity) the downstream PolyNode traversal
+// relies on. The PolyTree return type is part of the public API and is consumed as a
+// ClipperLib data container (SLA::Pad, union_pt_chained_outside_in), so it is kept; only
+// the boolean engine moves to Clipper2.
+static ClipperLib::PolyTree clipper2_union_pt(const Clipper2Lib::Paths64 &subject, Clipper2Lib::FillRule fillRule)
+{
+    Clipper2Lib::Clipper64 c;
+    if (!subject.empty())
+        c.AddSubject(subject);
+    Clipper2Lib::PolyTree64 solution;
+    c.Execute(Clipper2Lib::ClipType::Union, fillRule, solution);
+
+    // Flatten the Clipper2 polytree into parallel parents/contours arrays
+    // (parents-before-children), then build the ClipperLib::PolyTree.
+    std::vector<int>             parents;
+    std::vector<ClipperLib::Path> contours;
+    struct Flatten {
+        static void rec(const Clipper2Lib::PolyPath64 &node, int parent,
+                        std::vector<int> &parents, std::vector<ClipperLib::Path> &contours)
+        {
+            for (size_t i = 0; i < node.Count(); ++i) {
+                const Clipper2Lib::PolyPath64 &child = *node.Child(i);
+                int idx = int(contours.size());
+                parents.emplace_back(parent);
+                contours.emplace_back(path64_to_clipper1(child.Polygon()));
+                rec(child, idx, parents, contours);
+            }
+        }
+    };
+    Flatten::rec(solution, -1, parents, contours);
+
+    ClipperLib::PolyTree out;
+    out.BuildFromNesting(parents, std::move(contours));
+    return out;
+}
+
+// Convert polygons / expolygons into ClipperLib::PolyTree using EvenOdd, thus union will NOT be performed.
 // If the contours are not intersecting, their orientation shall not be modified by union_pt().
 ClipperLib::PolyTree union_pt(const Polygons &subject)
 {
-    return clipper_do<ClipperLib::PolyTree>(ClipperLib::ctUnion, ClipperUtils::PolygonsProvider(subject), ClipperUtils::EmptyPathsProvider(), ClipperLib::pftEvenOdd);
+    return clipper2_union_pt(provider_to_paths64(ClipperUtils::PolygonsProvider(subject)), Clipper2Lib::FillRule::EvenOdd);
 }
 ClipperLib::PolyTree union_pt(const ExPolygons &subject)
 {
-    return clipper_do<ClipperLib::PolyTree>(ClipperLib::ctUnion, ClipperUtils::ExPolygonsProvider(subject), ClipperUtils::EmptyPathsProvider(), ClipperLib::pftEvenOdd);
+    return clipper2_union_pt(provider_to_paths64(ClipperUtils::ExPolygonsProvider(subject)), Clipper2Lib::FillRule::EvenOdd);
 }
 
 // Simple spatial ordering of Polynodes
@@ -1018,46 +1249,34 @@ Polygons union_pt_chained_outside_in(const Polygons &subject)
 
 Polygons simplify_polygons(const Polygons &subject)
 {
-    ClipperLib::Paths output;
-    ClipperLib::Clipper c;
-//    c.PreserveCollinear(true);
-    //FIXME StrictlySimple is very expensive! Is it needed?
-    c.StrictlySimple(true);
-    c.AddPaths(ClipperUtils::PolygonsProvider(subject), ClipperLib::ptSubject, true);
-    c.Execute(ClipperLib::ctUnion, output, ClipperLib::pftNonZero, ClipperLib::pftNonZero);
-
-    // convert into Slic3r polygons
-    return to_polygons(std::move(output));
+    // Clipper2 always emits strictly-simple (non self-intersecting) output, so a plain
+    // NonZero union is the equivalent of the old StrictlySimple Clipper1 union.
+    return clipper2_clip_polygons(Clipper2Lib::ClipType::Union, Clipper2Lib::FillRule::NonZero,
+                                  provider_to_paths64(ClipperUtils::PolygonsProvider(subject)),
+                                  Clipper2Lib::Paths64{});
 }
 
 ExPolygons simplify_polygons_ex(const Polygons &subject)
 {
-    ClipperLib::PolyTree polytree;
-    ClipperLib::Clipper c;
-//    c.PreserveCollinear(true);
-    //FIXME StrictlySimple is very expensive! Is it needed?
-    c.StrictlySimple(true);
-    c.AddPaths(ClipperUtils::PolygonsProvider(subject), ClipperLib::ptSubject, true);
-    c.Execute(ClipperLib::ctUnion, polytree, ClipperLib::pftNonZero, ClipperLib::pftNonZero);
-    
-    // convert into ExPolygons
-    return PolyTreeToExPolygons(std::move(polytree));
+    return clipper2_clip_ex(Clipper2Lib::ClipType::Union, Clipper2Lib::FillRule::NonZero,
+                            provider_to_paths64(ClipperUtils::PolygonsProvider(subject)),
+                            Clipper2Lib::Paths64{});
 }
 
 Polygons top_level_islands(const Slic3r::Polygons &polygons)
 {
-    // init Clipper
-    ClipperLib::Clipper clipper;
-    clipper.Clear();
-    // perform union
-    clipper.AddPaths(ClipperUtils::PolygonsProvider(polygons), ClipperLib::ptSubject, true);
-    ClipperLib::PolyTree polytree;
-    clipper.Execute(ClipperLib::ctUnion, polytree, ClipperLib::pftEvenOdd, ClipperLib::pftEvenOdd); 
-    // Convert only the top level islands to the output.
+    // Perform an EvenOdd union on Clipper2 producing a polytree, then keep only the
+    // top-level islands (outer contours, ignoring their holes/children).
+    Clipper2Lib::Clipper64 c;
+    Clipper2Lib::Paths64 subj = provider_to_paths64(ClipperUtils::PolygonsProvider(polygons));
+    if (!subj.empty())
+        c.AddSubject(subj);
+    Clipper2Lib::PolyTree64 polytree;
+    c.Execute(Clipper2Lib::ClipType::Union, Clipper2Lib::FillRule::EvenOdd, polytree);
     Polygons out;
-    out.reserve(polytree.ChildCount());
-    for (int i = 0; i < polytree.ChildCount(); ++i)
-        out.emplace_back(std::move(polytree.Childs[i]->Contour));
+    out.reserve(polytree.Count());
+    for (size_t i = 0; i < polytree.Count(); ++i)
+        out.emplace_back(path64_to_clipper1(polytree[i]->Polygon()));
     return out;
 }
 
@@ -1071,10 +1290,13 @@ ClipperLib::Paths fix_after_outer_offset(
 {
   	ClipperLib::Paths solution;
   	if (! input.empty()) {
-		ClipperLib::Clipper clipper;
-	  	clipper.AddPath(input, ClipperLib::ptSubject, true);
+		Clipper2Lib::Path64 in = path_to_path64(input);
+		Clipper2Lib::Clipper64 clipper;
 		clipper.ReverseSolution(reverse_result);
-		clipper.Execute(ClipperLib::ctUnion, solution, filltype, filltype);
+		clipper.AddSubject(Clipper2Lib::Paths64{ in });
+		Clipper2Lib::Paths64 sol;
+		clipper.Execute(Clipper2Lib::ClipType::Union, to_clipper2_fillrule(filltype), sol);
+		solution = paths64_to_clipper1(sol);
 	}
     return solution;
 }
@@ -1089,18 +1311,30 @@ ClipperLib::Paths fix_after_inner_offset(
 {
   	ClipperLib::Paths solution;
   	if (! input.empty()) {
-		ClipperLib::Clipper clipper;
-		clipper.AddPath(input, ClipperLib::ptSubject, true);
-		ClipperLib::IntRect r = clipper.GetBounds();
+		Clipper2Lib::Path64 in = path_to_path64(input);
+		Clipper2Lib::Rect64 r = Clipper2Lib::GetBounds(in);
 		r.left -= 10; r.top -= 10; r.right += 10; r.bottom += 10;
-		if (filltype == ClipperLib::pftPositive)
-			clipper.AddPath({ ClipperLib::IntPoint(r.left, r.bottom), ClipperLib::IntPoint(r.left, r.top), ClipperLib::IntPoint(r.right, r.top), ClipperLib::IntPoint(r.right, r.bottom) }, ClipperLib::ptSubject, true);
-		else
-			clipper.AddPath({ ClipperLib::IntPoint(r.left, r.bottom), ClipperLib::IntPoint(r.right, r.bottom), ClipperLib::IntPoint(r.right, r.top), ClipperLib::IntPoint(r.left, r.top) }, ClipperLib::ptSubject, true);
+		Clipper2Lib::Path64 bbox = (filltype == ClipperLib::pftPositive) ?
+			Clipper2Lib::Path64{ { r.left, r.bottom }, { r.left, r.top }, { r.right, r.top }, { r.right, r.bottom } } :
+			Clipper2Lib::Path64{ { r.left, r.bottom }, { r.right, r.bottom }, { r.right, r.top }, { r.left, r.top } };
+		Clipper2Lib::Clipper64 clipper;
 		clipper.ReverseSolution(reverse_result);
-		clipper.Execute(ClipperLib::ctUnion, solution, filltype, filltype);
-		if (! solution.empty())
-			solution.erase(solution.begin());
+		clipper.AddSubject(Clipper2Lib::Paths64{ in, bbox });
+		Clipper2Lib::Paths64 sol;
+		clipper.Execute(Clipper2Lib::ClipType::Union, to_clipper2_fillrule(filltype), sol);
+		// The added bounding box becomes the outermost contour of the union; drop it.
+		// Clipper2 does not guarantee solution ordering, so remove the largest-area
+		// contour (the bbox) rather than the first one (which Clipper1 happened to emit).
+		if (! sol.empty()) {
+			size_t outer = 0;
+			double max_abs_area = -1.0;
+			for (size_t i = 0; i < sol.size(); ++i) {
+				double a = std::abs(Clipper2Lib::Area(sol[i]));
+				if (a > max_abs_area) { max_abs_area = a; outer = i; }
+			}
+			sol.erase(sol.begin() + outer);
+		}
+		solution = paths64_to_clipper1(sol);
 	}
 	return solution;
 }
@@ -1277,11 +1511,7 @@ Polygons variable_offset_inner(const ExPolygon &expoly, const std::vector<std::v
 	if (holes.empty())
 		output = std::move(contours);
 	else {
-		ClipperLib::Clipper clipper;
-		clipper.Clear();
-		clipper.AddPaths(contours, ClipperLib::ptSubject, true);
-		clipper.AddPaths(holes, ClipperLib::ptClip, true);
-		clipper.Execute(ClipperLib::ctDifference, output, ClipperLib::pftNonZero, ClipperLib::pftNonZero);
+		output = clipper2_do_paths(ClipperLib::ctDifference, contours, holes, ClipperLib::pftNonZero);
 	}
 
 	return to_polygons(std::move(output));
@@ -1319,11 +1549,7 @@ for (const std::vector<float>& ds : deltas)
 	if (holes.empty())
 		output = std::move(contours);
 	else {
-		ClipperLib::Clipper clipper;
-		clipper.Clear();
-		clipper.AddPaths(contours, ClipperLib::ptSubject, true);
-		clipper.AddPaths(holes, ClipperLib::ptClip, true);
-		clipper.Execute(ClipperLib::ctDifference, output, ClipperLib::pftNonZero, ClipperLib::pftNonZero);
+		output = clipper2_do_paths(ClipperLib::ctDifference, contours, holes, ClipperLib::pftNonZero);
 	}
 
 	return to_polygons(std::move(output));
@@ -1363,12 +1589,8 @@ for (const std::vector<float>& ds : deltas)
 		for (ClipperLib::Path &path : contours) 
 			output.emplace_back(std::move(path));
 	} else {
-		ClipperLib::Clipper clipper;
-		clipper.AddPaths(contours, ClipperLib::ptSubject, true);
-		clipper.AddPaths(holes, ClipperLib::ptClip, true);
-	    ClipperLib::PolyTree polytree;
-		clipper.Execute(ClipperLib::ctDifference, polytree, ClipperLib::pftNonZero, ClipperLib::pftNonZero);
-	    output = PolyTreeToExPolygons(std::move(polytree));
+		output = clipper2_clip_ex(Clipper2Lib::ClipType::Difference, Clipper2Lib::FillRule::NonZero,
+		                          to_paths64(contours), to_paths64(holes));
 	}
 
 	return output;
@@ -1409,12 +1631,8 @@ ExPolygons variable_offset_inner_ex(const ExPolygon &expoly, const std::vector<s
 		for (ClipperLib::Path &path : contours) 
 			output.emplace_back(std::move(path));
 	} else {
-		ClipperLib::Clipper clipper;
-		clipper.AddPaths(contours, ClipperLib::ptSubject, true);
-		clipper.AddPaths(holes, ClipperLib::ptClip, true);
-	    ClipperLib::PolyTree polytree;
-		clipper.Execute(ClipperLib::ctDifference, polytree, ClipperLib::pftNonZero, ClipperLib::pftNonZero);
-	    output = PolyTreeToExPolygons(std::move(polytree));
+		output = clipper2_clip_ex(Clipper2Lib::ClipType::Difference, Clipper2Lib::FillRule::NonZero,
+		                          to_paths64(contours), to_paths64(holes));
 	}
 
 	return output;

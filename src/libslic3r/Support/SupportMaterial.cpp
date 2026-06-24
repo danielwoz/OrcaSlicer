@@ -2314,47 +2314,63 @@ SupportGeneratorLayersPtr PrintObjectSupportMaterial::top_contact_layers(
     if (object.print()->canceled())
         return SupportGeneratorLayersPtr();
 
-    for (size_t layer_id = layer_id_start; layer_id < num_layers; layer_id++) {
-        const Layer& layer = *object.layers()[layer_id];
-        Polygons            overhang_polygons = to_polygons(overhangs_per_layers[layer_id]);
-        Polygons            lower_layer_polygons = (layer_id == 0) ? Polygons() : to_polygons(object.layers()[layer_id - 1]->lslices);
-        SlicesMarginCache   slices_margin;
+    // Contact-area generation per object layer is embarrassingly parallel: each iteration writes only to its
+    // own distinct contact_out[layer_id*2] / [layer_id*2+1] slots (the vector is pre-sized above), reads only
+    // read-only shared state (object layers, annotations, configs), and uses per-iteration local scratch
+    // (overhang_polygons / lower_layer_polygons / slices_margin). New support layers are allocated through the
+    // mutex-guarded layer_storage.allocate(), and the backing Slic3r::deque keeps element pointers stable, so
+    // concurrent allocation is safe. (Upstream PrusaSlicer runs this loop as a tbb::parallel_for; OrcaSlicer had
+    // serialized it.)
+    tbb::parallel_for(tbb::blocked_range<size_t>(layer_id_start, num_layers),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t layer_id = range.begin(); layer_id < range.end(); layer_id++) {
+                if (object.print()->canceled())
+                    break;
+                const Layer& layer = *object.layers()[layer_id];
+                Polygons            overhang_polygons = to_polygons(overhangs_per_layers[layer_id]);
+                Polygons            lower_layer_polygons = (layer_id == 0) ? Polygons() : to_polygons(object.layers()[layer_id - 1]->lslices);
+                SlicesMarginCache   slices_margin;
 
-        auto [contact_polygons, enforcer_polygons, no_interface_offset] =
-            detect_contacts(layer, layer_id, overhang_polygons, lower_layer_polygons, *m_print_config, *m_object_config, annotations, slices_margin, m_support_params.gap_xy
+                auto [contact_polygons, enforcer_polygons, no_interface_offset] =
+                    detect_contacts(layer, layer_id, overhang_polygons, lower_layer_polygons, *m_print_config, *m_object_config, annotations, slices_margin, m_support_params.gap_xy
 #ifdef SLIC3R_DEBUG
-                , iRun
+                        , iRun
 #endif // SLIC3R_DEBUG
-            );
+                    );
 
-        // Now apply the contact areas to the layer where they need to be made.
-        if (!contact_polygons.empty() || !overhang_polygons.empty()) {
-            // Allocate the two empty layers.
-            auto [new_layer, bridging_layer] = new_contact_layer(*m_print_config, *m_object_config, m_slicing_params, m_support_params.support_layer_height_min, layer, layer_storage);
-            if (new_layer) {
-                // Fill the non-bridging layer with polygons.
-                fill_contact_layer(*new_layer, layer_id, m_slicing_params,
-                    *m_object_config, slices_margin, overhang_polygons, contact_polygons, enforcer_polygons, lower_layer_polygons,
-                    m_support_params.support_material_flow, no_interface_offset
+                // Now apply the contact areas to the layer where they need to be made.
+                if (!contact_polygons.empty() || !overhang_polygons.empty()) {
+                    // Allocate the two empty layers.
+                    auto [new_layer, bridging_layer] = new_contact_layer(*m_print_config, *m_object_config, m_slicing_params, m_support_params.support_layer_height_min, layer, layer_storage);
+                    if (new_layer) {
+                        // Fill the non-bridging layer with polygons.
+                        fill_contact_layer(*new_layer, layer_id, m_slicing_params,
+                            *m_object_config, slices_margin, overhang_polygons, contact_polygons, enforcer_polygons, lower_layer_polygons,
+                            m_support_params.support_material_flow, no_interface_offset
 #ifdef SLIC3R_DEBUG
-                    , iRun, layer
+                            , iRun, layer
 #endif // SLIC3R_DEBUG
-                );
-                // Insert new layer even if there is no interface generated: Likely the support angle is not steep enough to require dense interface,
-                // however generating a sparse support will be useful for the object stability.
-                // if (! new_layer->polygons.empty())
-                contact_out[layer_id * 2] = new_layer;
-                if (bridging_layer != nullptr) {
-                    bridging_layer->polygons = new_layer->polygons;
-                    bridging_layer->contact_polygons = std::make_unique<Polygons>(*new_layer->contact_polygons);
-                    bridging_layer->overhang_polygons = std::make_unique<Polygons>(*new_layer->overhang_polygons);
-                    if (new_layer->enforcer_polygons)
-                        bridging_layer->enforcer_polygons = std::make_unique<Polygons>(*new_layer->enforcer_polygons);
-                    contact_out[layer_id * 2 + 1] = bridging_layer;
+                        );
+                        // Insert new layer even if there is no interface generated: Likely the support angle is not steep enough to require dense interface,
+                        // however generating a sparse support will be useful for the object stability.
+                        // if (! new_layer->polygons.empty())
+                        contact_out[layer_id * 2] = new_layer;
+                        if (bridging_layer != nullptr) {
+                            bridging_layer->polygons = new_layer->polygons;
+                            bridging_layer->contact_polygons = std::make_unique<Polygons>(*new_layer->contact_polygons);
+                            bridging_layer->overhang_polygons = std::make_unique<Polygons>(*new_layer->overhang_polygons);
+                            if (new_layer->enforcer_polygons)
+                                bridging_layer->enforcer_polygons = std::make_unique<Polygons>(*new_layer->enforcer_polygons);
+                            contact_out[layer_id * 2 + 1] = bridging_layer;
+                        }
+                    }
                 }
             }
         }
-    }
+    );
+
+    if (object.print()->canceled())
+        return SupportGeneratorLayersPtr();
 
     // Compress contact_out, remove the nullptr items.
     remove_nulls(contact_out);

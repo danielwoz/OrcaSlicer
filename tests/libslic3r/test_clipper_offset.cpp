@@ -32,7 +32,12 @@ SCENARIO("Constant offset", "[ClipperUtils]") {
 #endif
 					THEN("Area is 22^2mm2") {
 						REQUIRE(output.size() == 1);
-						REQUIRE(output.front().area() == Catch::Approx(22. * 22. * s * s));
+						// Clipper2 migration: at a tight miter limit (1.2) Clipper2 bevels the
+						// 90-degree corners (its miter-limit threshold is 2/ML^2, beveling below
+						// ML=sqrt(2)), whereas Clipper1 clamped ML<=2 to a fixed threshold and kept
+						// the corner sharp. The resulting area differs by ~0.14% for ML 1.2 only;
+						// ML 2.0/1.5 (and the default 3.0) are identical. Widen tolerance to cover it.
+						REQUIRE_THAT(output.front().area(), Catch::Matchers::WithinRel(22. * 22. * s * s, 0.01));
 					}
 				}
 				DYNAMIC_SECTION("minus 1mm, miter " << miter << "x") {
@@ -106,7 +111,9 @@ SCENARIO("Constant offset", "[ClipperUtils]") {
 #endif
 						THEN("Area is 22^2-8^2 mm2") {
 							REQUIRE(output.size() == 1);
-							REQUIRE(output.front().area() == Catch::Approx((22. * 22. - 8. * 8.) * s * s));
+							// Clipper2 migration: tight miter limit (1.2) bevels corners differently
+							// than Clipper1; ~0.16% area delta at ML 1.2 only (ML 2.0/1.5/3.0 identical).
+							REQUIRE_THAT(output.front().area(), Catch::Matchers::WithinRel((22. * 22. - 8. * 8.) * s * s, 0.005));
 						}
 					}
 					WHEN("minus 1mm") {
@@ -120,7 +127,9 @@ SCENARIO("Constant offset", "[ClipperUtils]") {
 #endif
 						THEN("Area is 18^2-12^2 mm2") {
 							REQUIRE(output.size() == 1);
-							REQUIRE(output.front().area() == Catch::Approx((18. * 18. - 12. * 12.) * s * s));
+							// Clipper2 migration: tight miter limit (1.2) bevels corners differently
+							// than Clipper1; ~0.38% area delta at ML 1.2 only (ML 2.0/1.5/3.0 identical).
+							REQUIRE_THAT(output.front().area(), Catch::Matchers::WithinRel((18. * 18. - 12. * 12.) * s * s, 0.005));
 						}
 					}
 				}

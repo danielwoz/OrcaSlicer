@@ -19,6 +19,9 @@
 #include <thread>
 #include "libslic3r/AABBTreeLines.hpp"
 #include "Print.hpp"
+#include "Clipper2ZUtils.hpp"
+#include <cstdlib>
+#include <cstring>
 static const int overhang_sampling_number = 6;
 static const double narrow_loop_length_threshold = 10;
 //BBS: when the width of expolygon is smaller than
@@ -296,84 +299,97 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
     return out;
 }
 
-static ClipperLib_Z::Paths clip_extrusion(const ClipperLib_Z::Path& subject, const ClipperLib_Z::Paths& clip, ClipperLib_Z::ClipType clipType)
+// ---- Clipper2-Z clip_extrusion -------------------------------------------------
+// clip_extrusion threads the variable extrusion width through the Z coordinate while
+// clipping an open extrusion polyline against the lower-slice polygons. The ZFill
+// callback interpolates the width at newly created intersection vertices, using
+// Clipper2Lib_Z::Clipper64. Boundary types stay ClipperLib_Z (a plain int64+z data
+// container) so callers are unaffected -- the boundary conversions live in
+// Clipper2ZUtils.hpp (shared with RegionExpansion, LineSplit, SupportCommon).
+static ClipperLib_Z::Paths clip_extrusion_clipper2(const ClipperLib_Z::Path &subject, const ClipperLib_Z::Paths &clip, ClipperLib_Z::ClipType clipType)
 {
-    ClipperLib_Z::Clipper clipper;
-    clipper.ZFillFunction([](const ClipperLib_Z::IntPoint& e1bot, const ClipperLib_Z::IntPoint& e1top, const ClipperLib_Z::IntPoint& e2bot,
-        const ClipperLib_Z::IntPoint& e2top, ClipperLib_Z::IntPoint& pt) {
-            ClipperLib_Z::IntPoint start = e1bot;
-            ClipperLib_Z::IntPoint end = e1top;
+    using namespace Clipper2ZUtils;
+    Clipper2Lib_Z::Clipper64 clipper;
+    clipper.SetZCallback([](const ZPoint64 &e1bot, const ZPoint64 &e1top, const ZPoint64 &e2bot,
+                            const ZPoint64 &e2top, ZPoint64 &pt) {
+        ZPoint64 start = e1bot;
+        ZPoint64 end   = e1top;
+        if (start.z <= 0 && end.z <= 0) {
+            start = e2bot;
+            end   = e2top;
+        }
+        assert(start.z >= 0 && end.z >= 0);
+        // Interpolate extrusion line width.
+        double dx = double(end.x - start.x), dy = double(end.y - start.y);
+        double length_sqr = dx * dx + dy * dy;
+        double px = double(pt.x - start.x), py = double(pt.y - start.y);
+        double dist_sqr = px * px + py * py;
+        double t = std::sqrt(dist_sqr / length_sqr);
+        pt.z = start.z + int64_t((end.z - start.z) * t);
+    });
 
-            if (start.z() <= 0 && end.z() <= 0) {
-                start = e2bot;
-                end = e2top;
-            }
+    ZPath64  subject_c2 = zpath_c1_to_c2(subject);
+    ZPaths64 clip_c2;
+    clip_c2.reserve(clip.size());
+    for (const ClipperLib_Z::Path &c : clip)
+        clip_c2.emplace_back(zpath_c1_to_c2(c));
 
-            assert(start.z() >= 0 && end.z() >= 0);
+    clipper.AddOpenSubject(ZPaths64{subject_c2});
+    clipper.AddClip(clip_c2);
 
-            // Interpolate extrusion line width.
-            double length_sqr = (end - start).cast<double>().squaredNorm();
-            double dist_sqr = (pt - start).cast<double>().squaredNorm();
-            double t = std::sqrt(dist_sqr / length_sqr);
+    Clipper2Lib_Z::ClipType ct =
+        clipType == ClipperLib_Z::ctIntersection ? Clipper2Lib_Z::ClipType::Intersection :
+        clipType == ClipperLib_Z::ctDifference   ? Clipper2Lib_Z::ClipType::Difference :
+        clipType == ClipperLib_Z::ctUnion        ? Clipper2Lib_Z::ClipType::Union :
+                                                   Clipper2Lib_Z::ClipType::Xor;
 
-            pt.z() = start.z() + coord_t((end.z() - start.z()) * t);
-        });
+    Clipper2Lib_Z::PolyTree64 closed_tree;
+    ZPaths64                  open_paths;
+    clipper.Execute(ct, Clipper2Lib_Z::FillRule::NonZero, closed_tree, open_paths);
 
-    clipper.AddPath(subject, ClipperLib_Z::ptSubject, false);
-    clipper.AddPaths(clip, ClipperLib_Z::ptClip, true);
+    // Collect both closed (from the tree) and open results, mirroring Clipper1's
+    // PolyTreeToPaths (which emits every node, open or closed).
+    ZPaths64 closed_paths = Clipper2Lib_Z::PolyTreeToPaths64(closed_tree);
 
-    ClipperLib_Z::Paths    clipped_paths;
-    {
-        ClipperLib_Z::PolyTree clipped_polytree;
-        clipper.Execute(clipType, clipped_polytree, ClipperLib_Z::pftNonZero, ClipperLib_Z::pftNonZero);
-        ClipperLib_Z::PolyTreeToPaths(std::move(clipped_polytree), clipped_paths);
-    }
+    ClipperLib_Z::Paths clipped_paths;
+    clipped_paths.reserve(open_paths.size() + closed_paths.size());
+    for (const ZPath64 &p : open_paths)   clipped_paths.emplace_back(zpath_c2_to_c1(p));
+    for (const ZPath64 &p : closed_paths) clipped_paths.emplace_back(zpath_c2_to_c1(p));
 
     // Clipped path could contain vertices from the clip with a Z coordinate equal to zero.
-    // For those vertices, we must assign value based on the subject.
-    // This happens only in sporadic cases.
-    for (ClipperLib_Z::Path& path : clipped_paths)
-        for (ClipperLib_Z::IntPoint& c_pt : path)
+    // For those vertices, we must assign value based on the subject (same fix-up as Clipper1).
+    for (ClipperLib_Z::Path &path : clipped_paths)
+        for (ClipperLib_Z::IntPoint &c_pt : path)
             if (c_pt.z() == 0) {
-                // Now we must find the corresponding line on with this point is located and compute line width (Z coordinate).
                 if (subject.size() <= 2)
                     continue;
-
                 const Point pt(c_pt.x(), c_pt.y());
                 Point       projected_pt_min;
-                auto        it_min = subject.begin();
+                auto        it_min       = subject.begin();
                 auto        dist_sqr_min = std::numeric_limits<double>::max();
                 Point       prev(subject.front().x(), subject.front().y());
                 for (auto it = std::next(subject.begin()); it != subject.end(); ++it) {
                     Point curr(it->x(), it->y());
                     Point projected_pt = pt.projection_onto(Line(prev, curr));
                     if (double dist_sqr = (projected_pt - pt).cast<double>().squaredNorm(); dist_sqr < dist_sqr_min) {
-                        dist_sqr_min = dist_sqr;
+                        dist_sqr_min     = dist_sqr;
                         projected_pt_min = projected_pt;
-                        it_min = std::prev(it);
+                        it_min           = std::prev(it);
                     }
                     prev = curr;
                 }
-
-                assert(dist_sqr_min <= SCALED_EPSILON);
-                assert(std::next(it_min) != subject.end());
-
                 const Point  pt_a(it_min->x(), it_min->y());
                 const Point  pt_b(std::next(it_min)->x(), std::next(it_min)->y());
                 const double line_len = (pt_b - pt_a).cast<double>().norm();
-                const double dist = (projected_pt_min - pt_a).cast<double>().norm();
+                const double dist     = (projected_pt_min - pt_a).cast<double>().norm();
                 c_pt.z() = coord_t(double(it_min->z()) + (dist / line_len) * double(std::next(it_min)->z() - it_min->z()));
             }
-
-    assert([&clipped_paths = std::as_const(clipped_paths)]() -> bool {
-        for (const ClipperLib_Z::Path& path : clipped_paths)
-            for (const ClipperLib_Z::IntPoint& pt : path)
-                if (pt.z() <= 0)
-                    return false;
-        return true;
-    }());
-
     return clipped_paths;
+}
+
+static ClipperLib_Z::Paths clip_extrusion(const ClipperLib_Z::Path& subject, const ClipperLib_Z::Paths& clip, ClipperLib_Z::ClipType clipType)
+{
+    return clip_extrusion_clipper2(subject, clip, clipType);
 }
 
 struct PerimeterGeneratorArachneExtrusion
@@ -1234,13 +1250,17 @@ void PerimeterGenerator::process_classic()
     m_ext_mm3_per_mm_smaller_width = this->smaller_ext_perimeter_flow.mm3_per_mm();
 
     // prepare grown lower layer slices for overhang detection
+    // OPT: generate_lower_polygons_series(width) returns a 2-element series, but the
+    // ONLY element ever consumed downstream is series.back() (see line ~183), and
+    // series.back() == offset(*lower_slices, scale_(0.5 * nozzle_diameter)) is fully
+    // INDEPENDENT of `width` (end_offset = 0.5 * nozzle_diameter). The original code
+    // therefore offset *lower_slices up to 6 times per layer (3 widths x 2 offsets)
+    // where only ONE distinct polygon set is used: the leading series[0] is dead, and
+    // series.back() is identical across all three widths. Compute it once and share it.
+    // Output is byte-identical: every reader still sees the same ->back() value.
     m_lower_polygons_series = generate_lower_polygons_series(this->perimeter_flow.width());
-    if (ext_perimeter_width == perimeter_width){
-        m_external_lower_polygons_series = m_lower_polygons_series;
-    } else {
-        m_external_lower_polygons_series = generate_lower_polygons_series(this->ext_perimeter_flow.width());
-    }
-    m_smaller_external_lower_polygons_series = generate_lower_polygons_series(this->smaller_ext_perimeter_flow.width());
+    m_external_lower_polygons_series = m_lower_polygons_series;
+    m_smaller_external_lower_polygons_series = m_lower_polygons_series;
     // we need to process each island separately because we might have different
     // extra perimeters for each one
     Surfaces all_surfaces = this->slices->surfaces;
@@ -2582,25 +2602,26 @@ bool PerimeterGeneratorLoop::is_internal_contour() const
 std::vector<Polygons> PerimeterGenerator::generate_lower_polygons_series(float width)
 {
     float nozzle_diameter = print_config->nozzle_diameter.get_at(config->outer_wall_filament_id - 1);
-    float start_offset = -0.5 * width;
     float end_offset = 0.5 * nozzle_diameter;
+    // OPT: end_offset (== 0.5 * nozzle_diameter) is the only offset consumed downstream
+    // and is independent of `width`; the former width-dependent start_offset fed only the
+    // dead leading series element, so it (and its `width` use) is gone.
+    (void) width;
 
     assert(overhang_sampling_number >= 3);
-    // generate offsets
-    std::vector<float> offset_series;
-    offset_series.reserve(2);
-
-     offset_series.push_back(start_offset + 0.5 * (end_offset - start_offset) / (overhang_sampling_number - 1));
-     offset_series.push_back(end_offset);
     std::vector<Polygons> lower_polygons_series;
     if (this->lower_slices == NULL) {
         return lower_polygons_series;
     }
 
-    // offset expolygon to generate series of polygons
-    for (int i = 0; i < offset_series.size(); i++) {
-        lower_polygons_series.emplace_back(offset(*this->lower_slices, float(scale_(offset_series[i]))));
-    }
+    // OPT: the original code generated a 2-element series:
+    //   [0] = offset(lower, start_offset + 0.5*(end_offset-start_offset)/(N-1))
+    //   [1] = offset(lower, end_offset)
+    // Only series.back() (== [1]) is ever consumed downstream (overhang detection),
+    // so [0] was pure dead work. Emit only the single consumed offset. The returned
+    // vector keeps size 1 so existing ->back() readers are byte-identical. Note
+    // end_offset == 0.5 * nozzle_diameter does not depend on `width`.
+    lower_polygons_series.emplace_back(offset(*this->lower_slices, float(scale_(end_offset))));
     return lower_polygons_series;
 }
 

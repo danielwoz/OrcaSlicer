@@ -760,6 +760,9 @@ private:
     int             updating_bambu_networking();
     bool            on_init_inner();
     void            copy_network_if_available();
+#ifdef ORCA_OSS_NETWORK_PLUGIN
+    void            ensure_oss_network_plugin();
+#endif
     bool            on_init_network(bool try_backup = false);
     void            init_networking_callbacks();
     void            init_app_config();

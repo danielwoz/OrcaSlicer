@@ -3,6 +3,7 @@
 #include "AABBTreeLines.hpp"
 #include "SVG.hpp"
 #include "Utils.hpp"
+#include "Clipper2ZUtils.hpp"
 
 //#define DEBUG_SPLIT_LINE
 
@@ -16,15 +17,35 @@ static std::atomic<std::uint32_t> g_dbg_id = 0;
 // Z for points from clip polygon
 static constexpr auto CLIP_IDX = std::numeric_limits<ClipperLib_Z::cInt>::max();
 
-static void cb_split_line(const ClipperZUtils::ZPoint& e1bot,
-                   const ClipperZUtils::ZPoint& e1top,
-                   const ClipperZUtils::ZPoint& e2bot,
-                   const ClipperZUtils::ZPoint& e2top,
-                   ClipperZUtils::ZPoint&       pt)
+
+// ---- Clipper2-Z line/clip intersection ----
+// Intersect an open source polyline against the closed clip contours. Source vertices keep
+// their src index in Z; clip vertices are tagged with CLIP_IDX; new intersection vertices get
+// the -(min(z)+1) sentinel via the ZFill callback, using Clipper2Lib_Z::Clipper64. Boundary
+// types stay ClipperLib_Z (a plain int64+z data container).
+static ClipperZUtils::ZPaths do_split_line_intersect_clipper2(const ClipperZUtils::ZPath& path, const ClipperZUtils::ZPaths& clip_path)
 {
-    coord_t zs[4]{e1bot.z(), e1top.z(), e2bot.z(), e2top.z()};
-    std::sort(zs, zs + 4);
-    pt.z() = -(zs[0] + 1);
+    using namespace Clipper2ZUtils;
+    Clipper2Lib_Z::Clipper64 zclipper;
+    zclipper.PreserveCollinear(true);
+    zclipper.SetZCallback([](const ZPoint64 &e1bot, const ZPoint64 &e1top, const ZPoint64 &e2bot,
+                             const ZPoint64 &e2top, ZPoint64 &pt) {
+        int64_t zs[4]{e1bot.z, e1top.z, e2bot.z, e2top.z};
+        std::sort(zs, zs + 4);
+        pt.z = -(zs[0] + 1);
+    });
+    zclipper.AddClip(zpaths_c1_to_c2(clip_path));
+    zclipper.AddOpenSubject(ZPaths64{zpath_c1_to_c2(path)});
+    Clipper2Lib_Z::PolyTree64 closed_tree;
+    ZPaths64                  open_paths;
+    zclipper.Execute(Clipper2Lib_Z::ClipType::Intersection, Clipper2Lib_Z::FillRule::NonZero, closed_tree, open_paths);
+    // Mirror Clipper1's PolyTreeToPaths, which emits every node (open or closed).
+    ZPaths64 closed_paths = Clipper2Lib_Z::PolyTreeToPaths64(closed_tree);
+    ClipperZUtils::ZPaths out;
+    out.reserve(open_paths.size() + closed_paths.size());
+    for (const ZPath64 &p : open_paths)   out.emplace_back(zpath_c2_to_c1(p));
+    for (const ZPath64 &p : closed_paths) out.emplace_back(zpath_c2_to_c1(p));
+    return out;
 }
 
 static bool is_src(const ClipperZUtils::ZPoint& p) { return p.z() >= 0 && p.z() != CLIP_IDX; }
@@ -91,14 +112,7 @@ SplittedLine do_split_line(const ClipperZUtils::ZPath& path, const ExPolygons& c
                 clip_path.emplace_back(ClipperZUtils::to_zpath<false>(hole.points, CLIP_IDX));
         }
 
-        ClipperLib_Z::Clipper zclipper;
-        zclipper.PreserveCollinear(true);
-        zclipper.ZFillFunction(cb_split_line);
-        zclipper.AddPaths(clip_path, ClipperLib_Z::ptClip, true);
-        zclipper.AddPath(path, ClipperLib_Z::ptSubject, false);
-        ClipperLib_Z::PolyTree polytree;
-        zclipper.Execute(ClipperLib_Z::ctIntersection, polytree, ClipperLib_Z::pftNonZero, ClipperLib_Z::pftNonZero);
-        ClipperLib_Z::PolyTreeToPaths(std::move(polytree), intersections);
+        intersections = do_split_line_intersect_clipper2(path, clip_path);
     }
     if (intersections.empty()) {
         return {};

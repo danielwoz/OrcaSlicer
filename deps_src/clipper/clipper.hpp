@@ -189,6 +189,12 @@ public:
     void Clear() {  AllNodes.clear(); Childs.clear(); }
     int Total() const;
     void RemoveOutermostPolygon();
+    // Build this PolyTree from an externally computed nesting (e.g. produced by Clipper2).
+    // 'parents' and 'contours' are parallel arrays: contours[i] is the contour of node i
+    // and parents[i] is the index of node i's parent (-1 for a top-level node). Nodes must
+    // be listed parents-before-children. Ownership of the nodes stays with this PolyTree
+    // (stored by value in AllNodes), so the result is a fully valid, self-owning PolyTree.
+    void BuildFromNesting(const std::vector<int> &parents, std::vector<Path> &&contours);
 private:
     PolyTree(const PolyTree &src) = delete;
     PolyTree& operator=(const PolyTree &src) = delete;

@@ -8,6 +8,7 @@
 #include "Flow.hpp"
 #include "Geometry/ConvexHull.hpp"
 #include "I18N.hpp"
+#include "StageTimer.hpp"
 #include "ShortestPath.hpp"
 #include "Thread.hpp"
 #include "Time.hpp"
@@ -37,6 +38,7 @@
 #include "nlohmann/json.hpp"
 
 #include "GCode/ConflictChecker.hpp"
+#include "GCode/GPU/SeamRayCaster.hpp"
 #include "ParameterUtils.hpp"
 
 #include <codecvt>
@@ -2180,6 +2182,19 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
     if (m_objects.empty())
         return;
 
+    // Warm up the GPU seam-visibility ray-query backend (if built + enabled +
+    // available) on a detached thread now, so its device/context init overlaps with
+    // the slicing pipeline and is ready by the time GCode seam placement runs. No-op
+    // when SLIC3R_VULKAN is off or the GPU path is disabled.
+    seam_gpu::SeamRayCaster::warmup_async();
+
+    // ORCA perf-campaign (gcode-tail): the seam-visibility occlusion pass is the
+    // dominant serial cost of g-code export (~250-300 ms) but depends only on the
+    // input mesh, not on slicing. Kick it off in the background now so it overlaps
+    // the slicing pipeline; SeamPlacer::init() consumes the cached result later.
+    // Output is byte-identical (same computation, run earlier and concurrently).
+    SeamPlacer::precompute_global_model_info_async(*this);
+
     for (PrintObject *obj : m_objects)
         obj->clear_shared_object();
 
@@ -2282,8 +2297,22 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": total object counts %1% in current print, need to slice %2%")%m_objects.size()%need_slicing_objects.size();
     BOOST_LOG_TRIVIAL(info) << "Starting the slicing process." << log_memory_info();
     if (!use_cache) {
-        for (PrintObject *obj : m_objects) {
-            if (need_slicing_objects.count(obj) != 0) {
+        // ORCA perf-campaign: the per-object slicing stages below operate only on each
+        // object's own layers/regions; the only shared touches are m_print->set_status()
+        // (progress) and throw_if_canceled() (a read). Object-level parallelism is already
+        // used for generate_support_material() (see below), so the same pattern is applied
+        // here to fill cores on multi-object plates. For a single object this is a no-op
+        // (parallel_for over 1 item), so g-code output is byte-identical.
+        auto for_each_object_par = [this, &need_slicing_objects](auto &&body) {
+            tbb::parallel_for(tbb::blocked_range<size_t>(0, m_objects.size()),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t i = range.begin(); i < range.end(); ++i)
+                        body(m_objects[i], need_slicing_objects.count(m_objects[i]) != 0);
+                });
+        };
+        { StageTimer _st("slice+make_perimeters");
+        for_each_object_par([](PrintObject *obj, bool need) {
+            if (need) {
                 obj->make_perimeters();
             }
             else {
@@ -2292,18 +2321,22 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 if (obj->set_started(posPerimeters))
                     obj->set_done(posPerimeters);
             }
+        });
         }
-        for (PrintObject *obj : m_objects) {
-            if (need_slicing_objects.count(obj) != 0) {
+        { StageTimer _st("estimate_curled_extrusions");
+        for_each_object_par([](PrintObject *obj, bool need) {
+            if (need) {
                 obj->estimate_curled_extrusions();
             }
             else {
                 if (obj->set_started(posEstimateCurledExtrusions))
                     obj->set_done(posEstimateCurledExtrusions);
             }
+        });
         }
-        for (PrintObject *obj : m_objects) {
-            if (need_slicing_objects.count(obj) != 0) {
+        { StageTimer _st("infill (prepare+fill)");
+        for_each_object_par([](PrintObject *obj, bool need) {
+            if (need) {
                 obj->infill();
             }
             else {
@@ -2312,18 +2345,22 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 if (obj->set_started(posInfill))
                     obj->set_done(posInfill);
             }
+        });
         }
-        for (PrintObject *obj : m_objects) {
-            if (need_slicing_objects.count(obj) != 0) {
+        { StageTimer _st("ironing");
+        for_each_object_par([](PrintObject *obj, bool need) {
+            if (need) {
                 obj->ironing();
             }
             else {
                 if (obj->set_started(posIroning))
                     obj->set_done(posIroning);
             }
+        });
         }
 
         // Z-Contouring
+        { StageTimer _st("contour_z");
         for (PrintObject *obj : m_objects) {
             bool need_contouring = need_slicing_objects.count(obj) != 0 && obj->need_z_contouring();
             if (need_contouring) {
@@ -2333,7 +2370,9 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                     obj->set_done(posContouring);
             }
         }
+        }
 
+        { StageTimer _st("generate_support_material");
         tbb::parallel_for(tbb::blocked_range<int>(0, int(m_objects.size())),
             [this, need_slicing_objects](const tbb::blocked_range<int>& range) {
                 for (int i = range.begin(); i < range.end(); i++) {
@@ -2348,15 +2387,18 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 }
             }
         );
+        }
 
-        for (PrintObject* obj : m_objects) {
-            if (need_slicing_objects.count(obj) != 0) {
+        { StageTimer _st("detect_overhangs_for_lift");
+        for_each_object_par([](PrintObject *obj, bool need) {
+            if (need) {
                 obj->detect_overhangs_for_lift();
             }
             else {
                 if (obj->set_started(posDetectOverhangsForLift))
                     obj->set_done(posDetectOverhangsForLift);
             }
+        });
         }
     }
     else {
@@ -2435,6 +2477,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
     }
 
     if (this->set_started(psSkirtBrim)) {
+        StageTimer _st("skirt+brim+toolorder");
         this->set_status(70, L("Generating skirt & brim"));
 
         if (time_cost_with_cache)
