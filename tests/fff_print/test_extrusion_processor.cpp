@@ -761,6 +761,84 @@ TEST_CASE("Curled walls from an earlier slice are dropped once overhang speed is
     CHECK_FALSE(has_curled_lines(*cage.print.objects().front()));
 }
 
+namespace {
+
+// Every curled line of the object as (layer, a, b, height bits), for exact comparison.
+std::vector<std::tuple<size_t, Point, Point, uint32_t>> curled_lines_of(const PrintObject &object)
+{
+    std::vector<std::tuple<size_t, Point, Point, uint32_t>> out;
+    for (size_t i = 0; i < object.layers().size(); ++i)
+        for (const CurledLine &line : object.layers()[i]->curled_lines)
+            out.emplace_back(i, line.a, line.b, float_bits(line.curled_height));
+    return out;
+}
+
+} // namespace
+
+TEST_CASE("Curled walls are kept across a G-code only change and estimated again with new walls", "[ExtrusionProcessor]")
+{
+    DynamicPrintConfig config = caged_overhang_config("classic");
+    config.set_deserialize_strict("slowdown_for_curled_perimeters", "1");
+    SlicedCage cage(config);
+    const PrintObject *object = cage.print.objects().front();
+    REQUIRE(object->is_step_done(posEstimateCurledExtrusions));
+    const auto curled = curled_lines_of(*object);
+    REQUIRE_FALSE(curled.empty());
+
+    config.set_deserialize_strict("high_precision_gcode", config.opt_bool("high_precision_gcode") ? "0" : "1");
+    cage.print.apply(cage.model, config);
+    CHECK(object->is_step_done(posEstimateCurledExtrusions));
+    cage.print.process();
+    CHECK(curled_lines_of(*object) == curled);
+
+    config.set_deserialize_strict("outer_wall_line_width", "0.5");
+    cage.print.apply(cage.model, config);
+    CHECK_FALSE(object->is_step_done(posEstimateCurledExtrusions));
+    cage.print.process();
+    CHECK(object->is_step_done(posEstimateCurledExtrusions));
+    const SlicedCage fresh(config);
+    CHECK(curled_lines_of(*object) == curled_lines_of(*fresh.object));
+}
+
+TEST_CASE("Curled walls kept from an earlier slice follow the overhang speed of the other objects", "[ExtrusionProcessor]")
+{
+    // The first object slows down for curled perimeters, and its walls are estimated only while the second object has
+    // overhang speed on.
+    const std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{
+        {{"enable_overhang_speed", "0"}, {"slowdown_for_curled_perimeters", "1"}},
+        {{"enable_overhang_speed", "1"}, {"slowdown_for_curled_perimeters", "0"}},
+    };
+    const DynamicPrintConfig config = caged_overhang_config("classic");
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{caged_overhang_mesh(), caged_overhang_mesh()}, print, model, config, &overrides);
+    print.process();
+    REQUIRE(print.objects().size() == 2);
+    const PrintObject *object = print.objects().front();
+    const auto curled = curled_lines_of(*object);
+    REQUIRE_FALSE(curled.empty());
+
+    const auto reslice_with_overhang_speed = [&](const char *value) {
+        DynamicPrintConfig object_config;
+        object_config.set_deserialize_strict("enable_overhang_speed", value);
+        model.objects[1]->config.apply(object_config);
+        print.apply(model, config);
+        print.process();
+        REQUIRE(print.objects().front() == object);
+    };
+    reslice_with_overhang_speed("0");
+    CHECK_FALSE(has_curled_lines(*object));
+    reslice_with_overhang_speed("1");
+    CHECK(curled_lines_of(*object) == curled);
+
+    // Without the second object nothing enables overhang speed.
+    model.delete_object(size_t(1));
+    print.apply(model, config);
+    print.process();
+    REQUIRE(print.objects().size() == 1);
+    CHECK_FALSE(has_curled_lines(*print.objects().front()));
+}
+
 TEST_CASE("Caged external overhangs are slowed when printed by object or through the pressure equalizer", "[ExtrusionProcessor]")
 {
     const auto [key, value] = GENERATE(table<const char *, const char *>({

@@ -2274,6 +2274,13 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
         update_filament_self_index_cache();
     }
 
+    // The curled-wall estimate of every object is gated by the regions of all objects: estimate again when the gate changes.
+    if (const bool estimates_curled = this->estimates_curled_extrusions(); estimates_curled != m_estimates_curled_extrusions) {
+        m_estimates_curled_extrusions = estimates_curled;
+        for (PrintObject *object : m_objects)
+            update_apply_status(object->invalidate_step(posEstimateCurledExtrusions));
+    }
+
     // Update SlicingParameters for each object where the SlicingParameters is not valid.
     // If it is not valid, then it is ensured that PrintObject.m_slicing_params is not in use
     // (posSlicing and posSupportMaterial was invalidated).

@@ -1036,16 +1036,21 @@ void PrintObject::generate_belt_brim()
     m_belt_brim_pending = false;
 }
 
+bool Print::estimates_curled_extrusions() const
+{
+    const auto any_region_enables = [this](ConfigOptionBoolsNullable PrintRegionConfig::*option) {
+        return std::any_of(m_print_regions.begin(), m_print_regions.end(),
+                           [option](const PrintRegion* region) { return any_enabled(region->config().*option); });
+    };
+    // Only the slowdown for curled perimeters reads the curled lines, and they stay empty unless some region has overhang speed on.
+    return any_region_enables(&PrintRegionConfig::enable_overhang_speed) &&
+           any_region_enables(&PrintRegionConfig::slowdown_for_curled_perimeters);
+}
+
 void PrintObject::estimate_curled_extrusions()
 {
     if (this->set_started(posEstimateCurledExtrusions)) {
-        const auto any_region_enables = [this](ConfigOptionBoolsNullable PrintRegionConfig::*option) {
-            return std::any_of(this->print()->m_print_regions.begin(), this->print()->m_print_regions.end(),
-                               [option](const PrintRegion* region) { return any_enabled(region->config().*option); });
-        };
-        // Only the slowdown for curled perimeters reads the curled lines, and they stay empty unless some region has overhang speed on.
-        if (any_region_enables(&PrintRegionConfig::enable_overhang_speed) &&
-            any_region_enables(&PrintRegionConfig::slowdown_for_curled_perimeters)) {
+        if (this->print()->estimates_curled_extrusions()) {
 
             // Estimate curling of support material and add it to the malformaition lines of each layer
             float support_flow_width = support_material_flow(this, this->config().layer_height).width();
@@ -1059,7 +1064,12 @@ void PrintObject::estimate_curled_extrusions()
             for (Layer *layer : m_layers)
                 layer->curled_lines.clear();
         }
-        //this->set_done(posEstimateCurledExtrusions);
+        // The estimate reads the walls, flows and layer heights, which posSlice and posPerimeters
+        // regenerate, and those steps invalidate this one. The options gating it invalidate
+        // posSlice (slowdown_for_curled_perimeters) and posPerimeters (enable_overhang_speed) of
+        // their own object, and Print::apply() invalidates it in every object when the gate over
+        // all objects changes.
+        this->set_done(posEstimateCurledExtrusions);
     }
 }
 
@@ -1889,7 +1899,7 @@ bool PrintObject::invalidate_step(PrintObjectStep step)
 
     // propagate to dependent steps
     if (step == posPerimeters) {
-		invalidated |= this->invalidate_steps({ posPrepareInfill, posInfill, posIroning, posContouring, posSimplifyPath, posSimplifyInfill });
+		invalidated |= this->invalidate_steps({ posEstimateCurledExtrusions, posPrepareInfill, posInfill, posIroning, posContouring, posSimplifyPath, posSimplifyInfill });
         invalidated |= m_print->invalidate_steps({ psSkirtBrim });
     } else if (step == posPrepareInfill) {
         invalidated |= this->invalidate_steps({ posInfill, posIroning, posContouring, posSimplifyPath, posSimplifyInfill });
@@ -1904,7 +1914,7 @@ bool PrintObject::invalidate_step(PrintObjectStep step)
 		// starts over empty: without it here the step stayed done and the lift logic in
 		// GCode::needs_retraction() had no overhangs to test against until something else
 		// invalidated it.
-		invalidated |= this->invalidate_steps({ posPerimeters, posPrepareInfill, posInfill, posIroning, posContouring, posSupportMaterial, posSimplifyPath, posSimplifyInfill, posSimplifySupportPath, posDetectOverhangsForLift });
+		invalidated |= this->invalidate_steps({ posPerimeters, posEstimateCurledExtrusions, posPrepareInfill, posInfill, posIroning, posContouring, posSupportMaterial, posSimplifyPath, posSimplifyInfill, posSimplifySupportPath, posDetectOverhangsForLift });
         invalidated |= m_print->invalidate_steps({ psSkirtBrim });
         m_slicing_params.valid = false;
         // The exact belt_floor_z_shift is recomputed when slice() runs again.

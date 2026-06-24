@@ -1505,6 +1505,8 @@ private:
     void        append_tool_change_extruders(std::vector<unsigned int> &extruders) const;
     void        append_wipe_tower_extruder(std::vector<unsigned int> &extruders) const;
     void        update_shrinkage_compensation(size_t num_extruders, std::vector<int> &variant_index);
+    // Whether PrintObject::estimate_curled_extrusions() estimates the curled walls, which depends on the regions of all objects.
+    bool        estimates_curled_extrusions() const;
 
     PrintConfig                             m_config;
     PrintObjectConfig                       m_default_object_config;
@@ -1513,6 +1515,8 @@ private:
     PrintRegionPtrs                         m_print_regions;
     bool                                    m_same_shrinkage_compensations { false };
     Vec3d                                   m_shrinkage_compensation { Vec3d::Ones() };
+    // estimates_curled_extrusions() as of the last apply().
+    bool                                    m_estimates_curled_extrusions { false };
     
     //SoftFever
     bool m_isBBLPrinter = false;
