@@ -13,7 +13,8 @@
 	url = https://github.com/KhronosGroup/Vulkan-Headers.git
 [submodule "deps_src/Vulkan-Loader"]
 	path = deps_src/Vulkan-Loader
-	url = https://github.com/KhronosGroup/Vulkan-Loader.git
+	url = https://github.com/danielwoz/Vulkan-Loader.git
+	branch = orca-vulkan-static
 [submodule "deps_src/glslang"]
 	path = deps_src/glslang
 	url = https://github.com/KhronosGroup/glslang.git

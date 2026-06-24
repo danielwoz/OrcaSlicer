@@ -39,12 +39,16 @@ jobs:
         with:
           submodules: false
 
-      # Init only the submodules the default build needs. The Vulkan deps
-      # (deps_src/Vulkan-*, glslang) are pinned to non-fetchable SHAs and are
-      # only used when SLIC3R_VULKAN=ON (off here), so they're intentionally skipped.
+      # Init the submodules the build needs. Vulkan deps are included because
+      # SLIC3R_VULKAN=ON (for the GPU seam-raycast win). Vulkan-Loader carries an
+      # OrcaSlicer static-build patch, served from danielwoz/Vulkan-Loader@orca-vulkan-static
+      # (see .gitmodules); Vulkan-Headers/glslang are clean Khronos tags.
       - name: Init required submodules
         shell: bash
-        run: git submodule update --init deps/minhook deps_src/mimalloc bambu_network_oss
+        run: >
+          git submodule update --init
+          deps/minhook deps_src/mimalloc bambu_network_oss
+          deps_src/Vulkan-Headers deps_src/Vulkan-Loader deps_src/glslang
 
       - uses: lukka/get-cmake@latest
         with:
@@ -70,6 +74,7 @@ jobs:
           cmake -B build -G "Visual Studio 17 2022" -A x64
           -DCMAKE_BUILD_TYPE=${{ env.build_type }}
           -DORCA_TOOLS=ON
+          -DSLIC3R_VULKAN=ON
           -DORCA_PGO=generate
 
       - name: Build (instrument)
@@ -115,6 +120,7 @@ jobs:
           cmake -B build -G "Visual Studio 17 2022" -A x64
           -DCMAKE_BUILD_TYPE=${{ env.build_type }}
           -DORCA_TOOLS=ON
+          -DSLIC3R_VULKAN=ON
           -DORCA_PGO=use
           -DORCA_PGO_DATA=${{ github.workspace }}/orca-windows.pgd
 
