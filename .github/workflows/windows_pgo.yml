@@ -98,10 +98,18 @@ jobs:
       - name: Train (slice)
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force pgo_out | Out-Null
-          & "${{ steps.exe.outputs.path }}" --slice 0 --outputdir pgo_out "${{ env.train_model }}"
-          Write-Host "pgc files produced:"
-          Get-ChildItem "${{ steps.exe.outputs.dir }}" -Filter *.pgc
+          $dir   = "${{ steps.exe.outputs.dir }}"
+          $model = "${{ github.workspace }}/${{ env.train_model }}"
+          $out   = "${{ github.workspace }}/pgo_out"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          # Run FROM the exe dir so the MSVC PGO runtime writes *.pgc next to the binary.
+          Push-Location $dir
+          & "${{ steps.exe.outputs.path }}" --slice 0 --outputdir $out $model
+          $rc = $LASTEXITCODE
+          Pop-Location
+          Write-Host "slice exit code: $rc"
+          Write-Host "== .pgc in exe dir =="; Get-ChildItem $dir -Filter *.pgc -EA SilentlyContinue | Format-Table Name,Length
+          Write-Host "== .pgc anywhere in workspace =="; Get-ChildItem "${{ github.workspace }}" -Recurse -Filter *.pgc -EA SilentlyContinue | Format-Table FullName,Length
 
       - name: Merge profile (*.pgc -> .pgd)
         shell: pwsh
@@ -109,8 +117,9 @@ jobs:
           $dir = "${{ steps.exe.outputs.dir }}"
           $pgd = Get-ChildItem $dir -Filter *.pgd | Select-Object -First 1
           if (-not $pgd) { throw "no .pgd produced by /GENPROFILE link in $dir" }
-          $pgcs = Get-ChildItem $dir -Filter *.pgc
-          if (-not $pgcs) { throw "no .pgc training data emitted in $dir (training run produced no profile)" }
+          $pgcs = Get-ChildItem $dir -Filter *.pgc -EA SilentlyContinue
+          if (-not $pgcs) { $pgcs = Get-ChildItem "${{ github.workspace }}" -Recurse -Filter *.pgc -EA SilentlyContinue }
+          if (-not $pgcs) { throw "no .pgc training data emitted anywhere (training run produced no profile)" }
           # pgomgr.exe ships with the VC tools but is NOT on PATH -- locate it via vswhere.
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsPath  = & $vswhere -latest -property installationPath
