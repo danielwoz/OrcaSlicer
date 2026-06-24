@@ -1,0 +1,128 @@
+# Windows MSVC Profile-Guided Optimization build.
+#
+# Two phases on a single Windows runner:
+#   1. build OrcaSlicer INSTRUMENTED (-DORCA_PGO=generate -> linker /GENPROFILE)
+#   2. TRAIN: slice a representative, self-contained project -> emits *.pgc
+#   3. MERGE the *.pgc into <exe>.pgd with pgomgr
+#   4. build OrcaSlicer OPTIMIZED (-DORCA_PGO=use -DORCA_PGO_DATA=<pgd>)
+#
+# NOTE: this is MSVC PGO (its own profile format) -- the Linux Clang
+# bench/orca-heavy.profdata does NOT apply here; Windows must train its own.
+#
+# Manual trigger. This is a first version; the marked steps (training command,
+# exe/pgd discovery, pgomgr syntax) typically need a couple of CI iterations to
+# go green since MSVC PGO + the VS generator are finicky and can't be tested off-Windows.
+name: Windows PGO build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "CMake build type"
+        default: "Release"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  windows-pgo:
+    name: Windows MSVC PGO
+    runs-on: ${{ vars.SELF_HOSTED && 'orca-win-server' || 'windows-latest' }}
+    env:
+      build_type: ${{ github.event.inputs.build_type || 'Release' }}
+      # KitCardAMS.3mf carries embedded print/printer settings, so it slices
+      # headless with no profile setup -- ideal heavy training input.
+      train_model: bench/bench_models/KitCardAMS.3mf
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "~4.3.0"
+
+      - uses: microsoft/setup-msbuild@v3
+
+      # ---- dependencies: reuse the main CI deps cache; build if missing (slow ~1h) ----
+      - name: Restore deps cache
+        id: deps_cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: windows-cache-orcaslicer_deps-build-${{ hashFiles('deps/**') }}
+
+      - name: Build deps (cache miss)
+        if: steps.deps_cache.outputs.cache-hit != 'true'
+        run: .\build_release_vs.bat deps
+
+      # ================= Phase 1: instrumented build =================
+      - name: Configure (instrument)
+        run: >
+          cmake -B build -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_BUILD_TYPE=${{ env.build_type }}
+          -DORCA_TOOLS=ON
+          -DORCA_PGO=generate
+
+      - name: Build (instrument)
+        run: cmake --build build --config ${{ env.build_type }} --target ALL_BUILD -- -m
+
+      - name: Locate instrumented exe + build dir
+        id: exe
+        shell: pwsh
+        run: |
+          $e = Get-ChildItem build -Recurse -Include orca-slicer.exe,OrcaSlicer.exe |
+               Where-Object { $_.FullName -notmatch 'CMakeFiles' } | Select-Object -First 1
+          if (-not $e) { throw "instrumented exe not found under build/" }
+          "path=$($e.FullName)" >> $env:GITHUB_OUTPUT
+          "dir=$($e.DirectoryName)"  >> $env:GITHUB_OUTPUT
+          Write-Host "exe: $($e.FullName)"
+
+      # ---- Training run (emits *.pgc next to the exe) ----
+      # ITERATE: confirm the headless --slice invocation/flags on Windows; add
+      # more models for broader coverage. The PGO runtime (pgort140.dll) ships
+      # with VS and is on PATH via setup-msbuild.
+      - name: Train (slice)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force pgo_out | Out-Null
+          & "${{ steps.exe.outputs.path }}" --slice 0 --outputdir pgo_out "${{ env.train_model }}"
+          Write-Host "pgc files produced:"
+          Get-ChildItem "${{ steps.exe.outputs.dir }}" -Filter *.pgc
+
+      - name: Merge profile (*.pgc -> .pgd)
+        shell: pwsh
+        run: |
+          $dir = "${{ steps.exe.outputs.dir }}"
+          $pgd = Get-ChildItem $dir -Filter *.pgd | Select-Object -First 1
+          if (-not $pgd) { throw "no .pgd produced by /GENPROFILE link in $dir" }
+          # pgomgr ships with VS; merge all training .pgc into the .pgd
+          & pgomgr /merge "$dir\*.pgc" "$($pgd.FullName)"
+          Copy-Item $pgd.FullName "${{ github.workspace }}/orca-windows.pgd"
+          Write-Host "merged profile: $($pgd.FullName)"
+
+      # ================= Phase 2: optimized build =================
+      - name: Configure (use profile)
+        run: >
+          cmake -B build -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_BUILD_TYPE=${{ env.build_type }}
+          -DORCA_TOOLS=ON
+          -DORCA_PGO=use
+          -DORCA_PGO_DATA=${{ github.workspace }}/orca-windows.pgd
+
+      - name: Build (optimized)
+        run: cmake --build build --config ${{ env.build_type }} --target ALL_BUILD -- -m
+
+      # ---- artifacts: the trained profile (reusable) + the optimized exe ----
+      - name: Upload PGO profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: orca-windows-pgd
+          path: orca-windows.pgd
+
+      - name: Upload optimized build
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrcaSlicer_Windows_PGO
+          path: ${{ steps.exe.outputs.dir }}/*.exe
