@@ -109,8 +109,18 @@ jobs:
           $dir = "${{ steps.exe.outputs.dir }}"
           $pgd = Get-ChildItem $dir -Filter *.pgd | Select-Object -First 1
           if (-not $pgd) { throw "no .pgd produced by /GENPROFILE link in $dir" }
-          # pgomgr ships with VS; merge all training .pgc into the .pgd
-          & pgomgr /merge "$dir\*.pgc" "$($pgd.FullName)"
+          $pgcs = Get-ChildItem $dir -Filter *.pgc
+          if (-not $pgcs) { throw "no .pgc training data emitted in $dir (training run produced no profile)" }
+          # pgomgr.exe ships with the VC tools but is NOT on PATH -- locate it via vswhere.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath  = & $vswhere -latest -property installationPath
+          $pgomgr  = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Recurse -Filter pgomgr.exe |
+                     Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1
+          if (-not $pgomgr) { throw "pgomgr.exe not found under $vsPath\VC\Tools\MSVC" }
+          Write-Host "pgomgr: $($pgomgr.FullName);  merging $($pgcs.Count) .pgc -> $($pgd.Name)"
+          # pgomgr /merge <pgc files...> <pgd file>
+          & $pgomgr.FullName /merge @($pgcs.FullName) $pgd.FullName
+          if ($LASTEXITCODE -ne 0) { throw "pgomgr /merge failed with exit code $LASTEXITCODE" }
           Copy-Item $pgd.FullName "${{ github.workspace }}/orca-windows.pgd"
           Write-Host "merged profile: $($pgd.FullName)"
 
