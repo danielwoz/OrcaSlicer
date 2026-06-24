@@ -108,9 +108,8 @@ public:
 
     //BBS
     Flow                        smaller_ext_perimeter_flow;
-    std::vector<Polygons>       m_lower_polygons_series;
-    std::vector<Polygons>       m_external_lower_polygons_series;
-    std::vector<Polygons>       m_smaller_external_lower_polygons_series;
+    // Lower layer slices grown for overhang detection, see generate_lower_polygons_grown().
+    Polygons                    m_lower_polygons_grown;
 
     bool                                            has_fuzzy_skin = false;
     bool                                            has_fuzzy_hole = false;
@@ -168,7 +167,7 @@ public:
     bool        outer_walls_first_for_brim() const;
 
 private:
-    std::vector<Polygons>     generate_lower_polygons_series(float width);
+    Polygons                  generate_lower_polygons_grown() const;
     void split_top_surfaces(const ExPolygons &orig_polygons, ExPolygons &top_fills, ExPolygons &non_top_polygons, ExPolygons &fill_clip) const;
     void apply_extra_perimeters(ExPolygons& infill_area);
     void process_no_bridge(Surfaces& all_surfaces, coord_t perimeter_spacing, coord_t ext_perimeter_width);

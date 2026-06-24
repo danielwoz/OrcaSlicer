@@ -41,7 +41,6 @@
 #include "BoundingBox.hpp"
 #include "MultiMaterialSegmentation.hpp"
 #include "SurfaceCollection.hpp"
-static const int overhang_sampling_number = 6;
 static const double narrow_loop_length_threshold = 10;
 //BBS: when the width of expolygon is smaller than
 //ext_perimeter_width + ext_perimeter_spacing  * (1 - SMALLER_EXT_INSET_OVERLAP_TOLERANCE),
@@ -171,25 +170,21 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
             loop_role = loop.is_contour? elrDefault : elrHole;
         }
 
-        // BBS: get lower polygons series, width, mm3_per_mm
-        const std::vector<Polygons> *lower_polygons_series;
+        // BBS: get width, mm3_per_mm
         double extrusion_mm3_per_mm;
         double extrusion_width;
         if (is_external) {
             if (is_small_width) {
                 //BBS: smaller width external perimeter
-                lower_polygons_series = &perimeter_generator.m_smaller_external_lower_polygons_series;
                 extrusion_mm3_per_mm = perimeter_generator.smaller_width_ext_mm3_per_mm();
                 extrusion_width = perimeter_generator.smaller_ext_perimeter_flow.width();
             } else {
                 //BBS: normal external perimeter
-                lower_polygons_series = &perimeter_generator.m_external_lower_polygons_series;
                 extrusion_mm3_per_mm = perimeter_generator.ext_mm3_per_mm();
                 extrusion_width = perimeter_generator.ext_perimeter_flow.width();
             }
         } else {
             //BBS: normal perimeter
-            lower_polygons_series = &perimeter_generator.m_lower_polygons_series;
             extrusion_mm3_per_mm = perimeter_generator.mm3_per_mm();
             extrusion_width = perimeter_generator.perimeter_flow.width();
         }
@@ -224,7 +219,7 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
 
             Polylines remain_polines;
 
-            Polygons lower_polygons_series_clipped = ClipperUtils::clip_clipper_polygons_with_subject_bbox(lower_polygons_series->back(), bbox);
+            Polygons lower_polygons_series_clipped = ClipperUtils::clip_clipper_polygons_with_subject_bbox(perimeter_generator.m_lower_polygons_grown, bbox);
 
             Polylines inside_polines = intersection_pl({polygon}, lower_polygons_series_clipped);
 
@@ -1536,13 +1531,7 @@ void PerimeterGenerator::process_classic()
     m_ext_mm3_per_mm_smaller_width = this->smaller_ext_perimeter_flow.mm3_per_mm();
 
     // prepare grown lower layer slices for overhang detection
-    m_lower_polygons_series = generate_lower_polygons_series(this->perimeter_flow.width());
-    if (ext_perimeter_width == perimeter_width){
-        m_external_lower_polygons_series = m_lower_polygons_series;
-    } else {
-        m_external_lower_polygons_series = generate_lower_polygons_series(this->ext_perimeter_flow.width());
-    }
-    m_smaller_external_lower_polygons_series = generate_lower_polygons_series(this->smaller_ext_perimeter_flow.width());
+    m_lower_polygons_grown = generate_lower_polygons_grown();
     // we need to process each island separately because we might have different
     // extra perimeters for each one
     Surfaces all_surfaces = this->slices->surfaces;
@@ -3232,29 +3221,15 @@ bool brim_puts_outer_walls_first(BrimType brim_type, double brim_width)
     return brim_width > 0 && (brim_type == btOuterOnly || brim_type == btOuterAndInner || brim_type == btLeadingEdgeOnly);
 }
 
-std::vector<Polygons> PerimeterGenerator::generate_lower_polygons_series(float width)
+// The walls are tested for overhangs against the lower layer slices grown by half the outer wall
+// nozzle diameter. The offset does not depend on the wall width, so one set serves every wall.
+Polygons PerimeterGenerator::generate_lower_polygons_grown() const
 {
-    float nozzle_diameter = print_config->nozzle_diameter.get_at(config->outer_wall_filament_id - 1);
-    float start_offset = -0.5 * width;
-    float end_offset = 0.5 * nozzle_diameter;
-
-    assert(overhang_sampling_number >= 3);
-    // generate offsets
-    std::vector<float> offset_series;
-    offset_series.reserve(2);
-
-     offset_series.push_back(start_offset + 0.5 * (end_offset - start_offset) / (overhang_sampling_number - 1));
-     offset_series.push_back(end_offset);
-    std::vector<Polygons> lower_polygons_series;
-    if (this->lower_slices == NULL) {
-        return lower_polygons_series;
-    }
-
-    // offset expolygon to generate series of polygons
-    for (int i = 0; i < offset_series.size(); i++) {
-        lower_polygons_series.emplace_back(offset(*this->lower_slices, float(scale_(offset_series[i]))));
-    }
-    return lower_polygons_series;
+    if (this->lower_slices == nullptr)
+        return {};
+    const float nozzle_diameter = print_config->nozzle_diameter.get_at(config->outer_wall_filament_id - 1);
+    const float end_offset      = 0.5 * nozzle_diameter;
+    return offset(*this->lower_slices, float(scale_(end_offset)));
 }
 
 }
