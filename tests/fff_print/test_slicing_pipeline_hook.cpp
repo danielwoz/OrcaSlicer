@@ -183,6 +183,43 @@ TEST_CASE("Duplicate objects share a slice: Slice hook fires exactly once", "[sl
     CHECK(perim_calls == 1);                // and one perimeters pass (the sliced object)
 }
 
+TEST_CASE("Hooks of a multi-object plate fire step by step, objects in plate order", "[slicing_pipeline]") {
+    using S = Slic3r::SlicingPipelineStepPlugin;
+    std::vector<std::pair<const Slic3r::PrintObject*, S>> calls;
+    Slic3r::Print::set_slicing_pipeline_hook_fn(
+        [&](Slic3r::Print&, const Slic3r::PrintObject* o, S s){ if (o != nullptr) calls.emplace_back(o, s); });
+
+    Slic3r::Print print; Slic3r::Model model;
+    auto config = Slic3r::DynamicPrintConfig::full_print_config();
+    config.set_key_value("slicing_pipeline_plugin", new Slic3r::ConfigOptionStrings({"probe"})); // activate
+    init_print({cube(20), cube(15), cube(10)}, print, model, config);
+    print.process();
+    Slic3r::Print::set_slicing_pipeline_hook_fn(nullptr);
+
+    REQUIRE(print.objects().size() == 3);
+    // Each step fires for every object in plate order before the next step starts; prepare-infill and
+    // infill run together per object.
+    std::vector<std::pair<const Slic3r::PrintObject*, S>> expected;
+    const auto per_object = [&](std::initializer_list<S> steps) {
+        if (std::none_of(calls.begin(), calls.end(), [&](const auto &c) { return c.second == *steps.begin(); }))
+            return;
+        for (const Slic3r::PrintObject* o : print.objects())
+            for (S s : steps)
+                expected.emplace_back(o, s);
+    };
+    per_object({S::posSlice});
+    per_object({S::posPerimeters});
+    per_object({S::posEstimateCurledExtrusions});
+    per_object({S::posPrepareInfill, S::posInfill});
+    per_object({S::posIroning});
+    per_object({S::posContouring});
+    per_object({S::posSupportMaterial});
+    per_object({S::posDetectOverhangsForLift});
+    per_object({S::posSimplifyPath});
+    CHECK(calls == expected);
+    CHECK(std::count_if(calls.begin(), calls.end(), [](const auto &c) { return c.second == S::posSlice; }) == 3);
+}
+
 #include "libslic3r/Layer.hpp"          // Layer, LayerRegion (full defs for the cascade hook)
 #include "libslic3r/ClipperUtils.hpp"   // offset_ex
 

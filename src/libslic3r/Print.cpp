@@ -3455,8 +3455,33 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 run_pipeline_hook(sstep, obj);
         };
 
+        // The per-object steps run for all objects in parallel. With a slicing-pipeline plugin active they
+        // run one object after the other in plate order, as its hooks may read or change any object.
+        auto for_each_object = [this](const auto &step) {
+            if (m_pipeline_plugin_active) {
+                for (PrintObject *obj : m_objects)
+                    step(obj);
+            } else {
+                // An error of one object is kept until all objects are done and then rethrown in object order:
+                // letting it reach TBB would cancel the nested loops of the other objects, which then return
+                // early and leave their steps marked done with partial data.
+                std::vector<std::exception_ptr> errors(m_objects.size());
+                tbb::parallel_for(tbb::blocked_range<size_t>(0, m_objects.size()), [this, &step, &errors](const tbb::blocked_range<size_t> &range) {
+                    for (size_t i = range.begin(); i < range.end(); ++ i)
+                        try {
+                            step(m_objects[i]);
+                        } catch (...) {
+                            errors[i] = std::current_exception();
+                        }
+                });
+                for (const std::exception_ptr &error : errors)
+                    if (error)
+                        std::rethrow_exception(error);
+            }
+        };
+
         // SlicingPipeline: dedicated slice loop so the Slice boundary is hookable before perimeters.
-        for (PrintObject *obj : m_objects) {
+        for_each_object([&](PrintObject *obj) {
             if (need_slicing_objects.count(obj) != 0) {
                 const bool was_done = obj->is_step_done(posSlice);
                 obj->slice();
@@ -3475,8 +3500,8 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             } else {
                 if (obj->set_started(posSlice)) obj->set_done(posSlice);   // shared/duplicate — no hook
             }
-        }
-        for (PrintObject *obj : m_objects) {
+        });
+        for_each_object([&](PrintObject *obj) {
             if (need_slicing_objects.count(obj) != 0) {
                 const bool was_done = obj->is_step_done(posPerimeters);
                 obj->make_perimeters();   // slice() inside is a no-op: posSlice already DONE
@@ -3484,8 +3509,8 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             } else {
                 if (obj->set_started(posPerimeters)) obj->set_done(posPerimeters);
             }
-        }
-        for (PrintObject *obj : m_objects) {
+        });
+        for_each_object([&](PrintObject *obj) {
             if (need_slicing_objects.count(obj) != 0) {
                 const bool was_done = obj->is_step_done(posEstimateCurledExtrusions);
                 obj->estimate_curled_extrusions();
@@ -3495,8 +3520,8 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 if (obj->set_started(posEstimateCurledExtrusions))
                     obj->set_done(posEstimateCurledExtrusions);
             }
-        }
-        for (PrintObject *obj : m_objects) {
+        });
+        for_each_object([&](PrintObject *obj) {
             if (need_slicing_objects.count(obj) != 0) {
                 // split prepare_infill (fill-surface prep) from infill (make_fills) so a
                 // plugin can mutate fill surfaces at the PrepareInfill seam and have make_fills
@@ -3516,8 +3541,8 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 if (obj->set_started(posInfill))
                     obj->set_done(posInfill);
             }
-        }
-        for (PrintObject *obj : m_objects) {
+        });
+        for_each_object([&](PrintObject *obj) {
             if (need_slicing_objects.count(obj) != 0) {
                 const bool was_done = obj->is_step_done(posIroning);
                 obj->ironing();
@@ -3527,7 +3552,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 if (obj->set_started(posIroning))
                     obj->set_done(posIroning);
             }
-        }
+        });
 
         // Z-Contouring
         for (PrintObject *obj : m_objects) {
@@ -3575,7 +3600,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                     && m_objects[i]->is_step_done(posSupportMaterial))
                     run_pipeline_hook(SlicingPipelineStepPlugin::posSupportMaterial, m_objects[i]);
 
-        for (PrintObject* obj : m_objects) {
+        for_each_object([&](PrintObject *obj) {
             if (need_slicing_objects.count(obj) != 0) {
                 const bool was_done = obj->is_step_done(posDetectOverhangsForLift);
                 obj->detect_overhangs_for_lift();
@@ -3585,7 +3610,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 if (obj->set_started(posDetectOverhangsForLift))
                     obj->set_done(posDetectOverhangsForLift);
             }
-        }
+        });
     }
     else {
         for (PrintObject *obj : m_objects) {
