@@ -323,6 +323,7 @@ endif ()
 option(SLIC3R_BUILD_SANDBOXES   "Build development sandboxes" OFF)
 option(BUILD_TESTS       "Build unit tests" OFF)
 option(ORCA_TOOLS       "Build Orca tools" OFF)
+option(SLIC3R_LTO "Enable ThinLTO on the first-party slicer targets (clang, Release)" OFF)
 
 if (FLATPAK)
     set(SLIC3R_FHS ON CACHE BOOL "" FORCE)
@@ -1283,6 +1284,64 @@ if (ORCA_PLUGIN_VERIFY_REDIRECT)
 endif()
 
 add_subdirectory(src)
+
+# Link-time optimisation of the first-party slicer targets. The dependencies are prebuilt
+# archives, so cross-module optimisation stays within our own code. The link options are
+# PUBLIC so that every target linking these libraries (tests included) links the bitcode.
+if (SLIC3R_LTO)
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
+        # thin: fast parallel links (default); full: whole-module LTO, slower and heavier to link.
+        set(SLIC3R_LTO_MODE "thin" CACHE STRING "LTO mode for SLIC3R_LTO: thin or full")
+        if (SLIC3R_LTO_MODE STREQUAL "full")
+            set(_lto_flag "-flto")
+        else ()
+            set(_lto_flag "-flto=thin")
+        endif ()
+        set(_lto_link_flags ${_lto_flag})
+        if (NOT APPLE)
+            # GNU ld does not read LLVM bitcode; Apple's linker does.
+            list(APPEND _lto_link_flags -fuse-ld=lld)
+        endif ()
+        message(STATUS "SLIC3R_LTO: ${SLIC3R_LTO_MODE} LTO on the first-party targets")
+        foreach (_lto_target libslic3r libslic3r_cgal libslic3r_gui OrcaSlicer)
+            if (TARGET ${_lto_target})
+                target_compile_options(${_lto_target} PRIVATE $<$<CONFIG:Release>:${_lto_flag}>)
+                target_link_options(${_lto_target} PUBLIC $<$<CONFIG:Release>:${_lto_link_flags}>)
+            endif ()
+        endforeach ()
+    else ()
+        message(WARNING "SLIC3R_LTO is only implemented for Clang (not clang-cl); skipping.")
+    endif ()
+endif ()
+
+# Profile-guided optimisation of the slicing core (libslic3r + libslic3r_cgal), Release only:
+#   1. configure with -DORCA_PGO=generate, build, slice representative models (raw profiles land in ORCA_PGO_DIR)
+#   2. llvm-profdata merge -o <data> <ORCA_PGO_DIR>/*.profraw
+#   3. configure with -DORCA_PGO=use -DORCA_PGO_DATA=<data> (best with SLIC3R_LTO=ON) and rebuild
+set(ORCA_PGO "" CACHE STRING "PGO mode: <empty>|generate|use")
+set(ORCA_PGO_DIR  "${CMAKE_BINARY_DIR}/pgo-raw" CACHE PATH "Directory for the raw profiles (generate)")
+set(ORCA_PGO_DATA "${CMAKE_BINARY_DIR}/orca.profdata" CACHE FILEPATH "Merged profile (use)")
+if (ORCA_PGO)
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
+        if (ORCA_PGO STREQUAL "generate")
+            set(_pgo_flags -fprofile-generate=${ORCA_PGO_DIR})
+        elseif (ORCA_PGO STREQUAL "use")
+            set(_pgo_flags -fprofile-use=${ORCA_PGO_DATA} -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled)
+        else ()
+            message(FATAL_ERROR "ORCA_PGO must be 'generate' or 'use', got '${ORCA_PGO}'")
+        endif ()
+        message(STATUS "ORCA_PGO: ${ORCA_PGO} on libslic3r/libslic3r_cgal (Clang)")
+        foreach (_pgo_target libslic3r libslic3r_cgal)
+            if (TARGET ${_pgo_target})
+                target_compile_options(${_pgo_target} PRIVATE $<$<CONFIG:Release>:${_pgo_flags}>)
+                # PUBLIC: every executable linking the instrumented code needs the profile runtime.
+                target_link_options(${_pgo_target} PUBLIC $<$<CONFIG:Release>:${_pgo_flags}>)
+            endif ()
+        endforeach ()
+    else ()
+        message(WARNING "ORCA_PGO is only implemented for Clang (not clang-cl); skipping.")
+    endif ()
+endif ()
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT OrcaSlicer_app_gui)
 
 add_dependencies(gettext_make_pot hintsToPot)
