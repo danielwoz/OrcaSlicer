@@ -71,7 +71,7 @@ jobs:
       # ================= Phase 1: instrumented build =================
       - name: Configure (instrument)
         run: >
-          cmake -B build -G "Visual Studio 17 2022" -A x64
+          cmake -B build -A x64
           -DCMAKE_BUILD_TYPE=${{ env.build_type }}
           -DORCA_TOOLS=ON
           -DSLIC3R_VULKAN=ON
@@ -117,7 +117,7 @@ jobs:
       # ================= Phase 2: optimized build =================
       - name: Configure (use profile)
         run: >
-          cmake -B build -G "Visual Studio 17 2022" -A x64
+          cmake -B build -A x64
           -DCMAKE_BUILD_TYPE=${{ env.build_type }}
           -DORCA_TOOLS=ON
           -DSLIC3R_VULKAN=ON
