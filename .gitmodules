@@ -1,3 +1,19 @@
 [submodule "deps/minhook"]
 	path = deps/minhook
 	url = https://github.com/TsudaKageyu/minhook.git
+[submodule "bambu_network_oss"]
+	path = bambu_network_oss
+	url = https://github.com/danielwoz/bambu-network-oss.git
+	branch = orca-legacy-integration
+[submodule "mimalloc"]
+	path = deps_src/mimalloc
+	url = https://github.com/microsoft/mimalloc.git
+[submodule "deps_src/Vulkan-Headers"]
+	path = deps_src/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers.git
+[submodule "deps_src/Vulkan-Loader"]
+	path = deps_src/Vulkan-Loader
+	url = https://github.com/KhronosGroup/Vulkan-Loader.git
+[submodule "deps_src/glslang"]
+	path = deps_src/glslang
+	url = https://github.com/KhronosGroup/glslang.git

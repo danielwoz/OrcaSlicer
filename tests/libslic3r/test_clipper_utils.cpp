@@ -28,17 +28,21 @@ SCENARIO("Various Clipper operations - xs/t/11_clipper.t", "[ClipperUtils]") {
         WHEN("offset_ex") {
             ExPolygons result = Slic3r::offset_ex(square_with_hole, 5.f);
             THEN("offset matches") {
+                // Clipper2 migration: same contour and same hole vertices as Clipper1, but the
+                // hole's start vertex is rotated by one (Clipper2's PolyTree emits a different
+                // first point). Geometrically identical (same point set, same winding).
                 REQUIRE(result == ExPolygons { {
                     { { 205, 205 }, { 95, 205 }, { 95, 95 }, { 205, 95 }, },
-                    { { 145, 145 }, { 145, 155 }, { 155, 155 }, { 155, 145 } } } } );
+                    { { 145, 155 }, { 155, 155 }, { 155, 145 }, { 145, 145 } } } } );
             }
         }
         WHEN("offset2_ex") {
             ExPolygons result = Slic3r::offset2_ex({ square_with_hole }, 5.f, -2.f);
             THEN("offset matches") {
+                // Clipper2 migration: hole start vertex rotated by one vs Clipper1 (see offset_ex).
                 REQUIRE(result == ExPolygons { {
                     { { 203, 203 }, { 97, 203 }, { 97, 97 }, { 203, 97 } },
-                    { { 143, 143 }, { 143, 157 }, { 157, 157 }, { 157, 143 } } } } );
+                    { { 143, 157 }, { 157, 157 }, { 157, 143 }, { 143, 143 } } } } );
             }
         }
     }

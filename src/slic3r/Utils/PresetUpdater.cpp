@@ -1376,7 +1376,14 @@ void PresetUpdater::sync(std::string http_url, std::string language, std::string
         }
 		if (p->cancel)
 			return;
+#ifndef ORCA_OSS_NETWORK_PLUGIN
+        // With the bundled open-source network plugin we never download/replace
+        // the proprietary one (it is provisioned locally at startup). See
+        // GUI_App::ensure_oss_network_plugin().
         this->p->sync_plugins(http_url, plugin_version);
+#else
+        BOOST_LOG_TRIVIAL(info) << "[Orca Updater] sync_plugins skipped: using bundled OSS network plugin";
+#endif
         this->p->sync_printer_config(http_url);
 		//if (p->cancel)
 		//	return;

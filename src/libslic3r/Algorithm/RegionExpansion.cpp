@@ -2,6 +2,7 @@
 
 #include <libslic3r/AABBTreeIndirect.hpp>
 #include <libslic3r/ClipperZUtils.hpp>
+#include <libslic3r/Clipper2ZUtils.hpp>
 #include <libslic3r/ClipperUtils.hpp>
 #include <libslic3r/Utils.hpp>
 
@@ -194,6 +195,36 @@ static int sample_in_expolygons(
     return out;
 }
 
+// ---- Clipper2-Z wave-seed intersection ----
+// Intersect the (closed) boundary contours with the (open, slightly expanded) source
+// contours, threading every contour's source/boundary index through Z. The ZFill callback
+// records pairwise intersections and tags new vertices with a negative 1-based index into
+// that list (the intersection-index sentinel), using Clipper2Lib_Z::Clipper64; the
+// intersections vector type is identical (std::pair<int64_t,int64_t>) because coord_t is
+// int64_t. Boundary types stay ClipperLib_Z (a plain int64+z data container).
+static ClipperLib_Z::Paths wave_seeds_intersect_clipper2(
+    const ClipperLib_Z::Paths &boundary_zpaths,
+    const ClipperLib_Z::Paths &zsrc,
+    ClipperZUtils::ClipperZIntersectionVisitor::Intersections &intersections)
+{
+    using namespace Clipper2ZUtils;
+    Clipper2ZIntersectionVisitor visitor(intersections);
+    Clipper2Lib_Z::Clipper64     zclipper;
+    zclipper.SetZCallback(visitor.clipper_callback());
+    zclipper.AddClip(zpaths_c1_to_c2(boundary_zpaths));
+    zclipper.AddOpenSubject(zpaths_c1_to_c2(zsrc));
+    Clipper2Lib_Z::PolyTree64 closed_tree;
+    ZPaths64                  open_paths;
+    zclipper.Execute(Clipper2Lib_Z::ClipType::Intersection, Clipper2Lib_Z::FillRule::NonZero, closed_tree, open_paths);
+    // Mirror Clipper1's PolyTreeToPaths, which emits every node (open or closed).
+    ZPaths64 closed_paths = Clipper2Lib_Z::PolyTreeToPaths64(closed_tree);
+    ClipperLib_Z::Paths segments;
+    segments.reserve(open_paths.size() + closed_paths.size());
+    for (const ZPath64 &p : open_paths)   segments.emplace_back(zpath_c2_to_c1(p));
+    for (const ZPath64 &p : closed_paths) segments.emplace_back(zpath_c2_to_c1(p));
+    return segments;
+}
+
 std::vector<WaveSeed> wave_seeds(
     // Source regions that are supposed to touch the boundary.
     const ExPolygons      &src,
@@ -220,28 +251,21 @@ std::vector<WaveSeed> wave_seeds(
     coord_t             idx_src_end;
 
     {
-        ClipperLib_Z::Clipper zclipper;
-        ClipperZUtils::ClipperZIntersectionVisitor visitor(intersections);
-        zclipper.ZFillFunction(visitor.clipper_callback());
-        // as closed contours
-        zclipper.AddPaths(ClipperZUtils::expolygons_to_zpaths(boundary, idx_boundary_end), ClipperLib_Z::ptClip, true);
-        // as open contours
+        // Closed boundary contours (Z = boundary index), open expanded source contours
+        // (Z = source index). Building these advances idx_boundary_end / idx_src_end.
+        ClipperLib_Z::Paths boundary_zpaths = ClipperZUtils::expolygons_to_zpaths(boundary, idx_boundary_end);
         std::vector<std::pair<ClipperLib_Z::IntPoint, int>> zsrc_splits;
-        {
-            idx_src_end = idx_boundary_end;
-            ClipperLib_Z::Paths zsrc = expolygons_to_zpaths_expanded_opened(src, tiny_expansion, idx_src_end);
-            zclipper.AddPaths(zsrc, ClipperLib_Z::ptSubject, false);
-            zsrc_splits.reserve(zsrc.size());
-            for (const ClipperLib_Z::Path &path : zsrc) {
-                assert(path.size() >= 2);
-                assert(path.front() == path.back());
-                zsrc_splits.emplace_back(path.front(), -1);
-            }
-            std::sort(zsrc_splits.begin(), zsrc_splits.end(), [](const auto &l, const auto &r){ return ClipperZUtils::zpoint_lower(l.first, r.first); });
+        idx_src_end = idx_boundary_end;
+        ClipperLib_Z::Paths zsrc = expolygons_to_zpaths_expanded_opened(src, tiny_expansion, idx_src_end);
+        zsrc_splits.reserve(zsrc.size());
+        for (const ClipperLib_Z::Path &path : zsrc) {
+            assert(path.size() >= 2);
+            assert(path.front() == path.back());
+            zsrc_splits.emplace_back(path.front(), -1);
         }
-        ClipperLib_Z::PolyTree polytree;
-        zclipper.Execute(ClipperLib_Z::ctIntersection, polytree, ClipperLib_Z::pftNonZero, ClipperLib_Z::pftNonZero);
-        ClipperLib_Z::PolyTreeToPaths(std::move(polytree), segments);
+        std::sort(zsrc_splits.begin(), zsrc_splits.end(), [](const auto &l, const auto &r){ return ClipperZUtils::zpoint_lower(l.first, r.first); });
+
+        segments = wave_seeds_intersect_clipper2(boundary_zpaths, zsrc, intersections);
         merge_splits(segments, zsrc_splits);
     }
 

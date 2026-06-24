@@ -154,6 +154,14 @@ if (NOT WIN32 AND NOT APPLE)
 endif ()
 
 target_link_libraries(OrcaSlicer libslic3r cereal::cereal)
+if (ORCA_MIMALLOC)
+    # Static mimalloc + new/delete override in OrcaSlicer.cpp's TU (so the
+    # operators live in the main object and win over libstdc++ regardless of
+    # link order). Routes the slicer's heavy std::vector/new churn to mimalloc.
+    target_link_libraries(OrcaSlicer mimalloc-static)
+    target_compile_definitions(OrcaSlicer PRIVATE ORCA_MIMALLOC)
+    target_include_directories(OrcaSlicer PRIVATE ${CMAKE_SOURCE_DIR}/deps_src/mimalloc/include)
+endif ()
 # target_include_directories(OrcaSlicer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/slic3r)
 if (APPLE)
 #    add_compile_options(-stdlib=libc++)

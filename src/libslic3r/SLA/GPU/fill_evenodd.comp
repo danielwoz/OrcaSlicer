@@ -1,0 +1,87 @@
+#version 450
+//
+// SLA GPU rasterizer fill shader (Phase 3): even-odd polygon fill.
+//
+// One invocation per output pixel. For each pixel we shoot a horizontal ray to
+// the right from one or more sample points inside the pixel and count how many
+// polygon edges it crosses (even-odd parity). Odd => inside => 255, even => 0.
+//
+// Coordinates are already in PIXEL space (the CPU side applies the exact same
+// pxdim / Trafo mapping AGGRaster uses), so this shader is coordinate-agnostic:
+// it just fills whatever edges it is handed, in a top-left-origin pixel grid.
+//
+// Optional supersampling: SS samples per axis (SS*SS samples / pixel), box
+// averaged into 8-bit coverage. SS=1 is plain parity (no AA) and is acceptable
+// for Phase 3; SS>1 gives basic AA. AA-matching to AGG is Phase 4.
+//
+// Output is a storage buffer of uint, one uint per pixel (value 0..255). The
+// CPU packs it down to the R8 bytes the PNG encoder expects. A storage buffer
+// (rather than an R8 storage image) avoids needing shaderStorageImageExtended
+// formats, so this runs on NVIDIA and lavapipe alike.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Edges {
+    vec4 edges[]; // (x0, y0, x1, y1) in pixel space
+};
+
+layout(std430, binding = 1) writeonly buffer OutImg {
+    uint pixels[]; // width*height, value 0..255
+};
+
+layout(push_constant) uniform Push {
+    uint width;
+    uint height;
+    uint edge_count;
+    uint ss; // supersample factor per axis (>=1)
+} pc;
+
+// Count edges crossed by a ray going +x from (px, py). Standard even-odd test:
+// an edge (a -> b) is crossed if py is between a.y and b.y (half-open) and the
+// edge's x at py is to the right of px.
+uint crossings(float px, float py)
+{
+    uint c = 0u;
+    for (uint i = 0u; i < pc.edge_count; ++i) {
+        vec4 e = edges[i];
+        float ay = e.y;
+        float by = e.w;
+        // half-open interval test avoids double-counting shared vertices
+        bool cond = (ay > py) != (by > py);
+        if (cond) {
+            float ax = e.x;
+            float bx = e.z;
+            float t = (py - ay) / (by - ay);
+            float xint = ax + t * (bx - ax);
+            if (xint > px) c += 1u;
+        }
+    }
+    return c;
+}
+
+void main()
+{
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    if (x >= pc.width || y >= pc.height)
+        return;
+
+    uint ss = pc.ss;
+    if (ss < 1u) ss = 1u;
+
+    uint inside = 0u;
+    uint total = ss * ss;
+    float inv = 1.0 / float(ss);
+    for (uint sy = 0u; sy < ss; ++sy) {
+        for (uint sx = 0u; sx < ss; ++sx) {
+            // sample at pixel-center of each sub-cell
+            float px = float(x) + (float(sx) + 0.5) * inv;
+            float py = float(y) + (float(sy) + 0.5) * inv;
+            if ((crossings(px, py) & 1u) == 1u)
+                inside += 1u;
+        }
+    }
+
+    uint val = (inside * 255u) / total;
+    pixels[y * pc.width + x] = val;
+}

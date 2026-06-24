@@ -1,0 +1,80 @@
+From 940b73bf7192824ffe342505fcb715b72eba070a Mon Sep 17 00:00:00 2001
+From: Daniel Williams <35799546+danielwoz@users.noreply.github.com>
+Date: Sat, 20 Jun 2026 14:54:48 +0800
+Subject: [PATCH] OrcaSlicer SLIC3R_VULKAN: static loader build + avoid global
+ option/find_package collisions
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ CMakeLists.txt        | 16 +++++++++++++---
+ loader/CMakeLists.txt | 13 +++++++++++++
+ 2 files changed, 26 insertions(+), 3 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d81dd57..1dfd1c6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -52,7 +52,13 @@ if(WIN32)
+     set(BUILD_DLL_VERSIONINFO "" CACHE STRING "Set the version to be used in the loader.rc file. Default value is the currently generated header version")
+ endif()
+ 
+-find_package(VulkanHeaders CONFIG QUIET)
++# OrcaSlicer (SLIC3R_VULKAN): when vendored via add_subdirectory, the
++# Vulkan::Headers target already exists and there is no build-tree config
++# package, so skip the find_package. VulkanHeaders_VERSION is only used by the
++# (disabled) LOADER_CODEGEN path.
++if(NOT TARGET Vulkan::Headers)
++    find_package(VulkanHeaders CONFIG QUIET)
++endif()
+ 
+ include(GNUInstallDirs)
+ 
+@@ -267,8 +273,12 @@ endif()
+ 
+ add_subdirectory(loader)
+ 
+-option(BUILD_TESTS "Build Tests")
+-if (BUILD_TESTS)
++# OrcaSlicer (SLIC3R_VULKAN): renamed from BUILD_TESTS to a loader-specific
++# option so it does not collide with OrcaSlicer's global BUILD_TESTS (which is
++# ON for the slicer's own unit tests). The vendored loader's own tests are never
++# built.
++option(VULKAN_LOADER_BUILD_TESTS "Build Vulkan-Loader tests")
++if (VULKAN_LOADER_BUILD_TESTS)
+     enable_testing()
+     add_subdirectory(tests)
+ endif()
+diff --git a/loader/CMakeLists.txt b/loader/CMakeLists.txt
+index 6296ebf..2f49323 100644
+--- a/loader/CMakeLists.txt
++++ b/loader/CMakeLists.txt
+@@ -423,6 +423,11 @@ else()
+ 
+         message(WARNING "The APPLE_STATIC_LOADER option has been set. Note that this will only work on MacOS and is not supported "
+                 "or tested as part of the loader. Use it at your own risk.")
++    elseif(BUILD_STATIC_LOADER)
++        # OrcaSlicer (SLIC3R_VULKAN): build the loader as a static archive that
++        # we link directly into libslic3r_sla_gpu. Runtime ICD discovery is
++        # unaffected — the static loader still dlopen()s the driver at runtime.
++        add_library(vulkan STATIC)
+     else()
+         add_library(vulkan SHARED)
+     endif()
+@@ -532,6 +537,14 @@ if (APPLE_STATIC_LOADER)
+     return()
+ endif()
+ 
++if (BUILD_STATIC_LOADER)
++    # OrcaSlicer (SLIC3R_VULKAN): vendored static loader, linked directly into
++    # libslic3r_sla_gpu. We do not install it or export a VulkanLoaderConfig
++    # package (the export set would drag in non-exported helper targets), and we
++    # don't generate vulkan.pc. Skip all of the install/pkgconfig machinery.
++    return()
++endif()
++
+ # Generate CMake Configuration File (IE: VulkanLoaderConfig.cmake)
+ install(TARGETS vulkan EXPORT VulkanLoaderConfig)
+ set_target_properties(vulkan PROPERTIES EXPORT_NAME "Loader")
+-- 
+2.34.1
+
