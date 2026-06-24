@@ -1,0 +1,94 @@
+#version 460
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_ray_tracing_position_fetch : require
+
+// Seam-visibility ray casting on the GPU (VK_KHR_ray_query / RT cores).
+//
+// One invocation per surface sample. For each of N*N hemisphere directions we
+// build the SAME Frame as the CPU (SeamPlacer.cpp), cast a first-hit ray against
+// the static mesh TLAS, and apply the SAME dot<=0 visibility test. The output is
+// one float visibility score per sample, matching raycast_visibility()'s
+// non-negative-volumes branch.
+//
+// We use ray_tracing_position_fetch to recover the hit triangle's three world
+// positions and compute its geometric face normal in-shader (matching
+// its_face_normal on the CPU), so we don't need to upload a face-normal table.
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
+
+layout(set = 0, binding = 1, std430) readonly buffer Positions { vec4 positions[]; };
+layout(set = 0, binding = 2, std430) readonly buffer Normals   { vec4 normals[];   };
+layout(set = 0, binding = 3, std430) writeonly buffer Result   { float result[];   };
+
+layout(push_constant) uniform PC {
+    uint  sample_count;
+    uint  sqr_rays;   // N; total rays per sample = N*N
+    float ray_origin_offset; // normal * this (CPU uses 0.01)
+} pc;
+
+const float PI = 3.14159265358979323846;
+
+// Mirror of SeamPlacerImpl::sample_hemisphere_uniform (SeamPlacer.cpp:113).
+vec3 sample_hemisphere_uniform(vec2 s) {
+    float term1 = 2.0 * PI * s.x;
+    float term2 = 2.0 * sqrt(s.y - s.y * s.y);
+    return vec3(cos(term1) * term2, sin(term1) * term2, abs(1.0 - 2.0 * s.y));
+}
+
+// Mirror of Frame::set_from_z + to_world (SeamPlacer.cpp:74-84).
+// Returns the world-space direction for a local dir given the sample normal.
+vec3 frame_to_world(vec3 normal, vec3 local) {
+    vec3 mZ = normalize(normal);
+    vec3 tmpX = (abs(mZ.x) > 0.99) ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    vec3 mY = normalize(cross(mZ, tmpX));
+    vec3 mX = cross(mY, mZ);
+    return local.x * mX + local.y * mY + local.z * mZ;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.sample_count) return;
+
+    vec3 center = positions[idx].xyz;
+    vec3 normal = normals[idx].xyz;
+
+    uint  N = pc.sqr_rays;
+    float step_size = 1.0 / float(N);
+    float decrease_step = 1.0 / float(N * N);
+
+    vec3 ray_origin = center + normal * pc.ray_origin_offset;
+
+    float vis = 1.0;
+
+    for (uint xi = 0u; xi < N; ++xi) {
+        float sx = float(xi) * step_size + step_size * 0.5;
+        for (uint yi = 0u; yi < N; ++yi) {
+            float sy = float(yi) * step_size + step_size * 0.5;
+            vec3 local_dir = sample_hemisphere_uniform(vec2(sx, sy));
+            vec3 world_dir = frame_to_world(normal, local_dir);
+
+            rayQueryEXT rq;
+            rayQueryInitializeEXT(rq, topLevelAS,
+                                  gl_RayFlagsOpaqueEXT, 0xFF,
+                                  ray_origin, 0.0, world_dir, 1.0e30);
+            while (rayQueryProceedEXT(rq)) {}
+
+            if (rayQueryGetIntersectionTypeEXT(rq, true) ==
+                gl_RayQueryCommittedIntersectionTriangleEXT) {
+                // Recover the hit triangle's world-space vertex positions and
+                // compute the geometric face normal (same as its_face_normal:
+                // (v1-v0) x (v2-v1), then normalized).
+                vec3 vtx[3];
+                rayQueryGetIntersectionTriangleVertexPositionsEXT(rq, true, vtx);
+                vec3 fn = normalize(cross(vtx[1] - vtx[0], vtx[2] - vtx[1]));
+                if (dot(fn, world_dir) <= 0.0) {
+                    vis -= decrease_step;
+                }
+            }
+        }
+    }
+
+    result[idx] = vis;
+}

@@ -105,6 +105,7 @@
 #include "nlohmann/json.hpp"
 
 #include "GCode/ConflictChecker.hpp"
+#include "GCode/GPU/SeamRayCaster.hpp"
 
 #include <codecvt>
 #include "Format/STEP.hpp"
@@ -3348,6 +3349,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
 
     // The seam enforcers, blockers and occlusion depend on the model only: compute them while slicing.
     if (! this->is_step_done(psGCodeExport)) {
+        seam_gpu::SeamRayCaster::warmup_async();
         if (! m_seam_precompute)
             m_seam_precompute = std::make_unique<SeamPrecompute>();
         m_seam_precompute->start(*this);

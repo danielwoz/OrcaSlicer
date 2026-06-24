@@ -33,6 +33,21 @@ add_subdirectory(qhull)
 add_subdirectory(qoi)
 add_subdirectory(semver)      # Semver static library
 
+if (SLIC3R_VULKAN)
+    # Vulkan for the GPU seam visibility raycast (src/libslic3r/GCode/GPU). Vulkan-Headers is the
+    # header-only target Vulkan::Headers. The loader is built as the static library "vulkan"; it still
+    # finds the GPU driver at runtime. The danielwoz/Vulkan-Loader orca-vulkan-static branch adds the
+    # static build, skips its find_package(VulkanHeaders) when the target exists and gates its tests on
+    # VULKAN_LOADER_BUILD_TESTS instead of the BUILD_TESTS option OrcaSlicer uses.
+    set(VULKAN_HEADERS_INSTALL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Vulkan-Headers" CACHE PATH "" FORCE)
+    add_subdirectory(Vulkan-Headers EXCLUDE_FROM_ALL)
+    set(BUILD_STATIC_LOADER       ON  CACHE BOOL "" FORCE)
+    set(VULKAN_LOADER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_WERROR             OFF CACHE BOOL "" FORCE)
+    set(UPDATE_DEPS               OFF CACHE BOOL "" FORCE)
+    add_subdirectory(Vulkan-Loader EXCLUDE_FROM_ALL)
+endif ()
+
 if (ORCA_MIMALLOC)
     # Process-wide mimalloc: the shared library overrides malloc/free and operator new/delete,
     # and on Windows mimalloc-redirect.dll patches the CRT allocator of every module, so the

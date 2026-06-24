@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <cstddef>
 #include <igl/Hit.h>
 #include <optional>
@@ -56,6 +57,7 @@
 #include "libslic3r/TriangleSetSampling.hpp"
 
 #include "libslic3r/Utils.hpp"
+#include "libslic3r/GCode/GPU/SeamRayCaster.hpp"
 #include "PreciseSeam.hpp"
 
 //#define DEBUG_FILES
@@ -182,6 +184,40 @@ std::vector<float> raycast_visibility(const AABBTreeIndirect::Tree<3, float> &ra
   }
 
   bool model_contains_negative_parts = negative_volumes_start_index < triangles.indices.size();
+
+#ifdef SLIC3R_VULKAN
+  // GPU ray queries for the common case without negative volumes, unless ORCA_SEAM_GPU=0. Falls back to the
+  // CPU below if no ray-query device is available or the GPU computation fails.
+  if (!model_contains_negative_parts) {
+    const char *off = std::getenv("ORCA_SEAM_GPU");
+    if (off == nullptr || std::strcmp(off, "0") != 0) {
+      // The GPU cost hardly depends on the number of rays, so it casts 16x16 rays per sample instead of the
+      // CPU's 5x5, which lowers the noise of the visibility estimate. ORCA_SEAM_GPU_RAYS sets it (1..64).
+      uint32_t sqr_rays = 16;
+      if (const char *r = std::getenv("ORCA_SEAM_GPU_RAYS")) {
+        const int v = std::atoi(r);
+        if (v >= 1 && v <= 64)
+          sqr_rays = uint32_t(v);
+      }
+      if (auto rc = seam_gpu::SeamRayCaster::get(); rc && rc->is_usable()) {
+        std::vector<float> gpu_result;
+        if (rc->compute_visibility(triangles, samples, sqr_rays, 0.01f, gpu_result) &&
+            gpu_result.size() == samples.positions.size()) {
+          // The front adjustment of spAlignedBack does not depend on the rays; apply it as the CPU does.
+          if (seam_position == spAlignedBack) {
+            for (size_t i = 0; i < gpu_result.size(); ++i) {
+              const Vec3f &normal = samples.normals[i];
+              gpu_result[i] += std::clamp((normal.dot(Vec3f(0.0f, -1.0f, 0.0f)) + 1.2f) * 0.5f, 0.0f, 1.0f);
+            }
+          }
+          BOOST_LOG_TRIVIAL(debug) << "SeamPlacer: raycast visibility on GPU (" << rc->device_name() << "), N=" << sqr_rays;
+          return gpu_result;
+        }
+        BOOST_LOG_TRIVIAL(warning) << "SeamPlacer: GPU raycast failed; falling back to CPU.";
+      }
+    }
+  }
+#endif // SLIC3R_VULKAN
 
   std::vector<float> result(samples.positions.size());
   tbb::parallel_for(tbb::blocked_range<size_t>(0, result.size()),

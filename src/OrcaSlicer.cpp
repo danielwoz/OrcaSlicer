@@ -114,6 +114,7 @@ struct OrcaMiTune {
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/GCode.hpp"
+#include "libslic3r/GCode/GPU/SeamRayCaster.hpp"
 #include "libslic3r/MeshRepair.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/ModelArrange.hpp"
@@ -1225,6 +1226,10 @@ int CLI::run(int argc, char **argv)
     set_current_thread_name("orcaslicer_main");
     // Save the thread ID of the main thread.
     save_main_thread_id();
+
+    // Start initializing the GPU seam raycast on a background thread, so that it is ready by the time seams
+    // are placed. Does nothing without SLIC3R_VULKAN or with ORCA_SEAM_GPU=0.
+    Slic3r::seam_gpu::SeamRayCaster::warmup_async();
 
 #ifdef __WXGTK__
     // ------------------------------------------------------------------

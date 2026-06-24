@@ -328,6 +328,9 @@ option(SLIC3R_LTO "Enable ThinLTO on the first-party slicer targets (clang, Rele
 # (the install rules do this). Without the redirect the override is module-local, and memory
 # passed between the app and the network plugin would be freed on the wrong heap.
 option(ORCA_MIMALLOC "Use mimalloc as the process-wide allocator (shared override + Windows redirect DLL)" OFF)
+# The GPU path is used when a ray-query capable Vulkan device is found (ORCA_SEAM_GPU=0 turns it off). It
+# casts 16x16 rays per sample instead of the CPU's 5x5, so seams differ from a build without it.
+option(SLIC3R_VULKAN "Raycast the seam visibility on the GPU with Vulkan ray queries" OFF)
 
 if (FLATPAK)
     set(SLIC3R_FHS ON CACHE BOOL "" FORCE)

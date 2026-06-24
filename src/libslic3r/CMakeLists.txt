@@ -817,6 +817,13 @@ if (WIN32)
     target_compile_definitions(libslic3r PUBLIC "WIN32_LEAN_AND_MEAN=" "NOMINMAX")
 endif ()
 
+if (SLIC3R_VULKAN)
+    # GPU seam visibility raycast, see GCode/GPU/SeamRayCaster.hpp.
+    add_subdirectory(GCode/GPU)
+    target_link_libraries(libslic3r PRIVATE libslic3r_seam_gpu)
+    target_compile_definitions(libslic3r PUBLIC SLIC3R_VULKAN)
+endif ()
+
 if (SLIC3R_PCH AND NOT SLIC3R_SYNTAXONLY)
     add_precompiled_header(libslic3r pchheader.hpp FORCEINCLUDE)
 endif ()

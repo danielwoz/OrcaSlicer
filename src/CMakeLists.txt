@@ -441,6 +441,11 @@ if (WIN32)
     endif ()
     install(FILES ${output_dlls_${build_type}} DESTINATION ".")
     install(DIRECTORY "${CMAKE_PREFIX_PATH}/libpython/" DESTINATION "python")
+    if (SLIC3R_VULKAN)
+        # The Vulkan loader build on Windows emits vulkan-1.dll, which the app imports. Ship it so that the
+        # app also starts without a system Vulkan runtime.
+        install(FILES $<TARGET_FILE:vulkan> DESTINATION ".")
+    endif ()
 else ()
     if (APPLE)
     else()

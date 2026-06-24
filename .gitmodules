@@ -4,3 +4,10 @@
 [submodule "mimalloc"]
 	path = deps_src/mimalloc
 	url = https://github.com/microsoft/mimalloc.git
+[submodule "deps_src/Vulkan-Headers"]
+	path = deps_src/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers.git
+[submodule "deps_src/Vulkan-Loader"]
+	path = deps_src/Vulkan-Loader
+	url = https://github.com/danielwoz/Vulkan-Loader.git
+	branch = orca-vulkan-static
