@@ -168,6 +168,8 @@ jobs:
       # with VS and is on PATH via setup-msbuild.
       - name: Train (slice)
         shell: pwsh
+        env:
+          ORCA_CLI_SKIP_GL_THUMBNAILS: "1"   # skip the blocking GL thumbnail render headless
         run: |
           $dir   = "${{ steps.exe.outputs.dir }}"
           $exe   = "${{ steps.exe.outputs.runexe }}"
