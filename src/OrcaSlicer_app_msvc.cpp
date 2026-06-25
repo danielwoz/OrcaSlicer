@@ -386,6 +386,22 @@ int wmain(int argc, wchar_t **argv)
 #ifdef SLIC3R_GUI
     // Here one may push some additional parameters based on the wrapper type.
     bool force_mesa = false;
+    // Headless / CLI detection. The OpenGL version probe below (load_opengl_dll)
+    // creates a real Win32 window and runs a blocking message pump that drives a
+    // wglCreateContext/wglMakeCurrent against the system GL driver. On a
+    // display-less / GPU-less runner (e.g. Windows PGO training) that probe HANGS
+    // indefinitely, so `orca-slicer.exe --slice ...` never even reaches the app.
+    // When we are clearly running headless we must skip the probe entirely. This
+    // is detected two ways (either is sufficient):
+    //   * ORCA_CLI_SKIP_GL_THUMBNAILS env var is set (explicit CI/headless opt-in), or
+    //   * argv contains a CLI action flag (--slice / --export* / --info), which
+    //     means GUI_App will run headless (start_gui = m_actions.empty()).
+    bool headless_cli = false;
+    {
+        wchar_t* env = _wgetenv(L"ORCA_CLI_SKIP_GL_THUMBNAILS");
+        if (env && env[0] != L'\0' && env[0] != L'0')
+            headless_cli = true;
+    }
 #endif /* SLIC3R_GUI */
     bool stage_only = false;                 // internal: elevated genuine-host staging pass
     for (int i = 1; i < argc; ++ i) {
@@ -395,6 +411,11 @@ int wmain(int argc, wchar_t **argv)
             force_mesa = true;
         else if (wcscmp(argv[i], L"--no-sw-renderer") == 0)
             force_mesa = false;
+        // Any CLI action flag implies a headless run; skip the GL version probe.
+        else if (wcsncmp(argv[i], L"--slice", 7) == 0
+              || wcsncmp(argv[i], L"--export", 8) == 0
+              || wcscmp(argv[i], L"--info") == 0)
+            headless_cli = true;
 #endif /* SLIC3R_GUI */
         argv_extended.emplace_back(argv[i]);
     }
@@ -403,7 +424,12 @@ int wmain(int argc, wchar_t **argv)
 #ifdef SLIC3R_GUI
     OpenGLVersionCheck opengl_version_check;
     bool load_mesa = false;
-    if (!stage_only)                          // the staging pass does no GUI work
+    // Skip the GL version probe for the staging pass (no GUI work) and for headless
+    // CLI runs (the probe's blocking message pump + WGL context creation hangs with
+    // no display/GPU). A headless --slice does not need OpenGL at all; if thumbnail
+    // rendering is wanted, the slicer DLL loads MESA on demand and the in-DLL
+    // thumbnail block is separately guarded by ORCA_CLI_SKIP_GL_THUMBNAILS.
+    if (!stage_only && !headless_cli)
         load_mesa =
             // Forced from the command line.
             force_mesa ||
