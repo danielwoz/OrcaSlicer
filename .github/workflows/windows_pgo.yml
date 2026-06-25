@@ -80,16 +80,28 @@ jobs:
       - name: Build (instrument)
         run: cmake --build build --config ${{ env.build_type }} --target ALL_BUILD -- -m
 
-      - name: Locate instrumented exe + build dir
+      # Stage a RUNNABLE app (resources/, MESA software-GL, dlls) into build/OrcaSlicer.
+      # The build-tree exe alone can't run --slice (missing resources/GL) and exits -1.
+      - name: Install (instrument)
+        run: cmake --build build --config ${{ env.build_type }} --target install -- -m
+
+      - name: Locate exes + profile dir
         id: exe
         shell: pwsh
         run: |
-          $e = Get-ChildItem build -Recurse -Include orca-slicer.exe,OrcaSlicer.exe |
-               Where-Object { $_.FullName -notmatch 'CMakeFiles' } | Select-Object -First 1
-          if (-not $e) { throw "instrumented exe not found under build/" }
-          "path=$($e.FullName)" >> $env:GITHUB_OUTPUT
-          "dir=$($e.DirectoryName)"  >> $env:GITHUB_OUTPUT
-          Write-Host "exe: $($e.FullName)"
+          # build-tree exe: where the .pgd is baked at link + where *.pgc are written
+          $buildexe = Get-ChildItem build/src -Recurse -Include orca-slicer.exe,OrcaSlicer.exe -EA SilentlyContinue |
+                      Where-Object { $_.FullName -notmatch 'CMakeFiles' } | Select-Object -First 1
+          if (-not $buildexe) { throw "build-tree exe not found under build/src" }
+          # installed exe: runnable (bundled resources + MESA); a copy of the instrumented binary
+          $instexe = Get-ChildItem build/OrcaSlicer -Recurse -Include orca-slicer.exe,OrcaSlicer.exe -EA SilentlyContinue |
+                     Select-Object -First 1
+          if (-not $instexe) { $instexe = $buildexe; Write-Host "::warning::installed exe not found; using build exe" }
+          "dir=$($buildexe.DirectoryName)"  >> $env:GITHUB_OUTPUT
+          "path=$($buildexe.FullName)"      >> $env:GITHUB_OUTPUT
+          "runexe=$($instexe.FullName)"     >> $env:GITHUB_OUTPUT
+          Write-Host "build exe: $($buildexe.FullName)"
+          Write-Host "run exe (installed): $($instexe.FullName)"
 
       # ---- Training run (emits *.pgc next to the exe) ----
       # ITERATE: confirm the headless --slice invocation/flags on Windows; add
@@ -99,7 +111,7 @@ jobs:
         shell: pwsh
         run: |
           $dir   = "${{ steps.exe.outputs.dir }}"
-          $exe   = "${{ steps.exe.outputs.path }}"
+          $exe   = "${{ steps.exe.outputs.runexe }}"
           $model = "${{ github.workspace }}/${{ env.train_model }}"
           $out   = "${{ github.workspace }}/pgo_out"
           New-Item -ItemType Directory -Force $out | Out-Null
