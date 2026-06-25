@@ -122,6 +122,24 @@ jobs:
             & $dumpbin.FullName /dependents $appdll | Select-String -Pattern '\.dll'
           } else { Write-Host "app DLL or dumpbin not found ($appdll)" }
 
+      # The instrumented app DLL imports pgort140.dll (PGO runtime) + vulkan-1.dll
+      # (SLIC3R_VULKAN); neither is co-located on the GPU-less runner -> error 126 ->
+      # the app can't start to slice. Stage both next to the exe before training.
+      - name: Stage runtime DLLs (pgort140 + vulkan-1)
+        shell: pwsh
+        run: |
+          $rundir = Split-Path "${{ steps.exe.outputs.runexe }}"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationPath
+          $pgort = Get-ChildItem "$vs\VC\Tools\MSVC" -Recurse -Filter pgort140.dll -EA SilentlyContinue |
+                   Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1
+          if ($pgort) { Copy-Item $pgort.FullName $rundir -Force; Write-Host "staged pgort140.dll" }
+          else { Write-Host "::warning::pgort140.dll not found" }
+          $vk = Get-ChildItem build,deps,deps_src -Recurse -Filter vulkan-1.dll -EA SilentlyContinue | Select-Object -First 1
+          if ($vk) { Copy-Item $vk.FullName $rundir -Force; Write-Host "staged vulkan-1.dll from $($vk.FullName)" }
+          else { Write-Host "::warning::vulkan-1.dll not found under build/deps -- loader may be static-imported without a DLL" }
+          Write-Host "== staged ==" ; Get-ChildItem $rundir -Filter *.dll | Where-Object { $_.Name -match 'pgort|vulkan' } | Select-Object Name
+
       # ---- Training run (emits *.pgc next to the exe) ----
       # ITERATE: confirm the headless --slice invocation/flags on Windows; add
       # more models for broader coverage. The PGO runtime (pgort140.dll) ships
