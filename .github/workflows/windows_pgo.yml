@@ -99,15 +99,18 @@ jobs:
         shell: pwsh
         run: |
           $dir   = "${{ steps.exe.outputs.dir }}"
+          $exe   = "${{ steps.exe.outputs.path }}"
           $model = "${{ github.workspace }}/${{ env.train_model }}"
           $out   = "${{ github.workspace }}/pgo_out"
           New-Item -ItemType Directory -Force $out | Out-Null
-          # Run FROM the exe dir so the MSVC PGO runtime writes *.pgc next to the binary.
-          Push-Location $dir
-          & "${{ steps.exe.outputs.path }}" --slice 0 --outputdir $out $model
-          $rc = $LASTEXITCODE
-          Pop-Location
-          Write-Host "slice exit code: $rc"
+          # orca-slicer.exe is a GUI (WINDOWS-subsystem) app: '&' launches it WITHOUT waiting,
+          # so the slice never finished and the PGO runtime never flushed *.pgc. Start-Process
+          # and WAIT for exit; WorkingDirectory = exe dir so *.pgc land next to the binary.
+          $p = Start-Process -FilePath $exe `
+                 -ArgumentList @('--slice','0','--outputdir',$out,$model) `
+                 -WorkingDirectory $dir -NoNewWindow -PassThru
+          if ($p.WaitForExit(900000)) { Write-Host "slice exit code: $($p.ExitCode)" }
+          else { Write-Host "::warning::slice did not exit within 15 min; killing"; $p.Kill() }
           Write-Host "== .pgc in exe dir =="; Get-ChildItem $dir -Filter *.pgc -EA SilentlyContinue | Format-Table Name,Length
           Write-Host "== .pgc anywhere in workspace =="; Get-ChildItem "${{ github.workspace }}" -Recurse -Filter *.pgc -EA SilentlyContinue | Format-Table FullName,Length
 
