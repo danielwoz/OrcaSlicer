@@ -103,6 +103,25 @@ jobs:
           Write-Host "build exe: $($buildexe.FullName)"
           Write-Host "run exe (installed): $($instexe.FullName)"
 
+      # Diagnose the 'OrcaSlicer.dll not loaded, error=126' that aborts the headless slice:
+      # error 126 = a dependency DLL is missing. List co-located DLLs + the app DLL's imports.
+      - name: Diagnose app DLL deps (error 126)
+        shell: pwsh
+        run: |
+          $rundir = Split-Path "${{ steps.exe.outputs.runexe }}"
+          Write-Host "== DLLs next to the installed exe ($rundir) =="
+          Get-ChildItem $rundir -Filter *.dll -EA SilentlyContinue | Select-Object Name | Sort-Object Name | Format-Table -AutoSize
+          Write-Host "OrcaSlicer.dll present: $(Test-Path "$rundir\OrcaSlicer.dll")  BambuStudio.dll present: $(Test-Path "$rundir\BambuStudio.dll")"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe -EA SilentlyContinue |
+                     Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1
+          $appdll = if (Test-Path "$rundir\OrcaSlicer.dll") { "$rundir\OrcaSlicer.dll" } else { "$rundir\BambuStudio.dll" }
+          if ($dumpbin -and (Test-Path $appdll)) {
+            Write-Host "== imported DLLs of $appdll =="
+            & $dumpbin.FullName /dependents $appdll | Select-String -Pattern '\.dll'
+          } else { Write-Host "app DLL or dumpbin not found ($appdll)" }
+
       # ---- Training run (emits *.pgc next to the exe) ----
       # ITERATE: confirm the headless --slice invocation/flags on Windows; add
       # more models for broader coverage. The PGO runtime (pgort140.dll) ships
