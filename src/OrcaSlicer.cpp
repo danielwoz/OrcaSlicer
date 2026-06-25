@@ -6511,6 +6511,25 @@ int CLI::run(int argc, char **argv)
             }
         }
 
+        // Headless/CI escape hatch: on a display-less runner (e.g. Windows PGO
+        // training without a GPU/display) the GLFW init + offscreen GL context
+        // creation below can BLOCK indefinitely instead of failing fast — even
+        // when MESA llvmpipe software OpenGL is present — which makes `--slice`
+        // hang. Setting ORCA_CLI_SKIP_GL_THUMBNAILS=1 skips all GL-based
+        // thumbnail rendering and lets slicing/g-code export complete. The
+        // exported g-code/3mf simply lacks an embedded preview thumbnail, which
+        // is acceptable for headless CLI use. This is opt-in (env var) and lives
+        // entirely inside CLI::run, so default CLI and GUI behavior are unchanged.
+        const char* skip_gl_thumbnails_env = ::getenv("ORCA_CLI_SKIP_GL_THUMBNAILS");
+        const bool skip_gl_thumbnails = skip_gl_thumbnails_env
+            && (skip_gl_thumbnails_env[0] != '\0')
+            && (skip_gl_thumbnails_env[0] != '0');
+        if (skip_gl_thumbnails && (need_regenerate_thumbnail || need_regenerate_no_light_thumbnail || need_regenerate_top_thumbnail)) {
+            BOOST_LOG_TRIVIAL(warning) << "ORCA_CLI_SKIP_GL_THUMBNAILS set; skipping GL-based thumbnail generation for headless CLI export";
+            need_regenerate_thumbnail = need_regenerate_no_light_thumbnail = need_regenerate_top_thumbnail = false;
+            need_create_thumbnail_group = need_create_no_light_group = need_create_top_group = false;
+        }
+
         if (need_regenerate_thumbnail || need_regenerate_no_light_thumbnail || need_regenerate_top_thumbnail) {
             std::vector<std::string> colors;
             if (filament_color) {
