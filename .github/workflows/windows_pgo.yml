@@ -140,6 +140,28 @@ jobs:
           else { Write-Host "::warning::vulkan-1.dll not found under build/deps -- loader may be static-imported without a DLL" }
           Write-Host "== staged ==" ; Get-ChildItem $rundir -Filter *.dll | Where-Object { $_.Name -match 'pgort|vulkan' } | Select-Object Name
 
+      # The app needs an OpenGL context (thumbnail rendering) -- on the display-less
+      # runner the bundled software GL fails to load and the slice HANGS. Drop a working
+      # MESA llvmpipe opengl32.dll (+ its companions) where the launcher looks: <exe>/mesa/.
+      - name: Provide software OpenGL (MESA llvmpipe)
+        shell: pwsh
+        run: |
+          $rundir  = Split-Path "${{ steps.exe.outputs.runexe }}"
+          $mesadir = Join-Path $rundir "mesa"
+          New-Item -ItemType Directory -Force $mesadir | Out-Null
+          try {
+            $rel = Invoke-RestMethod "https://api.github.com/repos/pal1000/mesa-dist-win/releases/latest" -Headers @{ 'User-Agent'='ci' }
+            $asset = $rel.assets | Where-Object { $_.name -match 'release-msvc\.7z$' } | Select-Object -First 1
+            Write-Host "mesa asset: $($asset.name)"
+            Invoke-WebRequest $asset.browser_download_url -OutFile mesa.7z
+            & 'C:\Program Files\7-Zip\7z.exe' x mesa.7z -omesa_x -y | Out-Null
+            $gl = Get-ChildItem mesa_x -Recurse -Filter opengl32.dll -EA SilentlyContinue |
+                  Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+            if (-not $gl) { $gl = Get-ChildItem mesa_x -Recurse -Filter opengl32.dll -EA SilentlyContinue | Select-Object -First 1 }
+            if ($gl) { Copy-Item (Join-Path (Split-Path $gl.FullName) '*.dll') $mesadir -Force }
+            Write-Host "mesa/opengl32.dll present: $(Test-Path (Join-Path $mesadir 'opengl32.dll'))"
+          } catch { Write-Host "::warning::failed to provision MESA llvmpipe: $_" }
+
       # ---- Training run (emits *.pgc next to the exe) ----
       # ITERATE: confirm the headless --slice invocation/flags on Windows; add
       # more models for broader coverage. The PGO runtime (pgort140.dll) ships
