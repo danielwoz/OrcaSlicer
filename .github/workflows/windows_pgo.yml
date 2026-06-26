@@ -65,7 +65,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
-          key: windows-cache-orcaslicer_deps-build-${{ hashFiles('deps/**') }}
+          # Hash only the deps DEFINITION, not deps/** -- after the deps build, deps/build/**
+          # is huge and hashFiles('deps/**') times out (>120s) on the cache SAVE, failing the
+          # job and never persisting the cache. deps/CMakeLists.txt is source (stable, instant).
+          key: windows-cache-orcaslicer_deps-build-${{ hashFiles('deps/CMakeLists.txt') }}
 
       - name: Build deps (cache miss)
         if: steps.deps_cache.outputs.cache-hit != 'true'
