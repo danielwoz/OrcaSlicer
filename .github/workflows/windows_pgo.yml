@@ -171,32 +171,128 @@ jobs:
         env:
           ORCA_CLI_SKIP_GL_THUMBNAILS: "1"   # skip the blocking GL thumbnail render headless
         run: |
+          $ErrorActionPreference = 'Continue'
           $dir   = "${{ steps.exe.outputs.dir }}"
           $exe   = "${{ steps.exe.outputs.runexe }}"
           $model = "${{ github.workspace }}/${{ env.train_model }}"
           $out   = "${{ github.workspace }}/pgo_out"
           New-Item -ItemType Directory -Force $out | Out-Null
-          # orca-slicer.exe is a GUI (WINDOWS-subsystem) app: '&' launches it WITHOUT waiting,
-          # so the slice never finished and the PGO runtime never flushed *.pgc. Start-Process
-          # and WAIT for exit; WorkingDirectory = exe dir so *.pgc land next to the binary.
-          # DIAGNOSTIC: redirect stdout+stderr to files so we capture the app's last output
-          # before a hang (GUI apps buffer stdout, so read the files, not the console).
+          # DIAGNOSTIC RUN: the headless slice hangs at an unknown point with no captured
+          # output (GUI app buffers stdout, lost on kill). Launch in the BACKGROUND, let it
+          # reach steady-state, then capture a FULL crash dump of the frozen process(es) and
+          # print all thread stacks via cdb. The prize is the blocking frame in BambuStudio.dll.
+          # This run is expected to NOT emit *.pgc (the later Merge step will fail) — that's OK.
           $outLog = Join-Path $out "slice_out.log"
           $errLog = Join-Path $out "slice_err.log"
+          # 1. Launch as a background process (do NOT wait).
           $p = Start-Process -FilePath $exe `
                  -ArgumentList @('--slice','0','--outputdir',$out,$model) `
                  -WorkingDirectory $dir -NoNewWindow -PassThru `
                  -RedirectStandardOutput $outLog -RedirectStandardError $errLog
-          # Shorter timeout (5 min) for faster iteration while debugging the headless hang.
-          if ($p.WaitForExit(300000)) { Write-Host "slice exit code: $($p.ExitCode)" }
-          else { Write-Host "::warning::slice did not exit within 5 min; killing"; $p.Kill() }
-          # Always dump both logs (even on timeout) to surface the last output before the hang.
+          $rootPid = $p.Id
+          Write-Host "launched orca-slicer, pid=$rootPid"
+
+          # 2. Let it reach the steady-state hang.
+          Write-Host "sleeping 150s to let the process reach its steady-state hang..."
+          Start-Sleep -Seconds 150
+
+          # Collect the launcher PID + any descendants (the launcher may re-exec a genuine host
+          # or load BambuStudio.dll in-process; capture every related process we can find).
+          function Get-Descendants([int]$parentId) {
+            $kids = Get-CimInstance Win32_Process -Filter "ParentProcessId=$parentId" -EA SilentlyContinue
+            $all = @()
+            foreach ($k in $kids) { $all += [int]$k.ProcessId; $all += Get-Descendants ([int]$k.ProcessId) }
+            return $all
+          }
+          $pids = @()
+          if (Get-Process -Id $rootPid -EA SilentlyContinue) { $pids += $rootPid }
+          $pids += Get-Descendants $rootPid
+          # Also catch any orca-slicer / bambu-studio process by name (re-exec'd host with a new tree).
+          foreach ($n in @('orca-slicer','OrcaSlicer','bambu-studio','BambuStudio')) {
+            Get-Process -Name $n -EA SilentlyContinue | ForEach-Object { $pids += $_.Id }
+          }
+          $pids = $pids | Sort-Object -Unique
+          Write-Host "== target process(es) for dump: $($pids -join ', ') =="
+          Get-CimInstance Win32_Process -EA SilentlyContinue |
+            Where-Object { $pids -contains [int]$_.ProcessId } |
+            Format-Table ProcessId,ParentProcessId,Name,CommandLine -Wrap
+
+          # 3. Download Sysinternals ProcDump and capture a full dump of every target process.
+          $tools = Join-Path $env:RUNNER_TEMP "procdump"
+          New-Item -ItemType Directory -Force $tools | Out-Null
+          $procdump = $null
+          try {
+            $zip = Join-Path $tools "Procdump.zip"
+            Invoke-WebRequest -Uri "https://download.sysinternals.com/files/Procdump.zip" -OutFile $zip -UseBasicParsing
+            Expand-Archive -Path $zip -DestinationPath $tools -Force
+            $procdump = (Get-ChildItem $tools -Recurse -Filter procdump64.exe | Select-Object -First 1).FullName
+            if (-not $procdump) { $procdump = (Get-ChildItem $tools -Recurse -Filter procdump.exe | Select-Object -First 1).FullName }
+            Write-Host "procdump: $procdump"
+          } catch { Write-Host "::warning::failed to download/expand ProcDump: $($_.Exception.Message)" }
+
+          $dumps = @()
+          if ($procdump) {
+            foreach ($tpid in $pids) {
+              $dmp = Join-Path $out ("hang_{0}.dmp" -f $tpid)
+              Write-Host "== procdump -ma $tpid -> $dmp =="
+              & $procdump -accepteula -ma $tpid $dmp 2>&1 | Write-Host
+              if (Test-Path $dmp) { $dumps += $dmp }
+            }
+          }
+          if (-not $dumps) { Write-Host "::warning::no dumps were captured" }
+
+          # 4. Locate cdb.exe and print ALL thread stacks + loaded modules from each dump.
+          $cdb = (Get-ChildItem "C:\Program Files (x86)\Windows Kits" -Recurse -Filter cdb.exe -EA SilentlyContinue |
+                  Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1).FullName
+          if (-not $cdb) { $cdb = (Get-ChildItem "C:\Program Files (x86)\Windows Kits" -Recurse -Filter cdb.exe -EA SilentlyContinue | Select-Object -First 1).FullName }
+          if ($cdb) {
+            Write-Host "cdb: $cdb"
+            # Symbols: our build/install PDB dirs + the MS public symbol server for system DLLs.
+            # $dir = build-tree (where .pgd lives); the run dir = install tree (where the
+            # loaded BambuStudio.dll/OrcaSlicer.dll + their PDBs sit).
+            $rundir = Split-Path $exe
+            $symDirs = @(
+              $dir,
+              $rundir,
+              "${{ github.workspace }}/build/src/Release",
+              "${{ github.workspace }}/build/OrcaSlicer"
+            ) | Where-Object { $_ -and (Test-Path $_) }
+            $extraPdb = Get-ChildItem "${{ github.workspace }}/build" -Recurse -Include BambuStudio.pdb,OrcaSlicer.pdb -EA SilentlyContinue |
+                        ForEach-Object { $_.DirectoryName } | Sort-Object -Unique
+            $sym = (($symDirs + $extraPdb) -join ';') + ';srv*https://msdl.microsoft.com/download/symbols'
+            $env:_NT_SYMBOL_PATH = $sym
+            Write-Host "_NT_SYMBOL_PATH = $sym"
+            foreach ($dmp in $dumps) {
+              Write-Host "================ cdb stacks for $dmp ================"
+              & $cdb -z $dmp -c "~*k40; lmf; q" 2>&1 | Write-Host
+            }
+          } else {
+            Write-Host "::warning::cdb.exe not found under Windows Kits; relying on the uploaded dump artifact instead"
+          }
+
+          # 6. Kill the process(es) so the step can finish.
+          foreach ($tpid in $pids) { Stop-Process -Id $tpid -Force -EA SilentlyContinue }
+          if (Get-Process -Id $rootPid -EA SilentlyContinue) { Stop-Process -Id $rootPid -Force -EA SilentlyContinue }
+
+          # Surface whatever buffered stdio made it to disk, plus any *.pgc.
           Write-Host "== slice STDOUT ($outLog) =="
           if (Test-Path $outLog) { Get-Content $outLog -Tail 200 } else { Write-Host "(no stdout log)" }
           Write-Host "== slice STDERR ($errLog) =="
           if (Test-Path $errLog) { Get-Content $errLog -Tail 200 } else { Write-Host "(no stderr log)" }
           Write-Host "== .pgc in exe dir =="; Get-ChildItem $dir -Filter *.pgc -EA SilentlyContinue | Format-Table Name,Length
           Write-Host "== .pgc anywhere in workspace =="; Get-ChildItem "${{ github.workspace }}" -Recurse -Filter *.pgc -EA SilentlyContinue | Format-Table FullName,Length
+
+      # 5. Keep the dump(s) + logs even if cdb was unavailable, so we can debug them locally.
+      - name: Upload hang dump
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orca-slicer-hang-dump
+          path: |
+            ${{ github.workspace }}/pgo_out/*.dmp
+            ${{ github.workspace }}/pgo_out/*.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Merge profile (*.pgc -> .pgd)
         shell: pwsh
