@@ -31,9 +31,12 @@ jobs:
     runs-on: ${{ vars.SELF_HOSTED && 'orca-win-server' || 'windows-latest' }}
     env:
       build_type: ${{ github.event.inputs.build_type || 'Release' }}
-      # KitCardAMS.3mf carries embedded print/printer settings, so it slices
-      # headless with no profile setup -- ideal heavy training input.
-      train_model: bench/bench_models/KitCardAMS.3mf
+      # Training model: a complete, self-contained project (embedded project_settings,
+      # slices headless with no profile setup). KitCardAMS.3mf works but its instrumented
+      # slice exceeds 60 min (dense AMS model -> pathological under PGO instrumentation).
+      # pa_pattern.3mf is a small self-contained calib project that still exercises the hot
+      # slicing paths (slice -> perimeters -> g-code) and finishes fast even instrumented.
+      train_model: resources/calib/pressure_advance/pa_pattern.3mf
     steps:
       - uses: actions/checkout@v4
         with:
