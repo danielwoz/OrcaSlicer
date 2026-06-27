@@ -310,6 +310,24 @@ if (WIN32)
         install(TARGETS OrcaSlicer_app_gui RUNTIME DESTINATION ".")
     endif ()
     install(FILES ${output_dlls_${build_type}} DESTINATION ".")
+    if (SLIC3R_VULKAN)
+        # Bundle the Vulkan loader (vulkan-1.dll) into the install + NSIS installer so the
+        # app runs even on machines without a system Vulkan runtime. The static-loader build
+        # still emits a vulkan-1.dll that the app imports; it's a build artifact whose exact
+        # path under the binary tree varies, so locate it at install time and copy it next to
+        # the exe. CMAKE_BINARY_DIR is baked in at configure; the GLOB + copy run at install
+        # time -- which also covers cpack's NSIS staging, so the installer ships it too.
+        install(CODE "
+            file(GLOB_RECURSE _vk_dll \"${CMAKE_BINARY_DIR}/vulkan-1.dll\")
+            if (_vk_dll)
+                list(GET _vk_dll 0 _vk0)
+                message(STATUS \"Bundling Vulkan loader: \${_vk0}\")
+                file(INSTALL \"\${_vk0}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")
+            else()
+                message(WARNING \"SLIC3R_VULKAN: vulkan-1.dll not found under ${CMAKE_BINARY_DIR}; installer will rely on the system Vulkan runtime\")
+            endif()
+        ")
+    endif ()
 else ()
     install(TARGETS OrcaSlicer RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" BUNDLE DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif ()
