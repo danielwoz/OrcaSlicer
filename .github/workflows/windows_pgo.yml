@@ -227,6 +227,25 @@ jobs:
       - name: Build (optimized)
         run: cmake --build build --config ${{ env.build_type }} --target ALL_BUILD -- -m
 
+      # ---- package an NSIS installer of the PGO-optimized build ----
+      # Same recipe as the normal release CI (build_orca.yml): choco NSIS + cpack -G NSIS.
+      # cpack runs the install() rules against the current (optimized) build output, so the
+      # installer ships the PGO-optimized orca-slicer.exe. CPACK_PACKAGE_FILE_NAME makes it
+      # build/OrcaSlicer_Windows_Installer_V<version>.exe.
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
+      - name: Create installer (NSIS)
+        working-directory: ${{ github.workspace }}/build
+        run: cpack -G NSIS
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrcaSlicer_Windows_PGO_installer
+          path: ${{ github.workspace }}/build/OrcaSlicer*.exe
+          if-no-files-found: error
+
       # ---- artifacts: the trained profile (reusable) + the optimized exe ----
       - name: Upload PGO profile
         uses: actions/upload-artifact@v4
