@@ -3263,10 +3263,22 @@ void GUI_App::copy_network_if_available()
 void GUI_App::ensure_oss_network_plugin()
 {
     namespace fs = boost::filesystem;
-    const std::string ver = BAMBU_NETWORK_AGENT_VERSION_LEGACY;
+    // Version string of the bundled open-source plugin. Modern (non-legacy)
+    // ABI 02.03.00. Defined by OrcaOSSNetworkPlugin.cmake so the CMake
+    // filename, the CI --with-version build flag, and this string stay in
+    // lockstep. Fall back to a literal if (somehow) undefined.
+#ifndef ORCA_OSS_NETWORK_PLUGIN_VERSION
+#define ORCA_OSS_NETWORK_PLUGIN_VERSION "02.03.00.99"
+#endif
+    const std::string ver = ORCA_OSS_NETWORK_PLUGIN_VERSION;
+
+    boost::system::error_code ec;
+    fs::path src_dir = fs::path(resources_dir()) / "plugins";
+    fs::path dst_dir = fs::path(data_dir()) / "plugins";
+
     // Per-OS plugin filename — must match the host loader (BBLNetworkPlugin.cpp)
-    // and what OrcaOSSNetworkPlugin.cmake stages into resources/plugins:
-    //   Windows: bambu_networking_<ver>.dll      (MinGW DLL, no "lib" prefix)
+    // and what CI stages into resources/plugins:
+    //   Windows: bambu_networking_<ver>.dll      (no "lib" prefix)
     //   macOS:   libbambu_networking_<ver>.dylib
     //   Linux:   libbambu_networking_<ver>.so
 #if defined(_MSC_VER) || defined(_WIN32)
@@ -3277,30 +3289,57 @@ void GUI_App::ensure_oss_network_plugin()
     const std::string fname = "lib" + std::string(BAMBU_NETWORK_LIBRARY) + "_" + ver + ".so";
 #endif
 
-    fs::path src = fs::path(resources_dir()) / "plugins" / fname;
+    fs::path src = src_dir / fname;
     if (!fs::exists(src)) {
         BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": bundled OSS network plugin not found at " << src
                                    << " — leaving network config untouched";
         return;
     }
 
-    boost::system::error_code ec;
-    fs::path dst_dir = fs::path(data_dir()) / "plugins";
     fs::create_directories(dst_dir, ec);
-    fs::path dst = dst_dir / fname;
 
-    bool need_copy = !fs::exists(dst) ||
-                     fs::file_size(src, ec) != fs::file_size(dst, ec) ||
-                     fs::last_write_time(src, ec) != fs::last_write_time(dst, ec);
-    if (need_copy) {
-        fs::copy_file(src, dst, fs::copy_option::overwrite_if_exists, ec);
-        if (ec) {
-            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to copy OSS plugin to " << dst << ": " << ec.message();
-            return;
+    // Copy a single staged file from resources/plugins into the user's
+    // plugins dir if missing or stale (size or mtime differs). Returns true
+    // on success (already-current counts as success), false if the source is
+    // absent or the copy failed.
+    auto provision_file = [&](const std::string& name) -> bool {
+        fs::path s = src_dir / name;
+        if (!fs::exists(s))
+            return false;
+        fs::path d = dst_dir / name;
+        boost::system::error_code lec;
+        bool need_copy = !fs::exists(d) ||
+                         fs::file_size(s, lec) != fs::file_size(d, lec) ||
+                         fs::last_write_time(s, lec) != fs::last_write_time(d, lec);
+        if (need_copy) {
+            fs::copy_file(s, d, fs::copy_option::overwrite_if_exists, lec);
+            if (lec) {
+                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to copy " << name << " to " << d << ": " << lec.message();
+                return false;
+            }
+            fs::last_write_time(d, fs::last_write_time(s, lec), lec);
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": provisioned " << name << " into " << dst_dir;
         }
-        fs::last_write_time(dst, fs::last_write_time(src, ec), ec);
-        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": provisioned OSS network plugin " << fname << " into " << dst_dir;
-    }
+        return true;
+    };
+
+    if (!provision_file(fname))
+        return;
+
+    // The modern (non-legacy) ABI also uses BambuSource (camera liveview +
+    // file-browser CTRL bridge) and a live555 stub. These ship under fixed
+    // names alongside the versioned main plugin. Provision them best-effort —
+    // their absence does not block loading the main networking plugin.
+#if defined(_MSC_VER) || defined(_WIN32)
+    provision_file("BambuSource.dll");
+    provision_file("live555.dll");
+#elif defined(__WXMAC__)
+    provision_file("libBambuSource.dylib");
+    provision_file("liblive555.dylib");
+#else
+    provision_file("libBambuSource.so");
+    provision_file("liblive555.so");
+#endif
 
     app_config->set_bool("installed_networking", true);
     app_config->set_network_plugin_version(ver);

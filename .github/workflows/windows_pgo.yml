@@ -26,74 +26,12 @@ permissions:
   contents: read
 
 jobs:
-  # ===========================================================================
-  # Cross-build the OSS network plugin DLL on Linux (MSVC can't build the MinGW
-  # DLL). Produces bambu_networking_01.10.01.09.dll and uploads it as an
-  # artifact the windows job stages into resources/plugins/ before cpack.
-  # ===========================================================================
-  build-oss-plugin:
-    name: Build OSS network plugin DLL (MinGW cross)
-    runs-on: ubuntu-latest
-    env:
-      plugin_version: "01.10.01.09"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      # Only the OSS plugin submodule is needed here.
-      - name: Init OSS plugin submodule
-        run: git submodule update --init bambu_network_oss
-
-      - name: Install MinGW-w64 toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y mingw-w64 cmake ninja-build perl
-
-      # MinGW deps (OpenSSL3 + paho + Boost + curl) are slow (~30-60 min) — cache
-      # them keyed on the deps build script (stable). On a hit, /opt/mingw-deps is
-      # restored and build_mingw_deps.sh is a near-no-op.
-      - name: Restore MinGW deps cache
-        id: mingw_deps_cache
-        uses: actions/cache@v4
-        with:
-          path: /opt/mingw-deps
-          key: mingw-deps-${{ hashFiles('bambu_network_oss/third_party/mingw_build/build_mingw_deps.sh') }}
-
-      - name: Build MinGW deps (cache miss)
-        run: |
-          sudo mkdir -p /opt/mingw-deps && sudo chown "$USER" /opt/mingw-deps
-          bash bambu_network_oss/third_party/mingw_build/build_mingw_deps.sh
-
-      - name: Configure + build the plugin DLL (mingw-x86_64 preset)
-        working-directory: bambu_network_oss
-        run: |
-          cmake --preset mingw-x86_64
-          cmake --build build_mingw -j"$(nproc)" --target bambu_networking
-
-      - name: Stage versioned DLL
-        working-directory: bambu_network_oss
-        run: |
-          mkdir -p out
-          cp build_mingw/plugin/bambu_networking.dll \
-             "out/bambu_networking_${plugin_version}.dll"
-          # Sanity: PE32+ and the legacy version baked in.
-          file "out/bambu_networking_${plugin_version}.dll" | grep -q 'PE32+' \
-            || { echo "::error::not a PE32+ DLL"; exit 1; }
-          x86_64-w64-mingw32-objdump -p "out/bambu_networking_${plugin_version}.dll" \
-            | grep -q 'bambu_network_create_agent' \
-            || { echo "::error::missing bambu_network_* exports"; exit 1; }
-
-      - name: Upload plugin DLL artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: oss-network-plugin-dll
-          path: bambu_network_oss/out/bambu_networking_01.10.01.09.dll
-          if-no-files-found: error
-
+  # NOTE: the OSS network plugin is NOT built or bundled in this PGO workflow.
+  # The release path (build_all.yml -> build_orca.yml) builds + bundles the
+  # open-bamboo-networking plugin per platform; this workflow is a standalone
+  # MSVC PGO experiment and intentionally produces an unbundled OrcaSlicer.
   windows-pgo:
     name: Windows MSVC PGO
-    needs: build-oss-plugin
     runs-on: ${{ vars.SELF_HOSTED && 'orca-win-server' || 'windows-latest' }}
     env:
       build_type: ${{ github.event.inputs.build_type || 'Release' }}
@@ -118,23 +56,6 @@ jobs:
           git submodule update --init
           deps/minhook deps_src/mimalloc bambu_network_oss
           deps_src/Vulkan-Headers deps_src/Vulkan-Loader deps_src/glslang
-
-      # Download the cross-built OSS plugin DLL from the build-oss-plugin job and
-      # expose its absolute path (forward slashes) for the Configure steps, which
-      # pass it as -DORCA_OSS_PLUGIN_DLL so it's staged into resources/plugins/.
-      - name: Download OSS plugin DLL
-        uses: actions/download-artifact@v4
-        with:
-          name: oss-network-plugin-dll
-          path: ${{ github.workspace }}/oss-plugin
-
-      - name: Resolve OSS plugin DLL path
-        id: oss_dll
-        shell: bash
-        run: |
-          p="${GITHUB_WORKSPACE}/oss-plugin/bambu_networking_01.10.01.09.dll"
-          test -f "$p" || { echo "::error::OSS plugin DLL not downloaded"; exit 1; }
-          echo "path=${p//\\//}" >> "$GITHUB_OUTPUT"
 
       - uses: lukka/get-cmake@latest
         with:
@@ -165,7 +86,6 @@ jobs:
           -DORCA_TOOLS=ON
           -DSLIC3R_VULKAN=ON
           -DORCA_PGO=generate
-          -DORCA_OSS_PLUGIN_DLL=${{ steps.oss_dll.outputs.path }}
 
       - name: Build (instrument)
         run: cmake --build build --config ${{ env.build_type }} --target ALL_BUILD -- -m
@@ -307,7 +227,6 @@ jobs:
           -DSLIC3R_VULKAN=ON
           -DORCA_PGO=use
           -DORCA_PGO_DATA=${{ github.workspace }}/orca-windows.pgd
-          -DORCA_OSS_PLUGIN_DLL=${{ steps.oss_dll.outputs.path }}
 
       - name: Build (optimized)
         run: cmake --build build --config ${{ env.build_type }} --target ALL_BUILD -- -m

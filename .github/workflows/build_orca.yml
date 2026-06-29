@@ -284,6 +284,39 @@ jobs:
           dir "C:/Program Files (x86)/Windows Kits/10/Include"
           choco install nsis
 
+      # Build the open-source network plugin (open-bamboo-networking submodule)
+      # with MSVC + vcpkg in its OWN isolated build, then stage the resulting
+      # DLLs into resources/plugins/ so OrcaSlicer's install(DIRECTORY
+      # resources/ ...) bundles them into the NSIS installer + portable zip.
+      # vcpkg is preinstalled on the GitHub windows-* runners (VCPKG_ROOT set);
+      # the plugin uses the static-md triplet so the DLLs have no extra vcpkg
+      # runtime DLLs to ship. See cmake/modules/OrcaOSSNetworkPlugin.cmake.
+      - name: Build + stage OSS network plugin Win
+        if: runner.os == 'Windows'
+        working-directory: ${{ github.workspace }}/bambu_network_oss
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrEmpty($env:VCPKG_ROOT)) {
+            $env:VCPKG_ROOT = "C:\vcpkg"
+          }
+          Write-Host "Using VCPKG_ROOT=$env:VCPKG_ROOT"
+          $staging = Join-Path $env:GITHUB_WORKSPACE 'oss-plugin-install'
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          .\configure.ps1 `
+            -ClientType orca_slicer `
+            -WithVersion '02.03.00.99' `
+            -Prefix $staging `
+            -PatchConf:$false `
+            -RegisterDShowFilter:$false
+          cmake --build build --config Release --parallel
+          cmake --install build --config Release
+          $plugdir = Join-Path $env:GITHUB_WORKSPACE 'resources\plugins'
+          New-Item -ItemType Directory -Force -Path $plugdir | Out-Null
+          Copy-Item -Path (Join-Path $staging 'plugins\*') -Destination $plugdir -Force
+          Write-Host "Staged OSS plugin files into resources/plugins:"
+          Get-ChildItem $plugdir | Format-Table Name,Length -AutoSize
+
       - name: Build slicer Win
         if: runner.os == 'Windows'
         working-directory: ${{ github.workspace }}
@@ -376,6 +409,39 @@ jobs:
       - name: Apt-Install Dependencies
         if: runner.os == 'Linux' && !vars.SELF_HOSTED
         uses: ./.github/actions/apt-install-deps
+
+      # Build the open-source network plugin (open-bamboo-networking submodule)
+      # in its OWN build with system deps, then stage the resulting .so files
+      # into resources/plugins/ BEFORE build_linux.sh packages the AppImage
+      # (OrcaSlicer's install(DIRECTORY resources/ ...) bundles them).
+      # mosquitto + cJSON are vendored via FetchContent at configure time.
+      # See cmake/modules/OrcaOSSNetworkPlugin.cmake.
+      - name: Build + stage OSS network plugin Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config git ca-certificates \
+            libcjson-dev uthash-dev libcurl4-openssl-dev libssl-dev zlib1g-dev
+          git submodule update --init --recursive bambu_network_oss
+          staging="${GITHUB_WORKSPACE}/oss-plugin-install"
+          mkdir -p "$staging"
+          pushd bambu_network_oss
+          ./configure \
+            --client-type=orca_slicer \
+            --with-version=02.03.00.99 \
+            --build-type=Release \
+            --no-conf-patch \
+            --prefix="$staging"
+          make -j"$(nproc)"
+          make install
+          popd
+          mkdir -p "${GITHUB_WORKSPACE}/resources/plugins"
+          cp -v "$staging"/plugins/* "${GITHUB_WORKSPACE}/resources/plugins/"
+          echo "Staged OSS plugin files into resources/plugins:"
+          ls -l "${GITHUB_WORKSPACE}/resources/plugins/"
 
         # Tests must built at the same time as the slicer;
         # if you untangle them feel free to separate them here too
