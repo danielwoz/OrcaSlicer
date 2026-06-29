@@ -1,21 +1,49 @@
 # OrcaOSSNetworkPlugin.cmake
 #
-# Builds the open-source network plugin (bambu_network_oss submodule) against
-# OrcaSlicer's legacy ABI and installs it as
-#   resources/plugins/libbambu_networking_<legacy-version>.so
-# so the app can load it instead of downloading the proprietary plugin.
+# Builds (Linux) or stages (Windows) the open-source network plugin
+# (bambu_network_oss submodule) against OrcaSlicer's legacy ABI and installs it
+# into resources/plugins/ so the app loads it instead of downloading the
+# proprietary plugin. Per OS:
+#   Linux:   ExternalProject builds libbambu_networking_<ver>.so here.
+#   Windows: MSVC can't build the MinGW plugin DLL, so CI cross-builds it on
+#            Linux and passes the path via -DORCA_OSS_PLUGIN_DLL=<...dll>; we
+#            just stage it as resources/plugins/bambu_networking_<ver>.dll.
 #
 # Gated by the ORCA_OSS_NETWORK_PLUGIN option (see top-level CMakeLists.txt).
-# Defensive: if prerequisites (submodule, OpenSSL>=3, paho) are missing it warns
-# and skips rather than breaking the main OrcaSlicer build.
-
-include(ExternalProject)
+# Defensive: if prerequisites are missing it warns and skips rather than
+# breaking the main OrcaSlicer build.
 
 set(_oss_src      "${CMAKE_SOURCE_DIR}/bambu_network_oss")
 set(_oss_compat   "${_oss_src}/compat/orca_legacy")
 # Legacy agent version OrcaSlicer expects (src/libslic3r/AppConfig.hpp).
 set(ORCA_OSS_NETWORK_PLUGIN_VERSION "01.10.01.09" CACHE STRING
     "Version the OSS network plugin reports + filename suffix (must match BAMBU_NETWORK_AGENT_VERSION_LEGACY)")
+
+# -----------------------------------------------------------------------------
+# Windows: stage a PRE-BUILT MinGW DLL (no MSVC build of the plugin).
+# -----------------------------------------------------------------------------
+if (WIN32)
+    set(ORCA_OSS_PLUGIN_DLL "" CACHE FILEPATH
+        "Path to the pre-built MinGW bambu_networking_<ver>.dll to bundle (CI cross-builds it on Linux)")
+    set(_oss_dll_installed
+        "${CMAKE_SOURCE_DIR}/resources/plugins/bambu_networking_${ORCA_OSS_NETWORK_PLUGIN_VERSION}.dll")
+    if (ORCA_OSS_PLUGIN_DLL AND EXISTS "${ORCA_OSS_PLUGIN_DLL}")
+        # Stage at configure time so it's present for both the install() rules
+        # (cpack bundles resources/) and ensure_oss_network_plugin() at runtime.
+        file(MAKE_DIRECTORY "${CMAKE_SOURCE_DIR}/resources/plugins")
+        configure_file("${ORCA_OSS_PLUGIN_DLL}" "${_oss_dll_installed}" COPYONLY)
+        message(STATUS "ORCA_OSS_NETWORK_PLUGIN: staged Windows plugin DLL "
+                       "v${ORCA_OSS_NETWORK_PLUGIN_VERSION} → ${_oss_dll_installed}")
+    else()
+        message(WARNING "ORCA_OSS_NETWORK_PLUGIN: ORCA_OSS_PLUGIN_DLL unset or not found "
+                        "('${ORCA_OSS_PLUGIN_DLL}') — the Windows build will NOT bundle the OSS "
+                        "network plugin. Pass -DORCA_OSS_PLUGIN_DLL=<path to "
+                        "bambu_networking_${ORCA_OSS_NETWORK_PLUGIN_VERSION}.dll>.")
+    endif()
+    return()
+endif()
+
+include(ExternalProject)
 
 # paho-mqtt-c (async ssl) built against OpenSSL 3 — not part of OrcaSlicer's deps;
 # point these at a suitable build. Defaults to the BambuBridge deps tree on this host.

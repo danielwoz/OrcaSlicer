@@ -3264,7 +3264,18 @@ void GUI_App::ensure_oss_network_plugin()
 {
     namespace fs = boost::filesystem;
     const std::string ver = BAMBU_NETWORK_AGENT_VERSION_LEGACY;
-    const std::string fname = "libbambu_networking_" + ver + ".so";
+    // Per-OS plugin filename — must match the host loader (BBLNetworkPlugin.cpp)
+    // and what OrcaOSSNetworkPlugin.cmake stages into resources/plugins:
+    //   Windows: bambu_networking_<ver>.dll      (MinGW DLL, no "lib" prefix)
+    //   macOS:   libbambu_networking_<ver>.dylib
+    //   Linux:   libbambu_networking_<ver>.so
+#if defined(_MSC_VER) || defined(_WIN32)
+    const std::string fname = std::string(BAMBU_NETWORK_LIBRARY) + "_" + ver + ".dll";
+#elif defined(__WXMAC__)
+    const std::string fname = "lib" + std::string(BAMBU_NETWORK_LIBRARY) + "_" + ver + ".dylib";
+#else
+    const std::string fname = "lib" + std::string(BAMBU_NETWORK_LIBRARY) + "_" + ver + ".so";
+#endif
 
     fs::path src = fs::path(resources_dir()) / "plugins" / fname;
     if (!fs::exists(src)) {
