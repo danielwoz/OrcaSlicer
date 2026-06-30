@@ -160,12 +160,28 @@ jobs:
           # write to a guard-page AV), print the faulting + all-thread stacks,
           # save a full dump, then quit. -xi ld silences module-load noise.
           $dmp = Join-Path $env:appdir 'repro.dmp'
-          $cmds = ".symfix; .sympath+ $env:appdir; .reload; sxe -c `".lastevent; r; kP 120; ~*kP 25; .dump /ma $dmp; qd`" av; g; .lastevent; kP 120; ~*kP 25; .dump /ma $dmp; qd"
+          # Use a cdb COMMAND-FILE (-cf): quotes live in the file, never touch the
+          # shell, so the nested sxe -c "..." parses cleanly (the inline -c form
+          # got mangled and cdb tried to exec the command string as the debuggee).
+          $scriptFile = Join-Path $env:GITHUB_WORKSPACE 'repro.cdb'
+          $avCmd = '.echo ====AV-STACK====; .exr -1; .lastevent; r; kP 160; ~*kP 30; .dump /ma ' + $dmp + '; qd'
+          $lines = @(
+            '.symfix'
+            ".sympath+ $env:appdir"
+            '.reload'
+            ('sxe -c "' + $avCmd + '" av')
+            'g'
+            '.echo ====RAN-TO-EXIT-OR-NO-AV===='
+            '.lastevent'
+            'qd'
+          )
+          Set-Content -Path $scriptFile -Value $lines -Encoding ascii
+          Write-Host "=== cdb command file ==="; Get-Content $scriptFile
 
           Write-Host "=== launching orca-slicer.exe under cdb (timeout ${tmo}s) ==="
           $out = Join-Path $env:GITHUB_WORKSPACE 'cdb_out.txt'
           $p = Start-Process -FilePath "${{ steps.dbg.outputs.cdb }}" `
-            -ArgumentList @('-g','-G','-xi','ld','-c', $cmds, "`"$env:exe`"") `
+            -ArgumentList @('-g','-G','-xi','ld','-cf', $scriptFile, $env:exe) `
             -RedirectStandardOutput $out -RedirectStandardError (Join-Path $env:GITHUB_WORKSPACE 'cdb_err.txt') `
             -PassThru -NoNewWindow
           if (-not $p.WaitForExit($tmo*1000)) {
