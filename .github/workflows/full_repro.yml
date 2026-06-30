@@ -91,6 +91,37 @@ jobs:
           foreach ($p in $pdbs) { Copy-Item $p.FullName -Destination $env:appdir -Force }
           Write-Host "copied $((Get-ChildItem $env:appdir -Filter *.pdb).Count) pdb(s) next to the exe"
 
+      - name: Bundle Mesa3D llvmpipe opengl32.dll (software GL for headless runner)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The windows-2022 runner has no real GPU; OrcaSlicer's GL init hangs
+          # at the splash. Drop a Mesa llvmpipe opengl32.dll next to the exe so
+          # GL renders in software (opengl32 is not a KnownDLL, so the app-dir
+          # copy is loaded before System32). MSVC build matches Orca's toolchain.
+          New-Item -ItemType Directory -Force -Path mesa | Out-Null
+          $rel = gh api repos/pal1000/mesa-dist-win/releases/latest | ConvertFrom-Json
+          $asset = $rel.assets | Where-Object { $_.name -like '*release-msvc.7z' } | Select-Object -First 1
+          if (-not $asset) { Write-Error "mesa release-msvc.7z asset not found" }
+          Write-Host "downloading $($asset.name) ($([math]::Round($asset.size/1MB))MB)"
+          gh api $asset.url -H 'Accept: application/octet-stream' > mesa\mesa.7z
+          & "C:\Program Files\7-Zip\7z.exe" x mesa\mesa.7z "-omesa\x" -y | Out-Null
+          # Layout: x64\opengl32.dll (+ companion dlls). Copy the whole x64 set
+          # next to the exe so any llvmpipe dependencies resolve.
+          $gl = Get-ChildItem -Recurse mesa\x -Filter 'opengl32.dll' |
+                Where-Object { $_.FullName -match '\\x64\\' -or $_.Directory.Name -eq 'x64' } |
+                Select-Object -First 1
+          if (-not $gl) { $gl = Get-ChildItem -Recurse mesa\x -Filter 'opengl32.dll' | Select-Object -First 1 }
+          if (-not $gl) { Write-Error "opengl32.dll not found in mesa archive" }
+          Write-Host "mesa opengl32.dll: $($gl.FullName)"
+          Copy-Item -Path (Join-Path $gl.Directory.FullName '*') -Destination $env:appdir -Force
+          Write-Host "bundled mesa GL runtime into $env:appdir"
+          # Sanity: confirm the app dir now has a (large, mesa) opengl32.dll.
+          $bundled = Join-Path $env:appdir 'opengl32.dll'
+          if (Test-Path $bundled) { Write-Host "app opengl32.dll size=$((Get-Item $bundled).Length)" }
+
       - name: Seed cached-login config (reach on_init_network -> connect_cloud)
         shell: pwsh
         run: |
@@ -140,6 +171,42 @@ jobs:
           "cdb=$cdb"       | Out-File $env:GITHUB_OUTPUT -Append
           "gflags=$gflags" | Out-File $env:GITHUB_OUTPUT -Append
 
+      - name: GUI-up smoke test (NO cdb) — confirm software GL brings the GUI up
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          # Launch directly (real interactive desktop, no debugger window-station
+          # quirks) with Mesa software GL forced, to confirm the GUI actually
+          # initializes (host log must get past "Current OrcaSlicer Version" to
+          # preset-loading / main-frame / on_init_network). If this is clean we
+          # then re-run under page-heap+cdb to catch any AV.
+          $env:GALLIUM_DRIVER         = 'llvmpipe'
+          $env:LIBGL_ALWAYS_SOFTWARE  = '1'
+          $env:MESA_GL_VERSION_OVERRIDE = '3.2'
+          $env:LP_NUM_THREADS         = '2'
+          Write-Host "=== launching orca-slicer.exe directly (software GL), 90s ==="
+          $p = Start-Process -FilePath $env:exe -PassThru
+          Start-Sleep -Seconds 90
+          if (-not $p.HasExited) { Write-Host "app still running after 90s; stopping"; try { $p.Kill() } catch {} }
+          else { Write-Host "app exited on its own, code=$($p.ExitCode)" }
+          Start-Sleep -Seconds 2
+          $orca = Join-Path $env:APPDATA 'OrcaSlicer'
+          $log = Get-ChildItem (Join-Path $orca 'log') -Filter *.log -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime | Select-Object -Last 1
+          if ($log) {
+            Write-Host "=== HOST LOG (head 120) — did the GUI initialize? ==="
+            Get-Content $log.FullName -TotalCount 120
+            $body = Get-Content $log.FullName -Raw
+            $reached = $body -match 'on_init_network|init_networking_callbacks|BBLNetworkPlugin|MainFrame|load_presets|preset'
+            Write-Host "=== GUI-init markers reached: $reached ==="
+            "gui_reached=$reached" | Out-File $env:GITHUB_ENV -Append
+          } else {
+            Write-Host "=== STILL no host log — GUI did not initialize (GL/desktop) ==="
+            "gui_reached=False" | Out-File $env:GITHUB_ENV -Append
+          }
+          # reset for the page-heap run (fresh log)
+          if ($log) { Remove-Item $log.FullName -Force -ErrorAction SilentlyContinue }
+
       - name: Enable full page-heap on orca-slicer.exe
         shell: pwsh
         run: |
@@ -151,11 +218,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          # NOTE on GL: OrcaSlicer on Windows uses native opengl32.dll (WGL), so
-          # Mesa/Linux env vars (LIBGL_ALWAYS_SOFTWARE/GALLIUM_DRIVER) have no
-          # effect here. windows-2022 runners expose a basic display + a software
-          # GL fallback; if the app hangs at the GL splash before net-init, the
-          # next iteration bundles a Mesa llvmpipe opengl32.dll next to the exe.
+          # Force Mesa software GL (the bundled llvmpipe opengl32.dll honors these)
+          # so the GUI initializes under the debugger just as it did in the smoke
+          # test, letting the host GUI thread run concurrently with the network
+          # thread under page-heap.
+          $env:GALLIUM_DRIVER          = 'llvmpipe'
+          $env:LIBGL_ALWAYS_SOFTWARE   = '1'
+          $env:MESA_GL_VERSION_OVERRIDE = '3.2'
+          $env:LP_NUM_THREADS          = '2'
           # Public MS symbol server for OS/CRT frames; local PDBs for app frames.
           $env:_NT_SYMBOL_PATH = "srv*$env:TEMP\sym*https://msdl.microsoft.com/download/symbols;$env:appdir"
 
