@@ -305,7 +305,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $staging | Out-Null
           .\configure.ps1 `
             -ClientType orca_slicer `
-            -WithVersion '02.03.00.99' `
+            -WithVersion '02.07.01.51' `
             -Prefix $staging `
             -PatchConf:$false `
             -RegisterDShowFilter:$false
@@ -431,7 +431,7 @@ jobs:
           pushd bambu_network_oss
           ./configure \
             --client-type=orca_slicer \
-            --with-version=02.03.00.99 \
+            --with-version=02.07.01.51 \
             --build-type=Release \
             --no-conf-patch \
             --prefix="$staging"

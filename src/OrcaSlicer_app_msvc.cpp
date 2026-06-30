@@ -213,6 +213,12 @@ extern "C" {
 }
 
 // ---- Genuine-host staging (defense-in-depth backup for the installer) --------------
+// Only compiled when targeting the PROPRIETARY network plugin
+// (ORCA_PLUGIN_VERIFY_REDIRECT). The open-source plugin (default) needs no
+// genuine Bambu Studio files, so this whole block — and the staging/elevation
+// path in wmain — is compiled out: no UAC prompt, no dependency on an installed
+// Bambu Studio, launcher runs vanilla.
+#if defined(ORCA_PLUGIN_VERIFY_REDIRECT)
 // The installer normally stages a genuine Bambu-signed bambu-studio.exe + BambuStudio.dll
 // next to OrcaSlicer at install time (elevated). As a backup, the launcher self-heals on
 // startup: if the host is missing but Bambu Studio is installed, copy the genuine files
@@ -358,6 +364,7 @@ static int ask_stage_bridge()
     if (m == IDCANCEL) return 3;
     return 2;
 }
+#endif // ORCA_PLUGIN_VERIFY_REDIRECT
 // ------------------------------------------------------------------------------------
 
 extern "C" {
@@ -405,7 +412,9 @@ int wmain(int argc, wchar_t **argv)
 #endif /* SLIC3R_GUI */
     bool stage_only = false;                 // internal: elevated genuine-host staging pass
     for (int i = 1; i < argc; ++ i) {
+#if defined(ORCA_PLUGIN_VERIFY_REDIRECT)
         if (wcscmp(argv[i], L"--stage-genuine") == 0) { stage_only = true; continue; }  // not forwarded
+#endif
 #ifdef SLIC3R_GUI
         if (wcscmp(argv[i], L"--sw-renderer") == 0)
             force_mesa = true;
@@ -439,8 +448,10 @@ int wmain(int argc, wchar_t **argv)
 
     wchar_t path_to_exe[MAX_PATH + 1] = { 0 };
     ::GetModuleFileNameW(nullptr, path_to_exe, MAX_PATH);
+#if defined(ORCA_PLUGIN_VERIFY_REDIRECT)
     wchar_t self_exe[MAX_PATH + 1] = { 0 };
     wcscpy(self_exe, path_to_exe);                  // full path to this exe, for re-launch
+#endif
     wchar_t drive[_MAX_DRIVE];
     wchar_t dir[_MAX_DIR];
     wchar_t fname[_MAX_FNAME];
@@ -448,6 +459,7 @@ int wmain(int argc, wchar_t **argv)
     _wsplitpath(path_to_exe, drive, dir, fname, ext);
     _wmakepath(path_to_exe, drive, dir, nullptr, nullptr);
 
+#if defined(ORCA_PLUGIN_VERIFY_REDIRECT)
     // Elevated entry point: a UAC-elevated copy of ourselves (launched by the self-heal
     // below) runs ONLY the staging and exits, so it can write into a protected install
     // dir (Program Files) on behalf of the normal-user launch.
@@ -559,6 +571,7 @@ int wmain(int argc, wchar_t **argv)
         // studio dll in-process -> plain OrcaSlicer ("vanilla mode", no Bambu network).
     }
     // ---------------------------------------------------------------------------
+#endif // ORCA_PLUGIN_VERIFY_REDIRECT
 
 #ifdef SLIC3R_GUI
 // https://wiki.qt.io/Cross_compiling_Mesa_for_Windows

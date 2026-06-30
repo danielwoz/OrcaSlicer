@@ -193,6 +193,20 @@ if (ORCA_OSS_NETWORK_PLUGIN)
     add_compile_definitions(ORCA_OSS_NETWORK_PLUGIN)
 endif()
 
+# The proprietary Bambu network plugin runs an Authenticode check on the studio
+# DLL + host exe and refuses to load under our unsigned files; it also expects
+# genuine Bambu Studio files staged next to OrcaSlicer. ORCA_PLUGIN_VERIFY_REDIRECT
+# enables that whole compatibility shim (MinHook redirect in libslic3r_gui via
+# PluginVerifyRedirect.cpp + genuine-file staging/elevation in the
+# OrcaSlicer_app_gui launcher). The open-source open-bamboo-networking plugin
+# needs NONE of it, so it is OFF by default. Set ON only when targeting the
+# closed-source plugin. Defined globally (before add_subdirectory(src)) so BOTH
+# the app DLL and the launcher targets see it.
+option(ORCA_PLUGIN_VERIFY_REDIRECT "Hook the proprietary network plugin's Authenticode check + stage genuine Bambu Studio files (only needed for the closed-source plugin)" OFF)
+if (ORCA_PLUGIN_VERIFY_REDIRECT)
+    add_compile_definitions(ORCA_PLUGIN_VERIFY_REDIRECT)
+endif()
+
 if (FLATPAK)
     set(SLIC3R_FHS ON CACHE BOOL "" FORCE)
     set(SLIC3R_DESKTOP_INTEGRATION OFF CACHE BOOL "" FORCE)

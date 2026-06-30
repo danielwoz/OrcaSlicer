@@ -3264,11 +3264,12 @@ void GUI_App::ensure_oss_network_plugin()
 {
     namespace fs = boost::filesystem;
     // Version string of the bundled open-source plugin. Modern (non-legacy)
-    // ABI 02.03.00. Defined by OrcaOSSNetworkPlugin.cmake so the CMake
-    // filename, the CI --with-version build flag, and this string stay in
+    // ABI 02.07.01 (the Bambu Studio 2.7 networking version, listed in
+    // AVAILABLE_NETWORK_VERSIONS). Defined by OrcaOSSNetworkPlugin.cmake so the
+    // CMake filename, the CI --with-version build flag, and this string stay in
     // lockstep. Fall back to a literal if (somehow) undefined.
 #ifndef ORCA_OSS_NETWORK_PLUGIN_VERSION
-#define ORCA_OSS_NETWORK_PLUGIN_VERSION "02.03.00.99"
+#define ORCA_OSS_NETWORK_PLUGIN_VERSION "02.07.01.51"
 #endif
     const std::string ver = ORCA_OSS_NETWORK_PLUGIN_VERSION;
 

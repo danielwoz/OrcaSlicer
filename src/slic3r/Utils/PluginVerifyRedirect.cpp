@@ -1,6 +1,10 @@
 #include "PluginVerifyRedirect.hpp"
 
-#ifdef _WIN32
+// The Authenticode redirect is only needed for the PROPRIETARY network plugin.
+// With the open-source plugin (the default, ORCA_PLUGIN_VERIFY_REDIRECT OFF) it
+// is compiled out and install_plugin_verify_redirect() is a no-op (the #else
+// branch below). The BBLNetworkPlugin.cpp call site stays — it just no-ops.
+#if defined(_WIN32) && defined(ORCA_PLUGIN_VERIFY_REDIRECT)
 
 #include <windows.h>
 #include <wincrypt.h>
@@ -188,7 +192,7 @@ void install_plugin_verify_redirect()
 
 } // namespace Slic3r
 
-#else  // !_WIN32
+#else  // !_WIN32 or ORCA_PLUGIN_VERIFY_REDIRECT off (open-source plugin) -> no-op
 
 namespace Slic3r { void install_plugin_verify_redirect() {} }
 
