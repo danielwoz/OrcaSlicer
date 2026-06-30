@@ -14,6 +14,14 @@
 name: Full-app Windows repro (page-heap + cdb)
 
 on:
+  # workflow_dispatch only works once this file is on the default branch; since
+  # we intentionally keep it on ci/windows-pgo, drive it with a branch-scoped
+  # push trigger (each push to this branch re-runs it).
+  push:
+    branches:
+      - ci/windows-pgo
+    paths:
+      - '.github/workflows/full_repro.yml'
   workflow_dispatch:
     inputs:
       source_run_id:
