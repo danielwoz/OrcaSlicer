@@ -104,7 +104,13 @@ jobs:
           $auth = '{"region":"GLOBAL","account":"test@example.com","access_token":"DUMMYTOKEN0123456789","refresh_token":"","expires_at":"2030-12-31T00:00:00Z","user_id":"1468414750","user_name":"t","nick_name":"t","avatar":""}'
           Set-Content -Path (Join-Path $orca 'obn.auth.json') -Value $auth -NoNewline
           Set-Content -Path (Join-Path $orca 'obn.conf')      -Value "block_cloud=0`nlog_to_file=1" -NoNewline
-          Write-Host "seeded $orca"
+          # Seed the user's LAN bridge printers so OrcaSlicer's HOST-side LAN-printer
+          # handling runs at startup (the one structural difference vs the clean run:
+          # the user has these configured; my prior run did not). FFFF virtual dev_ids,
+          # LAN IP unreachable from CI -> connect-refused, but the host code path runs.
+          $vlan = '{"version":"1","printers":[{"dev_id":"FFFFDB561601642","dev_name":"Bambu H2D-virtual","lan_ip":"192.168.1.151","access_code":"","printer_type":"O1D","mqtt_port":"8883"},{"dev_id":"FFFFBC582502312","dev_name":"Bambu H2S-virtual","lan_ip":"192.168.1.151","access_code":"","printer_type":"O1S","mqtt_port":"8884"},{"dev_id":"FFFF0D610219434","dev_name":"Tank A1-virtual","lan_ip":"192.168.1.151","access_code":"","printer_type":"N2S","mqtt_port":"8885"}]}'
+          Set-Content -Path (Join-Path $orca 'virtual_lan_printers.json') -Value $vlan -NoNewline
+          Write-Host "seeded $orca (with LAN bridge printers)"
 
       - name: Locate gflags + cdb (Windows SDK Debugging Tools)
         id: dbg
