@@ -246,7 +246,12 @@ const std::string& resources_dir()
 // this is always true (unchanged behavior).
 bool is_bambu_host_mode()
 {
-#ifdef WIN32
+#if defined(WIN32) && defined(ORCA_PLUGIN_VERIFY_REDIRECT)
+    // The genuine-host requirement only applies to the proprietary plugin path
+    // (ORCA_PLUGIN_VERIFY_REDIRECT). With the open-source network plugin (redirect
+    // off, the default) the plugin loads + works in vanilla orca-slicer.exe, so we
+    // are always in "Bambu mode" and must NOT gate on the bambu-studio.exe name —
+    // otherwise should_load_networking_plugin is false and the plugin is unloaded.
     static int cached = -1;
     if (cached < 0) {
         wchar_t exe[MAX_PATH] = { 0 };
