@@ -1,0 +1,215 @@
+# Full-app Windows repro for the agent-startup heap corruption (0xc0000374).
+#
+# The plugin's entire startup ABI surface was proven byte-precise clean under
+# MSVC ASAN on real Windows, so the corruption must come from the host+plugin
+# interaction (host callback bodies on the MQTT thread re-entering NetworkAgent,
+# dual-OpenSSL coexistence, or host heap activity adjacent to a plugin write) —
+# which no plugin-only harness can catch. This runs the EXACT crashing portable
+# build under full page-heap + cdb so the first-chance heap-corruption AV from
+# the guard page prints a SYMBOLIZED stack naming the faulting function.
+#
+# Ground truth: run 28428898003 (sha 0483aa27, submodule dac0e119, plugin
+# 02.07.01.51) — the build the user actually crashes on.
+
+name: Full-app Windows repro (page-heap + cdb)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Run id holding the portable + PDB artifacts"
+        default: "28428898003"
+      timeout_seconds:
+        description: "Hard timeout for the cdb run"
+        default: "210"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  full-repro:
+    name: win-full-repro
+    runs-on: windows-2022
+    steps:
+      - name: Checkout (workflow only)
+        uses: actions/checkout@v4
+
+      - name: Download the crashing portable build + PDBs
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $run = '${{ github.event.inputs.source_run_id }}'
+          if (-not $run) { $run = '28428898003' }
+          New-Item -ItemType Directory -Force -Path dl | Out-Null
+          gh run download $run -R danielwoz/OrcaSlicer `
+            -n OrcaSlicer_Windows_V2.4.0-beta_portable -D dl\portable
+          gh run download $run -R danielwoz/OrcaSlicer `
+            -n PDB -D dl\pdb
+          Get-ChildItem -Recurse dl | Select-Object FullName,Length | Format-Table -AutoSize
+
+      - name: Unpack portable zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Get-ChildItem -Recurse dl\portable -Filter *.zip | Select-Object -First 1
+          if ($zip) {
+            Expand-Archive -Path $zip.FullName -DestinationPath app -Force
+          } else {
+            # artifact may already be the unpacked tree
+            Copy-Item -Recurse dl\portable app
+          }
+          $exe = Get-ChildItem -Recurse app -Filter 'orca-slicer.exe' | Select-Object -First 1
+          if (-not $exe) { Write-Error "orca-slicer.exe not found in portable artifact" }
+          Write-Host "EXE: $($exe.FullName)"
+          "exe=$($exe.FullName)"        | Out-File $env:GITHUB_ENV -Append
+          "appdir=$($exe.Directory.FullName)" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Drop PDBs next to the binaries (symbolized stacks)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pdbs = Get-ChildItem -Recurse dl\pdb -Filter *.pdb -ErrorAction SilentlyContinue
+          # PDB artifact may itself be a .7z
+          if (-not $pdbs) {
+            $sevenz = Get-ChildItem -Recurse dl\pdb -Filter *.7z | Select-Object -First 1
+            if ($sevenz) {
+              & "C:\Program Files\7-Zip\7z.exe" x $sevenz.FullName "-odl\pdb_x" -y | Out-Null
+              $pdbs = Get-ChildItem -Recurse dl\pdb_x -Filter *.pdb
+            }
+          }
+          foreach ($p in $pdbs) { Copy-Item $p.FullName -Destination $env:appdir -Force }
+          Write-Host "copied $((Get-ChildItem $env:appdir -Filter *.pdb).Count) pdb(s) next to the exe"
+
+      - name: Seed cached-login config (reach on_init_network -> connect_cloud)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $orca = Join-Path $env:APPDATA 'OrcaSlicer'
+          New-Item -ItemType Directory -Force -Path $orca | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $orca 'log') | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:APPDATA 'BambuStudio') | Out-Null
+          # DUMMY token: user_logged_in() only needs non-empty token + future
+          # expiry; start() then auto-connects cloud (rejected, but the path runs).
+          $auth = '{"region":"GLOBAL","account":"test@example.com","access_token":"DUMMYTOKEN0123456789","refresh_token":"","expires_at":"2030-12-31T00:00:00Z","user_id":"1468414750","user_name":"t","nick_name":"t","avatar":""}'
+          Set-Content -Path (Join-Path $orca 'obn.auth.json') -Value $auth -NoNewline
+          Set-Content -Path (Join-Path $orca 'obn.conf')      -Value "block_cloud=0`nlog_to_file=1" -NoNewline
+          Write-Host "seeded $orca"
+
+      - name: Locate gflags + cdb (Windows SDK Debugging Tools)
+        id: dbg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dbgRoots = @(
+            "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64",
+            "C:\Program Files\Windows Kits\10\Debuggers\x64"
+          )
+          $cdb = $null; $gflags = $null
+          foreach ($r in $dbgRoots) {
+            if (Test-Path (Join-Path $r 'cdb.exe'))   { $cdb = Join-Path $r 'cdb.exe' }
+            if (Test-Path (Join-Path $r 'gflags.exe')) { $gflags = Join-Path $r 'gflags.exe' }
+          }
+          if (-not $cdb -or -not $gflags) {
+            Write-Host "SDK debuggers not found; installing windbg via choco..."
+            choco install windbg -y --no-progress | Out-Null
+            foreach ($r in $dbgRoots) {
+              if (Test-Path (Join-Path $r 'cdb.exe'))   { $cdb = Join-Path $r 'cdb.exe' }
+              if (Test-Path (Join-Path $r 'gflags.exe')) { $gflags = Join-Path $r 'gflags.exe' }
+            }
+          }
+          if (-not $cdb)    { Write-Error "cdb.exe not found" }
+          if (-not $gflags) { Write-Error "gflags.exe not found" }
+          Write-Host "cdb=$cdb"; Write-Host "gflags=$gflags"
+          "cdb=$cdb"       | Out-File $env:GITHUB_OUTPUT -Append
+          "gflags=$gflags" | Out-File $env:GITHUB_OUTPUT -Append
+
+      - name: Enable full page-heap on orca-slicer.exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "${{ steps.dbg.outputs.gflags }}" /p /enable orca-slicer.exe /full
+          & "${{ steps.dbg.outputs.gflags }}" /p
+
+      - name: Run under cdb with page-heap (capture symbolized AV stack)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          # NOTE on GL: OrcaSlicer on Windows uses native opengl32.dll (WGL), so
+          # Mesa/Linux env vars (LIBGL_ALWAYS_SOFTWARE/GALLIUM_DRIVER) have no
+          # effect here. windows-2022 runners expose a basic display + a software
+          # GL fallback; if the app hangs at the GL splash before net-init, the
+          # next iteration bundles a Mesa llvmpipe opengl32.dll next to the exe.
+          # Public MS symbol server for OS/CRT frames; local PDBs for app frames.
+          $env:_NT_SYMBOL_PATH = "srv*$env:TEMP\sym*https://msdl.microsoft.com/download/symbols;$env:appdir"
+
+          $tmo = [int]('${{ github.event.inputs.timeout_seconds }}')
+          if ($tmo -le 0) { $tmo = 210 }
+
+          # Break on first-chance AV (page-heap promotes the heap-corruption
+          # write to a guard-page AV), print the faulting + all-thread stacks,
+          # save a full dump, then quit. -xi ld silences module-load noise.
+          $dmp = Join-Path $env:appdir 'repro.dmp'
+          $cmds = ".symfix; .sympath+ $env:appdir; .reload; sxe -c `".lastevent; r; kP 120; ~*kP 25; .dump /ma $dmp; qd`" av; g; .lastevent; kP 120; ~*kP 25; .dump /ma $dmp; qd"
+
+          Write-Host "=== launching orca-slicer.exe under cdb (timeout ${tmo}s) ==="
+          $out = Join-Path $env:GITHUB_WORKSPACE 'cdb_out.txt'
+          $p = Start-Process -FilePath "${{ steps.dbg.outputs.cdb }}" `
+            -ArgumentList @('-g','-G','-xi','ld','-c', $cmds, "`"$env:exe`"") `
+            -RedirectStandardOutput $out -RedirectStandardError (Join-Path $env:GITHUB_WORKSPACE 'cdb_err.txt') `
+            -PassThru -NoNewWindow
+          if (-not $p.WaitForExit($tmo*1000)) {
+            Write-Host "=== cdb still running after ${tmo}s; killing (likely hung at GL/splash before net-init) ==="
+            try { $p.Kill() } catch {}
+            Start-Sleep -Seconds 2
+          }
+          Write-Host "=== CDB OUTPUT ==="
+          if (Test-Path $out) { Get-Content $out -Raw } else { Write-Host "(no cdb output)" }
+          Write-Host "=== CDB STDERR ==="
+          $err = Join-Path $env:GITHUB_WORKSPACE 'cdb_err.txt'
+          if (Test-Path $err) { Get-Content $err -Raw }
+
+      - name: Dump OrcaSlicer logs (did it reach on_init_network?)
+        if: always()
+        shell: pwsh
+        run: |
+          $orca = Join-Path $env:APPDATA 'OrcaSlicer'
+          Write-Host "=== obn.log ==="
+          $obn = Join-Path $orca 'obn.log'
+          if (Test-Path $obn) { Get-Content $obn -Raw } else { Write-Host "(no obn.log)" }
+          Write-Host "=== latest OrcaSlicer log (tail) ==="
+          $log = Get-ChildItem (Join-Path $orca 'log') -Filter *.log -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime | Select-Object -Last 1
+          if ($log) {
+            Write-Host "log: $($log.FullName)"
+            Get-Content $log.FullName -Tail 200
+          } else { Write-Host "(no OrcaSlicer log)" }
+
+      - name: Collect artifacts (cdb output, dumps, logs)
+        if: always()
+        shell: pwsh
+        run: |
+          $art = Join-Path $env:GITHUB_WORKSPACE 'repro_artifacts'
+          New-Item -ItemType Directory -Force -Path $art | Out-Null
+          foreach ($f in @('cdb_out.txt','cdb_err.txt')) {
+            $p = Join-Path $env:GITHUB_WORKSPACE $f
+            if (Test-Path $p) { Copy-Item $p $art -Force }
+          }
+          $orca = Join-Path $env:APPDATA 'OrcaSlicer'
+          if (Test-Path (Join-Path $orca 'obn.log')) { Copy-Item (Join-Path $orca 'obn.log') $art -Force }
+          if (Test-Path (Join-Path $orca 'log'))     { Copy-Item (Join-Path $orca 'log') (Join-Path $art 'orca_log') -Recurse -Force }
+          $crash = Join-Path $env:LOCALAPPDATA 'CrashDumps'
+          if (Test-Path $crash) { Copy-Item $crash (Join-Path $art 'CrashDumps') -Recurse -Force }
+          $dmp = Join-Path $env:appdir 'repro.dmp'
+          if (Test-Path $dmp) { Copy-Item $dmp $art -Force }
+          Get-ChildItem -Recurse $art | Select-Object FullName,Length | Format-Table -AutoSize
+
+      - name: Upload repro artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-repro-output
+          path: repro_artifacts/
+          if-no-files-found: warn
