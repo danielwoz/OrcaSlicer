@@ -600,7 +600,13 @@ namespace Slic3r
         if (selected_machine.empty()) return nullptr;
 
         MachineObject* obj = get_user_machine(selected_machine, GUI::wxGetApp().get_printer_cloud_provider());
-        if (obj)
+        // Orca: a cloud-bound printer we relabeled to LAN still has a userMachineList (cloud)
+        // object, but its live LAN data (push_status / get_version) is routed by the message
+        // handlers to the localMachineList object via get_my_machine(). Returning the cloud
+        // object here would leave the monitor page stuck on "Failed to connect" with no
+        // temperatures. Skip the cloud object when it is LAN-mode and fall through to the local
+        // one that actually receives the data.
+        if (obj && !obj->is_lan_mode_printer())
             return obj;
 
         // return local machine has access code
@@ -610,7 +616,7 @@ namespace Slic3r
             if (it->second->has_access_right())
                 return it->second;
         }
-        return nullptr;
+        return obj;
     }
 
     void DeviceManager::add_user_subscribe()
