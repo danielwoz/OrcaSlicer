@@ -189,6 +189,21 @@ namespace Slic3r
                 bind_state   = "free";
             }
 
+            // Orca: a cloud-bound printer that is reachable on the LAN and for which we already
+            // hold an access code can be driven directly over LAN MQTT (bblp + access code), with
+            // no cloud broker involved. The OSS network plugin labels every bound printer "cloud",
+            // which makes the host take the cloud path (set_user_selected_machine). With the
+            // plugin's default block_cloud=1 that path never connects, so the printer shows up but
+            // its status never loads (pushall -> code -1, "not ready, failed to check version").
+            // Relabel such printers to "lan" here so set_selected_machine opens a direct LAN
+            // session instead. Guarded on a stored access code so genuinely cloud-only printers
+            // (no LAN credentials) are left on the cloud path untouched.
+            if (connect_type == "cloud" && !dev_ip.empty()) {
+                AppConfig* ac_cfg = Slic3r::GUI::wxGetApp().app_config;
+                if (ac_cfg && !ac_cfg->get("access_code", dev_id).empty())
+                    connect_type = "lan";
+            }
+
             std::string sec_link = "";
             std::string ssdp_version = "";
             if (j.contains("sec_link")) {
