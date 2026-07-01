@@ -193,6 +193,25 @@ if (ORCA_OSS_NETWORK_PLUGIN)
     add_compile_definitions(ORCA_OSS_NETWORK_PLUGIN)
 endif()
 
+# ORCA_MIMALLOC statically overrides the global operator new/delete (see
+# src/OrcaSlicer.cpp), routing ALL of BambuStudio.dll's allocations through
+# mimalloc. The network plugin is a separate DLL that links the stock /MD UCRT
+# and exchanges std::string BY VALUE across the ABI (set_config_dir, country
+# code, build_login/logout_cmd, build_login_info, ...). A string allocated on
+# one side and freed on the other then crosses allocators: the mimalloc host
+# freeing a UCRT-allocated buffer faults with INT_DIVIDE_BY_ZERO deep in
+# mi_free (page->block_size == 0), and the reverse corrupts the UCRT heap.
+# The two are fundamentally incompatible, so disable the global override
+# whenever a network plugin is bundled. (mimalloc can still be re-enabled for
+# plugin-less slicing-only builds, or once the ABI stops passing std::string
+# by value.)
+if (ORCA_MIMALLOC AND ORCA_OSS_NETWORK_PLUGIN)
+    message(WARNING "ORCA_MIMALLOC is incompatible with the network plugin's "
+        "std::string-by-value ABI (cross-allocator free crashes on startup); "
+        "forcing ORCA_MIMALLOC=OFF for this build.")
+    set(ORCA_MIMALLOC OFF CACHE BOOL "Disabled: incompatible with bundled network plugin" FORCE)
+endif()
+
 # The proprietary Bambu network plugin runs an Authenticode check on the studio
 # DLL + host exe and refuses to load under our unsigned files; it also expects
 # genuine Bambu Studio files staged next to OrcaSlicer. ORCA_PLUGIN_VERIFY_REDIRECT
