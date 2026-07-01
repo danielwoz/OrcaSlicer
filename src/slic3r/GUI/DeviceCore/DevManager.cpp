@@ -200,8 +200,13 @@ namespace Slic3r
             // (no LAN credentials) are left on the cloud path untouched.
             if (connect_type == "cloud" && !dev_ip.empty()) {
                 AppConfig* ac_cfg = Slic3r::GUI::wxGetApp().app_config;
-                if (ac_cfg && !ac_cfg->get("access_code", dev_id).empty())
+                if (ac_cfg && !ac_cfg->get("access_code", dev_id).empty()) {
                     connect_type = "lan";
+                    // Treat it exactly like a discovered LAN printer: "free" so is_avaliable()
+                    // passes and the device picker shows it as IN_LAN (online) rather than a
+                    // locked/greyed cloud entry.
+                    bind_state   = "free";
+                }
             }
 
             std::string sec_link = "";
