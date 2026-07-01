@@ -4220,7 +4220,11 @@ bool GUI_App::on_init_network(bool try_backup)
     // When using Orca cloud alongside the BBL network plugin, the BBL DLL agent still
     // needs to be created and configured (config dir, certs, country, start) so that
     // BBLPrinterAgent can use it for LAN discovery and printer communication.
-    if (should_load_networking_plugin && !m_networking_need_update) {
+    // Skipped when m_agent already holds a BBL cloud agent: the m_agent calls above configured
+    // that same plug-in agent, and a second set_config_dir on it corrupts the plug-in's heap
+    // (STATUS_HEAP_CORRUPTION on Windows).
+    if (should_load_networking_plugin && !m_networking_need_update &&
+        !(m_agent && m_agent->get_cloud_agent(BBL_CLOUD_PROVIDER))) {
         auto& plugin = BBLNetworkPlugin::instance();
         if (plugin.is_loaded() && !plugin.has_agent()) {
             plugin.create_agent(data_directory);
