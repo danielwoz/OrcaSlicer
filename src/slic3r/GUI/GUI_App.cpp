@@ -3473,7 +3473,14 @@ bool GUI_App::on_init_network(bool try_backup)
     // When using Orca cloud alongside the BBL network plugin, the BBL DLL agent still
     // needs to be created and configured (config dir, certs, country, start) so that
     // BBLPrinterAgent can use it for LAN discovery and printer communication.
-    if (should_load_networking_plugin && !m_networking_need_update) {
+    // Skip when m_agent already includes a BBL cloud agent — the
+    // invoke_on_all_cloud_agents calls above already configured it, and
+    // a redundant set_config_dir triggers a heap-corruption crash on
+    // some machines (the plugin's second free of config_dir_ hits a
+    // corrupted page-heap start stamp).
+    if (should_load_networking_plugin && !m_networking_need_update
+        && !(m_agent && m_agent->get_cloud_agent(BBL_CLOUD_PROVIDER)))
+    {
         auto& plugin = BBLNetworkPlugin::instance();
         if (plugin.is_loaded() && !plugin.has_agent()) {
             plugin.create_agent(data_directory);
@@ -3484,10 +3491,6 @@ bool GUI_App::on_init_network(bool try_backup)
             bbl.init_log();
             bbl.set_cert_file(resources_dir() + "/cert", "slicer_base64.cer");
             bbl.set_country_code(app_config->get_country_code());
-            // Orca: disable Bambu telemetry before start() so the DLL never spins up tracking
-            // workers. This covers the case where the BBL plugin is loaded for LAN discovery
-            // but the user has not registered BBL_CLOUD_PROVIDER (so m_agent->track_enable
-            // would not reach this DLL instance).
             bbl.track_enable(false);
             bbl.track_remove_files();
             bbl.start();
