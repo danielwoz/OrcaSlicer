@@ -19,16 +19,24 @@
 #endif /* WIN32 */
 
 #ifdef ORCA_MIMALLOC
-// Route operator new/delete (and thus all std container / string allocation)
-// through mimalloc. Included once, in the TU that owns main(). See CMake option
-// ORCA_MIMALLOC.
+// Whole-process mimalloc via the SHARED override + mimalloc-redirect.dll. The
+// redirect patches the shared UCRT malloc/free for EVERY module (this host AND
+// the network plugin), so allocations cross the plugin DLL boundary safely --
+// which is why we can keep mimalloc on even with the plugin bundled. Do NOT
+// include mimalloc-new-delete.h: that is the static-link override and would give
+// this module a second, separate set of operators. Touching mi_version() forces
+// mimalloc.dll to be a load-time import so the redirect patches before any
+// allocation. Then disable purge (retain/reuse freed pages; small consistent
+// win for the alloc-heavy slicer, zero effect on output).
 #include <mimalloc.h>
-#include <mimalloc-new-delete.h>
-// Slicing is short-lived with heavy alloc/free churn of polygon/mesh data.
-// Disable mimalloc's purge (returning freed memory to the OS) so freed pages are
-// retained and reused instead of madvise'd away and re-faulted. Measured a small
-// but consistent win and zero effect on output. Runs before main()/any slicing.
-namespace { struct OrcaMiTune { OrcaMiTune() { mi_option_set(mi_option_purge_delay, -1); } } _orca_mi_tune; }
+namespace {
+struct OrcaMiTune {
+    OrcaMiTune() {
+        (void) mi_version();                    // force early load of mimalloc.dll
+        mi_option_set(mi_option_purge_delay, -1);
+    }
+} _orca_mi_tune;
+}
 #endif
 
 #include <cstdio>

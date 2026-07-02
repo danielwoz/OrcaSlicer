@@ -155,12 +155,27 @@ endif ()
 
 target_link_libraries(OrcaSlicer libslic3r cereal::cereal)
 if (ORCA_MIMALLOC)
-    # Static mimalloc + new/delete override in OrcaSlicer.cpp's TU (so the
-    # operators live in the main object and win over libstdc++ regardless of
-    # link order). Routes the slicer's heavy std::vector/new churn to mimalloc.
-    target_link_libraries(OrcaSlicer mimalloc-static)
+    # Whole-process mimalloc: link the SHARED mimalloc so its override +
+    # mimalloc-redirect.dll patch malloc/free for the host AND the network
+    # plugin (one shared heap -> std::string across the plugin ABI is safe).
+    # No mimalloc-new-delete.h here -- the shared override provides the
+    # operators; OrcaSlicer.cpp calls mi_version() to force an early load.
+    target_link_libraries(OrcaSlicer mimalloc)
     target_compile_definitions(OrcaSlicer PRIVATE ORCA_MIMALLOC)
     target_include_directories(OrcaSlicer PRIVATE ${CMAKE_SOURCE_DIR}/deps_src/mimalloc/include)
+    if (WIN32)
+        # Ship mimalloc.dll + mimalloc-redirect.dll next to the app so the
+        # redirect patches the whole process (host + plugin) at load time.
+        add_custom_command(TARGET OrcaSlicer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:mimalloc> $<TARGET_FILE_DIR:OrcaSlicer>
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE_DIR:mimalloc>/mimalloc-redirect.dll" $<TARGET_FILE_DIR:OrcaSlicer>
+            VERBATIM)
+        install(FILES $<TARGET_FILE:mimalloc>
+                      "$<TARGET_FILE_DIR:mimalloc>/mimalloc-redirect.dll"
+                DESTINATION ".")
+    endif ()
 endif ()
 # target_include_directories(OrcaSlicer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/slic3r)
 if (APPLE)

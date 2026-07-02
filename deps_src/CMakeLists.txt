@@ -84,15 +84,24 @@ if (SLIC3R_VULKAN)
 endif ()
 
 if (ORCA_MIMALLOC)
-    # Static mimalloc, override new/delete globally (see src/OrcaSlicer.cpp).
-    set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    # Whole-process mimalloc via the SHARED override + Windows redirect DLL, so
+    # BambuStudio.dll AND the network plugin (a separate /MD-CRT DLL) share ONE
+    # mimalloc heap. That makes std::string-by-value across the plugin ABI safe
+    # -- the reason static mimalloc had to be disabled when a plugin is bundled.
+    # mimalloc-redirect.dll patches the shared UCRT malloc/free for every module
+    # at load time; it is copied next to mimalloc.dll by mimalloc's own CMake
+    # (MI_WIN_REDIRECT). We ship both DLLs (see src/CMakeLists.txt) and force an
+    # early load via mi_version() in OrcaSlicer.cpp.
+    set(MI_BUILD_SHARED ON  CACHE BOOL "" FORCE)
+    set(MI_BUILD_STATIC OFF CACHE BOOL "" FORCE)
     set(MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE)
     set(MI_BUILD_TESTS  OFF CACHE BOOL "" FORCE)
-    set(MI_BUILD_STATIC ON  CACHE BOOL "" FORCE)
-    # OFF: the lib exposes the mi_* API but does NOT define operator new/delete
-    # itself — those are provided by mimalloc-new-delete.h in OrcaSlicer.cpp.
-    # (ON would double-define the operators → link error.)
-    set(MI_OVERRIDE     OFF CACHE BOOL "" FORCE)
+    # ON: the shared lib defines the malloc/new/delete entry points; combined
+    # with MI_WIN_REDIRECT this redirects the whole process. Do NOT also include
+    # mimalloc-new-delete.h in the host (that is a static-link mechanism and
+    # would give the host a second, separate set of operators).
+    set(MI_OVERRIDE     ON  CACHE BOOL "" FORCE)
+    set(MI_WIN_REDIRECT ON  CACHE BOOL "" FORCE)
     set(MI_INSTALL_TOPLEVEL OFF CACHE BOOL "" FORCE)
     add_subdirectory(mimalloc EXCLUDE_FROM_ALL)
 endif ()
