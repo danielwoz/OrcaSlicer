@@ -20,6 +20,21 @@
     #endif /* SLIC3R_GUI */
 #endif /* WIN32 */
 
+#ifdef ORCA_MIMALLOC
+// The shared mimalloc overrides the allocator for the whole process. Calling into it here makes
+// mimalloc.dll a load-time import of this module. Purging is disabled: slicing frees and
+// reallocates a lot of memory, and freed pages are reused instead of returned to the OS.
+#include <mimalloc.h>
+namespace {
+struct OrcaMiTune {
+    OrcaMiTune() {
+        (void) mi_version();
+        mi_option_set(mi_option_purge_delay, -1);
+    }
+} orca_mi_tune;
+}
+#endif
+
 #include <map>
 #include <vector>
 #include "libslic3r/PrintBase.hpp"

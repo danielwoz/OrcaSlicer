@@ -195,6 +195,23 @@ if (NOT WIN32 AND NOT APPLE)
 endif ()
 
 target_link_libraries(OrcaSlicer libslic3r cereal::cereal)
+if (ORCA_MIMALLOC)
+    # The shared mimalloc provides the malloc and operator new/delete overrides for the whole
+    # process; OrcaSlicer.cpp only tunes it.
+    target_link_libraries(OrcaSlicer mimalloc)
+    target_compile_definitions(OrcaSlicer PRIVATE ORCA_MIMALLOC)
+    if (WIN32)
+        # mimalloc names the redirect DLL by architecture (mimalloc-redirect-arm64.dll etc.).
+        get_directory_property(_mi_redirect_suffix DIRECTORY "${CMAKE_SOURCE_DIR}/deps_src/mimalloc" DEFINITION MIMALLOC_REDIRECT_SUFFIX)
+        set(_mi_redirect_dll "$<TARGET_FILE_DIR:mimalloc>/mimalloc-redirect${_mi_redirect_suffix}.dll")
+        add_custom_command(TARGET OrcaSlicer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:mimalloc> "${_mi_redirect_dll}" $<TARGET_FILE_DIR:OrcaSlicer>
+            VERBATIM)
+        install(FILES $<TARGET_FILE:mimalloc> "${_mi_redirect_dll}" DESTINATION ".")
+    else ()
+        message(WARNING "ORCA_MIMALLOC: the shared libmimalloc is not installed or bundled on this platform, so only the build tree app finds it")
+    endif ()
+endif ()
 # target_include_directories(OrcaSlicer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/slic3r)
 if (APPLE)
 #    add_compile_options(-stdlib=libc++)
@@ -248,6 +265,13 @@ if (WIN32)
         WIN32_EXECUTABLE "$<NOT:$<CONFIG:RelWithDebInfo>>"
     )
     target_link_libraries(OrcaSlicer_app_gui PRIVATE boost_headeronly)
+    if (ORCA_MIMALLOC)
+        # The launcher is the first module loaded; the app DLL comes later. mimalloc.dll must be
+        # a load-time import of the launcher, or the redirect patches the CRT too late and the
+        # standard malloc stays unredirected.
+        target_link_libraries(OrcaSlicer_app_gui PRIVATE mimalloc)
+        target_compile_definitions(OrcaSlicer_app_gui PRIVATE ORCA_MIMALLOC)
+    endif ()
 endif ()
 
 # Link the resources dir to where Slic3r GUI expects it

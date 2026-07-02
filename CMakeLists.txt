@@ -324,6 +324,10 @@ option(SLIC3R_BUILD_SANDBOXES   "Build development sandboxes" OFF)
 option(BUILD_TESTS       "Build unit tests" OFF)
 option(ORCA_TOOLS       "Build Orca tools" OFF)
 option(SLIC3R_LTO "Enable ThinLTO on the first-party slicer targets (clang, Release)" OFF)
+# On Windows mimalloc.dll and the mimalloc-redirect DLL must ship next to orca-slicer.exe
+# (the install rules do this). Without the redirect the override is module-local, and memory
+# passed between the app and the network plugin would be freed on the wrong heap.
+option(ORCA_MIMALLOC "Use mimalloc as the process-wide allocator (shared override + Windows redirect DLL)" OFF)
 
 if (FLATPAK)
     set(SLIC3R_FHS ON CACHE BOOL "" FORCE)

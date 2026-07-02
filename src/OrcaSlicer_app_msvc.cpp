@@ -17,6 +17,13 @@
 #endif
 #include <wchar.h>
 
+#ifdef ORCA_MIMALLOC
+// mimalloc.dll has to be a load-time import of the launcher, the first module the loader maps,
+// so that mimalloc-redirect.dll patches the CRT allocator before it is used. The app DLL is
+// loaded later, which is too late. The mi_version() call in wmain forces the import.
+#include <mimalloc.h>
+#endif
+
 
 
 #ifdef SLIC3R_GUI
@@ -393,6 +400,10 @@ int APIENTRY wWinMain(HINSTANCE /* hInstance */, HINSTANCE /* hPrevInstance */, 
 int wmain(int argc, wchar_t **argv)
 {
 #endif
+#ifdef ORCA_MIMALLOC
+    (void) mi_version();
+#endif
+
     // Allow the asserts to open message box, such message box allows to ignore the assert and continue with the application.
     // Without this call, the seemingly same message box is being opened by the abort() function, but that is too late and
     // the application will be killed even if "Ignore" button is pressed.

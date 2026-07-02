@@ -1,3 +1,6 @@
 [submodule "deps/minhook"]
 	path = deps/minhook
 	url = https://github.com/TsudaKageyu/minhook.git
+[submodule "mimalloc"]
+	path = deps_src/mimalloc
+	url = https://github.com/microsoft/mimalloc.git

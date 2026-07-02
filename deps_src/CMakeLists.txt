@@ -32,3 +32,17 @@ add_subdirectory(minilzo)
 add_subdirectory(qhull)
 add_subdirectory(qoi)
 add_subdirectory(semver)      # Semver static library
+
+if (ORCA_MIMALLOC)
+    # Process-wide mimalloc: the shared library overrides malloc/free and operator new/delete,
+    # and on Windows mimalloc-redirect.dll patches the CRT allocator of every module, so the
+    # app and the separately built network plugin share one heap.
+    set(MI_BUILD_SHARED ON  CACHE BOOL "" FORCE)
+    set(MI_BUILD_STATIC OFF CACHE BOOL "" FORCE)
+    set(MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE)
+    set(MI_BUILD_TESTS  OFF CACHE BOOL "" FORCE)
+    set(MI_OVERRIDE     ON  CACHE BOOL "" FORCE)
+    set(MI_WIN_REDIRECT ON  CACHE BOOL "" FORCE)
+    set(MI_INSTALL_TOPLEVEL OFF CACHE BOOL "" FORCE)
+    add_subdirectory(mimalloc EXCLUDE_FROM_ALL)
+endif ()
