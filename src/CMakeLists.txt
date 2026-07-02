@@ -228,6 +228,17 @@ if (WIN32)
     add_dependencies(OrcaSlicer_app_gui OrcaSlicer)
     set_target_properties(OrcaSlicer_app_gui PROPERTIES OUTPUT_NAME "orca-slicer")
     target_link_libraries(OrcaSlicer_app_gui PRIVATE boost_headeronly)
+    if (ORCA_MIMALLOC)
+        # The launcher exe is the first module loaded and loads BambuStudio.dll
+        # dynamically only later. Import mimalloc.dll from the launcher itself so
+        # mimalloc-redirect.dll patches the shared UCRT malloc/free at process init
+        # (before ucrtbase.dll is used). Referencing it only from the studio DLL is
+        # too late -> the redirect falls back to un-redirected malloc (mimalloc
+        # inert). See the mi_version() reference in OrcaSlicer_app_msvc.cpp.
+        target_link_libraries(OrcaSlicer_app_gui PRIVATE mimalloc)
+        target_include_directories(OrcaSlicer_app_gui PRIVATE ${CMAKE_SOURCE_DIR}/deps_src/mimalloc/include)
+        target_compile_definitions(OrcaSlicer_app_gui PRIVATE ORCA_MIMALLOC)
+    endif ()
 endif ()
 
 # Link the resources dir to where Slic3r GUI expects it

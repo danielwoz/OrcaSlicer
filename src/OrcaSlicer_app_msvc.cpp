@@ -8,6 +8,18 @@
 #include <commctrl.h>
 #include <wchar.h>
 
+#ifdef ORCA_MIMALLOC
+// This launcher is the FIRST module the loader maps; it loads BambuStudio.dll
+// dynamically (LoadLibraryExW) only LATER. For mimalloc's whole-process override
+// to work, mimalloc.dll (and its mimalloc-redirect.dll dependency) must be a
+// static import of THIS exe so the redirect patches the shared UCRT malloc/free
+// at process init -- before ucrtbase.dll is used. Referencing mi_version() below
+// forces that import. If mimalloc is referenced only by the later-loaded studio
+// DLL, the redirect initializes after ucrtbase and reports
+// "standard malloc is _not_ redirected" (mimalloc ends up inert).
+#include <mimalloc.h>
+#endif
+
 
 
 #ifdef SLIC3R_GUI
@@ -377,6 +389,13 @@ int APIENTRY wWinMain(HINSTANCE /* hInstance */, HINSTANCE /* hPrevInstance */, 
 int wmain(int argc, wchar_t **argv)
 {
 #endif
+#ifdef ORCA_MIMALLOC
+    // Touch mimalloc so the linker keeps mimalloc.dll as a static import of the
+    // launcher (see the include note above). The redirect has already patched the
+    // CRT by the time we get here -- this reference only exists to force the import.
+    (void) mi_version();
+#endif
+
     // Allow the asserts to open message box, such message box allows to ignore the assert and continue with the application.
     // Without this call, the seemingly same message box is being opened by the abort() function, but that is too late and
     // the application will be killed even if "Ignore" button is pressed.
