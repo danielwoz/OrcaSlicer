@@ -3,8 +3,8 @@
 	url = https://github.com/TsudaKageyu/minhook.git
 [submodule "bambu_network_oss"]
 	path = bambu_network_oss
-	url = https://github.com/danielwoz/bambu-network-oss.git
-	branch = orca-legacy-integration
+	url = https://github.com/danielwoz/open-bamboo-networking.git
+	branch = camera-streaming
 [submodule "mimalloc"]
 	path = deps_src/mimalloc
 	url = https://github.com/microsoft/mimalloc.git
