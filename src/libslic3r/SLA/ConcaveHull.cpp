@@ -52,7 +52,16 @@ Points ConcaveHull::calculate_centroids() const
     return centroids;
 }
 
-void ConcaveHull::merge_polygons() { m_polys = get_contours(union_ex(m_polys)); }
+void ConcaveHull::merge_polygons() {
+    // A bare union_ex() here can leave sub-micron slivers of the source polygons
+    // outside the merged contour on the Clipper2 engine (boundary-tracing noise on
+    // touching/near-touching pieces, e.g. the connector rectangles bridging
+    // separate islands) where Clipper1 merged them cleanly. A tiny outward expand
+    // after the union guarantees the hull still fully contains its source
+    // polygons, at a scale (5um) well below anything printable.
+    Polygons merged = get_contours(union_ex(m_polys));
+    m_polys = get_contours(offset_ex(merged, float(scale_(0.005))));
+}
 
 void ConcaveHull::add_connector_rectangles(const Points &centroids,
                                            coord_t       max_dist,
