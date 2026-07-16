@@ -189,6 +189,26 @@ namespace Slic3r
                 bind_state   = "free";
             }
 
+            // Orca: a cloud-bound printer that is reachable on the LAN and for which we already
+            // hold an access code can be driven directly over LAN MQTT (bblp + access code), with
+            // no cloud broker involved. The OSS network plugin labels every bound printer "cloud",
+            // which makes the host take the cloud path (set_user_selected_machine). With the
+            // plugin's default block_cloud=1 that path never connects, so the printer shows up but
+            // its status never loads (pushall -> code -1, "not ready, failed to check version").
+            // Relabel such printers to "lan" here so set_selected_machine opens a direct LAN
+            // session instead. Guarded on a stored access code so genuinely cloud-only printers
+            // (no LAN credentials) are left on the cloud path untouched.
+            if (connect_type == "cloud" && !dev_ip.empty()) {
+                AppConfig* ac_cfg = Slic3r::GUI::wxGetApp().app_config;
+                if (ac_cfg && !ac_cfg->get("access_code", dev_id).empty()) {
+                    connect_type = "lan";
+                    // Treat it exactly like a discovered LAN printer: "free" so is_avaliable()
+                    // passes and the device picker shows it as IN_LAN (online) rather than a
+                    // locked/greyed cloud entry.
+                    bind_state   = "free";
+                }
+            }
+
             std::string sec_link = "";
             std::string ssdp_version = "";
             if (j.contains("sec_link")) {
@@ -580,7 +600,13 @@ namespace Slic3r
         if (selected_machine.empty()) return nullptr;
 
         MachineObject* obj = get_user_machine(selected_machine, GUI::wxGetApp().get_printer_cloud_provider());
-        if (obj)
+        // Orca: a cloud-bound printer we relabeled to LAN still has a userMachineList (cloud)
+        // object, but its live LAN data (push_status / get_version) is routed by the message
+        // handlers to the localMachineList object via get_my_machine(). Returning the cloud
+        // object here would leave the monitor page stuck on "Failed to connect" with no
+        // temperatures. Skip the cloud object when it is LAN-mode and fall through to the local
+        // one that actually receives the data.
+        if (obj && !obj->is_lan_mode_printer())
             return obj;
 
         // return local machine has access code
@@ -590,7 +616,7 @@ namespace Slic3r
             if (it->second->has_access_right())
                 return it->second;
         }
-        return nullptr;
+        return obj;
     }
 
     void DeviceManager::add_user_subscribe()
