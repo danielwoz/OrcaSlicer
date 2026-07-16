@@ -3383,7 +3383,13 @@ void GUI_App::ensure_oss_network_plugin()
 {
     namespace fs = boost::filesystem;
     const std::string ver = BAMBU_NETWORK_AGENT_VERSION_LEGACY;
+#if defined(_WIN32)
+    const std::string fname = "bambu_networking_" + ver + ".dll";
+#elif defined(__APPLE__)
+    const std::string fname = "libbambu_networking_" + ver + ".dylib";
+#else
     const std::string fname = "libbambu_networking_" + ver + ".so";
+#endif
 
     fs::path src = fs::path(resources_dir()) / "plugins" / fname;
     if (!fs::exists(src)) {
