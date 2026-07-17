@@ -184,7 +184,7 @@ endif ()
 option(SLIC3R_BUILD_SANDBOXES   "Build development sandboxes" OFF)
 option(BUILD_TESTS       "Build unit tests" OFF)
 option(ORCA_TOOLS       "Build Orca tools" OFF)
-option(ORCA_MIMALLOC "Use mimalloc as the global allocator (static, overrides new/delete) for faster allocation-heavy slicing" OFF)
+option(ORCA_MIMALLOC "Use mimalloc as the process-wide allocator (shared override + Windows redirect DLL; shared with the network plugin) for faster allocation-heavy slicing" OFF)
 option(SLIC3R_LTO "Enable ThinLTO on the first-party slicer targets (clang, Release)" OFF)
 option(SLIC3R_VULKAN "Optional vendored static Vulkan GPU SLA rasterizer" OFF)
 option(ORCA_OSS_NETWORK_PLUGIN "Build and bundle the open-source bambu-network-oss plugin and load it instead of downloading the proprietary network plugin" ON)
@@ -192,6 +192,15 @@ if (ORCA_OSS_NETWORK_PLUGIN)
     # Used by GUI_App (provisioning + load) and PresetUpdater (download bypass).
     add_compile_definitions(ORCA_OSS_NETWORK_PLUGIN)
 endif()
+
+# ORCA_MIMALLOC defaults OFF. When ON, the host overrides operator new/delete
+# with mimalloc; it MUST be the SHARED build plus mimalloc-redirect.dll shipped
+# next to the exe (see deps_src/CMakeLists.txt and src/CMakeLists.txt) so the
+# bundled network plugin (a separate /MD-CRT DLL) shares the same heap. If the
+# redirect DLLs are absent, mimalloc's override is module-local: a std::string
+# allocated in the host and freed in the plugin (or vice versa) crosses heaps
+# and triggers STATUS_HEAP_CORRUPTION (0xc0000374) at network-plugin init.
+# Enable only after verifying mimalloc.dll + mimalloc-redirect.dll are installed.
 
 if (FLATPAK)
     set(SLIC3R_FHS ON CACHE BOOL "" FORCE)
