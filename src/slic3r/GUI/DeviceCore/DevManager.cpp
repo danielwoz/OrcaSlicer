@@ -94,6 +94,27 @@ namespace Slic3r
         userMachineList.clear();
     }
 
+    // connection_type is the printer's own mode advertisement: "lan" means cloud is disabled on
+    // the device itself. It does not describe how we reach the printer -- a cloud-paired printer
+    // can be driven over the LAN whenever its IP and access code are known. Transport is selected
+    // by has_lan_transport() below, leaving connection_type to mean what it says so the ~40 call
+    // sites that read is_lan_mode_printer() as "no cloud available" (camera liveview, storage
+    // browsing, calibration, the device picker) stay correct for a cloud-bound printer.
+    //
+    // ORCA_LAN_TRANSPORT=0 restores the previous behaviour, which rewrote connection_type to
+    // "lan" for any cloud printer holding an access code.
+    static bool lan_transport_enabled()
+    {
+        const char* env = std::getenv("ORCA_LAN_TRANSPORT");
+        return !(env && env[0] == '0');
+    }
+
+    // True when the printer can be reached directly over the LAN, regardless of how it is bound.
+    static bool has_lan_transport(MachineObject* obj)
+    {
+        return obj && !obj->get_dev_ip().empty() && obj->has_access_right();
+    }
+
     void DeviceManager::set_agent(NetworkAgent* agent)
     {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": updating agent for "
@@ -201,16 +222,9 @@ namespace Slic3r
             // (no LAN credentials) are left on the cloud path untouched.
             if (connect_type == "cloud" && !dev_ip.empty()) {
                 AppConfig* ac_cfg = Slic3r::GUI::wxGetApp().app_config;
-                // Studio itself never rewrites connection_type: it is the printer's own
-                // mode advertisement ("lan" == LAN Only Mode, cloud disabled ON THE DEVICE),
-                // and a cloud-paired printer stays "cloud" even when it is on the LAN with a
-                // known access code. Rewriting it makes is_lan_mode_printer() true, which ~40
-                // call sites read as "no cloud available" (camera liveview, storage browsing,
-                // calibration, device picker...). Set ORCA_LAN_RELABEL=0 to disable the
-                // rewrite and take the Studio-native path instead.
-                const char* relabel_env     = std::getenv("ORCA_LAN_RELABEL");
-                const bool  relabel_enabled = !(relabel_env && relabel_env[0] == '0');
-                if (relabel_enabled && ac_cfg && !ac_cfg->get("access_code", dev_id).empty()) {
+                // Legacy path only: LAN transport is now selected per printer without touching
+                // connection_type, so the rewrite below is skipped unless ORCA_LAN_TRANSPORT=0.
+                if (!lan_transport_enabled() && ac_cfg && !ac_cfg->get("access_code", dev_id).empty()) {
                     connect_type = "lan";
                     // Treat it exactly like a discovered LAN printer: "free" so is_avaliable()
                     // passes and the device picker shows it as IN_LAN (online) rather than a
@@ -518,11 +532,16 @@ namespace Slic3r
         auto last_selected = my_machine_list.find(selected_machine);
         if (last_selected != my_machine_list.end() && selected_machine != dev_id)
         {
-            if (last_selected->second->connection_type() == "lan")
+            // A printer may hold both sessions at once, so tear down each one that applies
+            // rather than picking a single branch.
+            const bool had_lan = lan_transport_enabled() ? has_lan_transport(last_selected->second)
+                                                         : last_selected->second->connection_type() == "lan";
+            if (had_lan)
             {
                 m_agent->disconnect_printer();
             }
-            else if (last_selected->second->connection_type() == "cloud") {
+            if (!last_selected->second->is_lan_mode_printer())
+            {
                 m_agent->set_user_selected_machine("");
             }
         }
@@ -530,10 +549,17 @@ namespace Slic3r
         // connect curr
         if (it != my_machine_list.end())
         {
+            // Use the direct LAN session whenever the printer is reachable that way, and keep the
+            // cloud session for a cloud-bound printer so camera and storage stay available. Both
+            // apply at once for a cloud-paired printer sitting on the same network.
+            const bool use_lan   = lan_transport_enabled() ? has_lan_transport(it->second)
+                                                           : it->second->connection_type() == "lan";
+            const bool use_cloud = !it->second->is_lan_mode_printer();
+
             if (selected_machine == dev_id)
             {
                 // same dev_id, cloud => reset update time
-                if (it->second->connection_type() != "lan")
+                if (!use_lan)
                 {
                     BOOST_LOG_TRIVIAL(info) << "set_selected_machine: same cloud machine, dev_id =" << dev_id
                         << ", just reset update time";
@@ -571,17 +597,18 @@ namespace Slic3r
             {
                 if (m_agent)
                 {
-                    if (it->second->connection_type() != "lan" || it->second->connection_type().empty())
+                    it->second->reset();
+
+                    if (use_cloud)
                     {
                         // diff dev_id, cloud => set_user_selected_machine(new)
                         BOOST_LOG_TRIVIAL(info) << "set_selected_machine: select new cloud machine, dev_id =" << dev_id;
                         m_agent->set_user_selected_machine(dev_id);
-                        it->second->reset();
                     }
-                    else
+
+                    if (use_lan)
                     {
                         BOOST_LOG_TRIVIAL(info) << "set_selected_machine: select new lan machine, dev_id =" << dev_id;
-                        it->second->reset();
 #if !BBL_RELEASE_TO_PUBLIC
                         it->second->connect(Slic3r::GUI::wxGetApp().app_config->get("enable_ssl_for_mqtt") == "true" ? true : false);
 #else
@@ -610,6 +637,19 @@ namespace Slic3r
         if (selected_machine.empty()) return nullptr;
 
         MachineObject* obj = get_user_machine(selected_machine, GUI::wxGetApp().get_printer_cloud_provider());
+
+        if (lan_transport_enabled())
+        {
+            // push_status / get_version are delivered to the object that owns the session, so
+            // return the LAN-reachable local object when there is one. Returning the cloud object
+            // instead leaves the monitor page on "Failed to connect" with no temperatures while
+            // the data lands in an object nothing reads.
+            auto local = localMachineList.find(selected_machine);
+            if (local != localMachineList.end() && has_lan_transport(local->second))
+                return local->second;
+            return obj;
+        }
+
         // Orca: a cloud-bound printer we relabeled to LAN still has a userMachineList (cloud)
         // object, but its live LAN data (push_status / get_version) is routed by the message
         // handlers to the localMachineList object via get_my_machine(). Returning the cloud
@@ -687,6 +727,23 @@ namespace Slic3r
     std::map<std::string, MachineObject*> DeviceManager::get_my_machine_list()
     {
         std::map<std::string, MachineObject*> result;
+
+        // A cloud-paired printer that is also on the LAN is represented twice: the cloud object
+        // from userMachineList, and the SSDP-discovered local object that carries the IP and
+        // access code. Only the object holding the printer session receives push_status, so take
+        // the LAN-reachable one first -- the inserts below leave existing keys untouched.
+        if (lan_transport_enabled())
+        {
+            for (auto it = localMachineList.begin(); it != localMachineList.end(); it++)
+            {
+                if (!has_lan_transport(it->second)) continue;
+                // Leave out printers bound to somebody else: either it is free to use, or it is
+                // already bound to this account and therefore present in userMachineList.
+                if (!it->second->is_avaliable() && userMachineList.find(it->first) == userMachineList.end())
+                    continue;
+                result[it->first] = it->second;
+            }
+        }
 
         for (auto it = userMachineList.begin(); it != userMachineList.end(); it++)
         {
