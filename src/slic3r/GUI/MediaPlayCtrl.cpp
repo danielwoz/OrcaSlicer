@@ -286,7 +286,12 @@ void MediaPlayCtrl::Play()
     BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::Play: " << m_lan_proto << m_remote_proto << m_disable_lan;
     NetworkAgent *agent = wxGetApp().getAgent();
     std::string  agent_version = agent ? agent->get_version() : "";
-    if (m_lan_proto > MachineObject::LVL_Disable && (m_lan_mode || !m_remote_proto) && !m_disable_lan && !m_lan_ip.empty()) {
+    // Use the printer's own liveview stream whenever it is switched on and its LAN address is
+    // known. Gating this on m_lan_mode would skip it for a cloud-bound printer, which keeps
+    // connection_type "cloud" even while sitting on the same network -- and on builds whose
+    // network plugin provides no remote camera there is nothing to fall back to. m_disable_lan
+    // still switches to the remote path on the next attempt if this one fails.
+    if (m_lan_proto > MachineObject::LVL_Disable && !m_disable_lan && !m_lan_ip.empty()) {
         m_disable_lan = m_remote_proto && !m_lan_mode; // try remote next time
         std::string url;
         if (m_lan_proto == MachineObject::LVL_Local)
@@ -531,7 +536,12 @@ void MediaPlayCtrl::ToggleStream()
             wxGetApp().app_config->set("not_show_vcamera_stop_prev", "1");
         if (res == wxID_CANCEL) return;
     }
-    if (m_lan_proto > MachineObject::LVL_Disable && (m_lan_mode || !m_remote_proto) && !m_disable_lan && !m_lan_ip.empty()) {
+    // Use the printer's own liveview stream whenever it is switched on and its LAN address is
+    // known. Gating this on m_lan_mode would skip it for a cloud-bound printer, which keeps
+    // connection_type "cloud" even while sitting on the same network -- and on builds whose
+    // network plugin provides no remote camera there is nothing to fall back to. m_disable_lan
+    // still switches to the remote path on the next attempt if this one fails.
+    if (m_lan_proto > MachineObject::LVL_Disable && !m_disable_lan && !m_lan_ip.empty()) {
         std::string url;
         if (m_lan_proto == MachineObject::LVL_Local)
             url = "bambu:///local/" + m_lan_ip + ".?port=6000&user=" + m_lan_user + "&passwd=" + m_lan_passwd;
