@@ -7,6 +7,7 @@
 
 // TODO: remove this include
 #include "slic3r/GUI/DeviceManager.hpp"
+#include <cstdlib>
 #include "slic3r/GUI/I18N.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/Plater.hpp"
@@ -200,7 +201,16 @@ namespace Slic3r
             // (no LAN credentials) are left on the cloud path untouched.
             if (connect_type == "cloud" && !dev_ip.empty()) {
                 AppConfig* ac_cfg = Slic3r::GUI::wxGetApp().app_config;
-                if (ac_cfg && !ac_cfg->get("access_code", dev_id).empty()) {
+                // Studio itself never rewrites connection_type: it is the printer's own
+                // mode advertisement ("lan" == LAN Only Mode, cloud disabled ON THE DEVICE),
+                // and a cloud-paired printer stays "cloud" even when it is on the LAN with a
+                // known access code. Rewriting it makes is_lan_mode_printer() true, which ~40
+                // call sites read as "no cloud available" (camera liveview, storage browsing,
+                // calibration, device picker...). Set ORCA_LAN_RELABEL=0 to disable the
+                // rewrite and take the Studio-native path instead.
+                const char* relabel_env     = std::getenv("ORCA_LAN_RELABEL");
+                const bool  relabel_enabled = !(relabel_env && relabel_env[0] == '0');
+                if (relabel_enabled && ac_cfg && !ac_cfg->get("access_code", dev_id).empty()) {
                     connect_type = "lan";
                     // Treat it exactly like a discovered LAN printer: "free" so is_avaliable()
                     // passes and the device picker shows it as IN_LAN (online) rather than a
