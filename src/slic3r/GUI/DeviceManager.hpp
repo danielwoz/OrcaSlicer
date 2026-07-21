@@ -186,6 +186,10 @@ public:
     std::string dev_connection_type;    /* lan | cloud */
     std::string connection_type() const { return dev_connection_type; }
     bool is_lan_mode_printer() const { return dev_connection_type == "lan"; }
+    // True when this printer can be driven directly over the LAN, i.e. its address and access
+    // code are known. Independent of connection_type, which reports whether the printer has
+    // cloud disabled on the device rather than which route we are using to reach it.
+    bool has_lan_transport() const { return !dev_ip.empty() && !get_access_code().empty(); }
     bool is_cloud_mode_printer() const { return dev_connection_type == "cloud"; }
 
     std::chrono::system_clock::time_point last_cloud_msg_time_;

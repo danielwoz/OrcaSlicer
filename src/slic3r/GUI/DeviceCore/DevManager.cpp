@@ -112,7 +112,7 @@ namespace Slic3r
     // True when the printer can be reached directly over the LAN, regardless of how it is bound.
     static bool has_lan_transport(MachineObject* obj)
     {
-        return obj && !obj->get_dev_ip().empty() && obj->has_access_right();
+        return obj && obj->has_lan_transport();
     }
 
     void DeviceManager::set_agent(NetworkAgent* agent)

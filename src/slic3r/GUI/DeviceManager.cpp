@@ -2514,7 +2514,9 @@ bool MachineObject::is_connected()
         return false;
     }
 
-    if (!is_lan_mode_printer()) {
+    // Only a printer we reach through the cloud depends on the cloud server being up; when we
+    // drive it over the LAN the freshness check above has already shown its data still arriving.
+    if (!is_lan_mode_printer() && !has_lan_transport()) {
         NetworkAgent* m_agent = Slic3r::GUI::wxGetApp().getAgent();
         if (m_agent) {
             return m_agent->is_server_connected(Slic3r::GUI::wxGetApp().get_printer_cloud_provider());
@@ -2582,7 +2584,10 @@ bool MachineObject::is_camera_busy_off()
 int MachineObject::publish_json(const json& json_item, int qos, int flag)
 {
     int rtn = 0;
-    if (is_lan_mode_printer()) {
+    // Publish over the session that is actually carrying this printer. A cloud-paired printer we
+    // reach on the LAN keeps connection_type "cloud", so testing that alone would send every
+    // command -- print jobs, controls, push_all -- to the cloud while the LAN session holds it.
+    if (is_lan_mode_printer() || has_lan_transport()) {
         rtn = local_publish_json(json_item.dump(), qos, flag);
     } else {
         rtn = cloud_publish_json(json_item.dump(), qos, flag);

@@ -3833,7 +3833,8 @@ void SelectMachineDialog::update_show_status(MachineObject* obj_)
 
     /** error check **/
     /* check cloud machine connections */
-    if (!obj_->is_lan_mode_printer() && !agent->is_server_connected(wxGetApp().get_printer_cloud_provider())) {
+    if (!obj_->is_lan_mode_printer() && !obj_->has_lan_transport()
+        && !agent->is_server_connected(wxGetApp().get_printer_cloud_provider())) {
         show_status(PrintDialogStatus::PrintStatusConnectingServer);
         reset_timeout();
         return;
