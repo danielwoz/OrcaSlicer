@@ -532,15 +532,14 @@ namespace Slic3r
         auto last_selected = my_machine_list.find(selected_machine);
         if (last_selected != my_machine_list.end() && selected_machine != dev_id)
         {
-            // A printer may hold both sessions at once, so tear down each one that applies
-            // rather than picking a single branch.
+            // Tear down whichever session was established for it.
             const bool had_lan = lan_transport_enabled() ? has_lan_transport(last_selected->second)
                                                          : last_selected->second->connection_type() == "lan";
             if (had_lan)
             {
                 m_agent->disconnect_printer();
             }
-            if (!last_selected->second->is_lan_mode_printer())
+            else
             {
                 m_agent->set_user_selected_machine("");
             }
@@ -549,12 +548,12 @@ namespace Slic3r
         // connect curr
         if (it != my_machine_list.end())
         {
-            // Use the direct LAN session whenever the printer is reachable that way, and keep the
-            // cloud session for a cloud-bound printer so camera and storage stay available. Both
-            // apply at once for a cloud-paired printer sitting on the same network.
-            const bool use_lan   = lan_transport_enabled() ? has_lan_transport(it->second)
-                                                           : it->second->connection_type() == "lan";
-            const bool use_cloud = !it->second->is_lan_mode_printer();
+            // Exactly one session, chosen by how the printer is reachable rather than by what it
+            // advertises: a direct LAN session when its address and access code are known,
+            // otherwise the cloud one. Holding both at once is not supported -- the agent tears
+            // the pair down and rebuilds them on every switch, which crashes on the third.
+            const bool use_lan = lan_transport_enabled() ? has_lan_transport(it->second)
+                                                         : it->second->connection_type() == "lan";
 
             if (selected_machine == dev_id)
             {
@@ -597,17 +596,16 @@ namespace Slic3r
             {
                 if (m_agent)
                 {
-                    it->second->reset();
-
-                    if (use_cloud)
+                    if (!use_lan)
                     {
                         // diff dev_id, cloud => set_user_selected_machine(new)
                         BOOST_LOG_TRIVIAL(info) << "set_selected_machine: select new cloud machine, dev_id =" << dev_id;
                         m_agent->set_user_selected_machine(dev_id);
+                        it->second->reset();
                     }
-
-                    if (use_lan)
+                    else
                     {
+                        it->second->reset();
                         BOOST_LOG_TRIVIAL(info) << "set_selected_machine: select new lan machine, dev_id =" << dev_id;
 #if !BBL_RELEASE_TO_PUBLIC
                         it->second->connect(Slic3r::GUI::wxGetApp().app_config->get("enable_ssl_for_mqtt") == "true" ? true : false);
