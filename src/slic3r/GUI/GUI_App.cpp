@@ -1959,6 +1959,13 @@ bool GUI_App::use_legacy_network_plugin() const
     return app_config && BBLNetworkPlugin::is_legacy_version(app_config->get_network_plugin_version());
 }
 
+bool GUI_App::is_oss_network_plugin() const
+{
+    // Cached from the loaded plugin's own reported version -- the config string
+    // can be the legacy provisioning filename, which would hide the .99 sentinel.
+    return BBLNetworkPlugin::instance().is_oss_network_plugin();
+}
+
 bool GUI_App::is_compatibility_version()
 {
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(": m_networking_compatible=%1%")%m_networking_compatible;
@@ -3383,12 +3390,16 @@ void GUI_App::ensure_oss_network_plugin()
 {
     namespace fs = boost::filesystem;
     const std::string ver = BAMBU_NETWORK_AGENT_VERSION_LEGACY;
+    // The OSS plugin is a single bundled build, so it is provisioned under the
+    // plain unversioned name rather than a synthetic bambu_networking_<ver>.dll.
+    // BBLNetworkPlugin::initialize() loads this name when the versioned file is
+    // absent; the config version below only seeds the pre-load legacy routing.
 #if defined(_WIN32)
-    const std::string fname = "bambu_networking_" + ver + ".dll";
+    const std::string fname = "bambu_networking.dll";
 #elif defined(__APPLE__)
-    const std::string fname = "libbambu_networking_" + ver + ".dylib";
+    const std::string fname = "libbambu_networking.dylib";
 #else
-    const std::string fname = "libbambu_networking_" + ver + ".so";
+    const std::string fname = "libbambu_networking.so";
 #endif
 
     fs::path src = fs::path(resources_dir()) / "plugins" / fname;

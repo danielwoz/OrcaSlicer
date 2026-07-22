@@ -743,6 +743,9 @@ public:
     std::string     get_http_url(std::string country_code, std::string path = {});
     std::string     get_model_http_url(std::string country_code);
     bool            use_legacy_network_plugin() const;
+    // True when the loaded network plugin is the open-source one (.99 sentinel);
+    // gates OSS-only behaviour that the genuine plugin does not support.
+    bool            is_oss_network_plugin() const;
     bool            is_compatibility_version();
     bool            check_networking_version();
     void            cancel_networking_install();

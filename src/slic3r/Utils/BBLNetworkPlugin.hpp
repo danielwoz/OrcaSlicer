@@ -270,6 +270,20 @@ public:
     bool use_legacy_network() const { return m_use_legacy_network; }
     void set_use_legacy_network(bool legacy) { m_use_legacy_network = legacy; }
 
+    // The open-source network plugin (open-bamboo-networking) tags every release
+    // with a .99 patch component; Bambu's own builds never ship a .99 patch, so
+    // the last dotted field is a reliable OSS sentinel that is independent of the
+    // ABI version (02.07.01.99, 02.08.01.99, ...). Orca keys the OSS-only
+    // capabilities it cannot get from the genuine plugin off this.
+    static bool is_oss_version(const std::string& version) {
+        const auto pos = version.find_last_of('.');
+        return pos != std::string::npos && version.substr(pos + 1) == "99";
+    }
+    // True when the plugin currently loaded is the OSS one. Cached at load time
+    // from the plugin's own reported version, so it is unaffected by the legacy
+    // filename ensure_oss_network_plugin() provisions it under.
+    bool is_oss_network_plugin() const { return m_is_oss_plugin; }
+
     // ========================================================================
     // Function Pointer Accessors
     // ========================================================================
@@ -406,6 +420,7 @@ private:
 
     // Legacy network compatibility flag
     bool m_use_legacy_network{false};
+    bool m_is_oss_plugin{false};
 
     // Function pointers
     func_check_debug_consistent m_check_debug_consistent{nullptr};

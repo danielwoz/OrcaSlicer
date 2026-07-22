@@ -78,31 +78,7 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
         return -1;
     }
 
-    // Auto-migration: If loading legacy version and versioned library doesn't exist,
-    // but unversioned legacy library does exist, copy it to versioned format
-    if (is_legacy_version(version)) {
-        boost::filesystem::path versioned_path;
-        boost::filesystem::path legacy_path;
-#if defined(_MSC_VER) || defined(_WIN32)
-        versioned_path = plugin_folder / (std::string(BAMBU_NETWORK_LIBRARY) + "_" + version + ".dll");
-        legacy_path = plugin_folder / (std::string(BAMBU_NETWORK_LIBRARY) + ".dll");
-#elif defined(__WXMAC__)
-        versioned_path = plugin_folder / (std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + "_" + version + ".dylib");
-        legacy_path = plugin_folder / (std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + ".dylib");
-#else
-        versioned_path = plugin_folder / (std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + "_" + version + ".so");
-        legacy_path = plugin_folder / (std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + ".so");
-#endif
-        if (!boost::filesystem::exists(versioned_path) && boost::filesystem::exists(legacy_path)) {
-            try {
-                boost::filesystem::copy(legacy_path, versioned_path);
-            } catch (const std::exception& e) {
-                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to copy legacy library: " << e.what();
-            }
-        }
-    }
-
-    // Load versioned library
+    // Versioned name: the proprietary OTA flow downloads bambu_networking_<ver>.dll.
 #if defined(_MSC_VER) || defined(_WIN32)
     library = plugin_folder.string() + "\\" + std::string(BAMBU_NETWORK_LIBRARY) + "_" + version + ".dll";
 #else
@@ -113,6 +89,23 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
     #endif
     library = plugin_folder.string() + "/" + std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + "_" + version + lib_ext;
 #endif
+
+    // The open-source plugin ships as a single unversioned bambu_networking.dll:
+    // there is only ever one build, and the _<version> suffix exists solely for
+    // the proprietary OTA download flow it does not use. When the versioned file
+    // is absent but the plain name is present, load that in place so the on-disk
+    // file stays bambu_networking.dll.
+    if (!boost::filesystem::exists(library)) {
+#if defined(_MSC_VER) || defined(_WIN32)
+        boost::filesystem::path unversioned = plugin_folder / (std::string(BAMBU_NETWORK_LIBRARY) + ".dll");
+#elif defined(__WXMAC__)
+        boost::filesystem::path unversioned = plugin_folder / (std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + ".dylib");
+#else
+        boost::filesystem::path unversioned = plugin_folder / (std::string("lib") + std::string(BAMBU_NETWORK_LIBRARY) + ".so");
+#endif
+        if (boost::filesystem::exists(unversioned))
+            library = unversioned.string();
+    }
 
 #if defined(_MSC_VER) || defined(_WIN32)
     // Satisfy the proprietary plugin's "signed studio" Authenticode gate for our
@@ -126,6 +119,8 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
     ::MultiByteToWideChar(CP_UTF8, NULL, library.c_str(), strlen(library.c_str())+1, lib_wstr, sizeof(lib_wstr) / sizeof(lib_wstr[0]));
     m_networking_module = LoadLibrary(lib_wstr);
     if (!m_networking_module) {
+        BOOST_LOG_TRIVIAL(error) << "BBLNetworkPlugin: LoadLibrary(" << library
+                                 << ") failed, GetLastError=" << ::GetLastError();
         std::string library_path = get_libpath_in_current_directory(std::string(BAMBU_NETWORK_LIBRARY));
         if (library_path.empty()) {
             set_load_error(
@@ -180,8 +175,14 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
         }
     }
 
+    // The .99 sentinel identifies the open-source plugin (see is_oss_version).
+    // Prefer the plugin's own version; fall back to the requested one only when
+    // get_version is unavailable.
+    m_is_oss_plugin = is_oss_version(loaded_version.empty() ? version : loaded_version);
+
     BOOST_LOG_TRIVIAL(info) << "BBLNetworkPlugin::initialize: legacy_mode="
         << (m_use_legacy_network ? "true" : "false")
+        << ", oss_plugin=" << (m_is_oss_plugin ? "true" : "false")
         << ", library=" << library
         << ", version=" << (loaded_version.empty() ? "unknown" : loaded_version)
         << ", send_message=" << (m_send_message ? "loaded" : "null")
@@ -219,6 +220,7 @@ int BBLNetworkPlugin::unload()
     clear_all_function_pointers();
 
     m_use_legacy_network = false;
+    m_is_oss_plugin = false;
 
     return 0;
 }
@@ -491,6 +493,12 @@ void BBLNetworkPlugin::set_load_error(const std::string& message,
                                        const std::string& technical_details,
                                        const std::string& attempted_path)
 {
+    // Record *and* log: without this a failed load leaves no reason anywhere in
+    // the log, making a bad install indistinguishable from a missing dependency
+    // or a wrong version string.
+    BOOST_LOG_TRIVIAL(error) << "BBLNetworkPlugin load error: " << message
+                             << " | " << technical_details
+                             << " | path=" << attempted_path;
     m_load_error.has_error = true;
     m_load_error.message = message;
     m_load_error.technical_details = technical_details;

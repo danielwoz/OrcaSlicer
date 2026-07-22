@@ -62,7 +62,9 @@ endif()
 
 set(_oss_binary "${CMAKE_BINARY_DIR}/bambu_network_oss-build")
 set(_oss_so "${_oss_binary}/plugin/libbambu_networking.so.0.1.0")
-set(_oss_installed "${CMAKE_SOURCE_DIR}/resources/plugins/libbambu_networking_${ORCA_OSS_NETWORK_PLUGIN_VERSION}.so")
+# Bundle under the plain unversioned name; the OSS plugin is a single build and
+# BBLNetworkPlugin::initialize() loads bambu_networking(.so/.dll) directly.
+set(_oss_installed "${CMAKE_SOURCE_DIR}/resources/plugins/libbambu_networking.so")
 
 ExternalProject_Add(bambu_network_oss_plugin
     SOURCE_DIR        "${_oss_src}"
@@ -80,7 +82,7 @@ ExternalProject_Add(bambu_network_oss_plugin
         -DPAHO_MQTT_C_LIBRARY=${ORCA_OSS_PAHO_LIBRARY}
     BUILD_COMMAND     ${CMAKE_COMMAND} --build <BINARY_DIR> --target bambu_networking
     BUILD_BYPRODUCTS  "${_oss_so}"
-    # Install the versioned .so into resources/plugins so the app bundles it.
+    # Install the plain-named .so into resources/plugins so the app bundles it.
     INSTALL_COMMAND   ${CMAKE_COMMAND} -E copy_if_different "${_oss_so}" "${_oss_installed}"
     BUILD_ALWAYS      OFF
 )
