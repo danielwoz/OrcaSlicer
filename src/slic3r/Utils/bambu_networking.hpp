@@ -316,7 +316,8 @@ struct NetworkLibraryVersion {
 };
 
 static const NetworkLibraryVersion AVAILABLE_NETWORK_VERSIONS[] = {
-    {"02.07.01.51", "02.07.01.51", nullptr, true, nullptr},
+    {"02.08.02.99", "02.08.02.99", nullptr, true, nullptr},
+    {"02.07.01.51", "02.07.01.51", nullptr, false, nullptr},
     {"02.03.00.62", "02.03.00.62", nullptr, false, nullptr},
     {"02.01.01.52", "02.01.01.52", nullptr, false, nullptr},
     {"02.00.02.50", "02.00.02.50", nullptr, false, "This version may crash on startup due to Bambu Lab's signature verification."},

@@ -112,6 +112,48 @@ jobs:
           sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/*
           df -hI /dev/disk3s1s1
 
+      # Build the open-source network plugin (open-bamboo-networking submodule)
+      # and stage the resulting .dylib files into resources/plugins/ BEFORE the
+      # macOS app bundle is built, so OrcaSlicer's install(DIRECTORY resources/)
+      # bundles them into the DMG. arm64 only — the fork has no Intel macOS
+      # runner; build_universal() copies the arm64 app as the base and keeps the
+      # arm64 plugin for the x86_64 slice, so cloud networking is Apple Silicon
+      # only. mosquitto + cJSON are vendored via FetchContent at configure time.
+      - name: Build + stage OSS network plugin macOS
+        if: runner.os == 'macOS' && inputs.arch == 'arm64' && !inputs.macos-combine-only
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        # Compile the slicer signing key, Bambu network AES key and app identity
+        # into the plugin so cloud login and printing work without per-user keys.
+        env:
+          OBN_SLICER_KEY_PEM: ${{ secrets.OBN_SLICER_KEY_PEM }}
+          OBN_SLICER_CERT_ID: ${{ secrets.OBN_SLICER_CERT_ID }}
+          OBN_AES_KEY: ${{ secrets.OBN_AES_KEY }}
+          OBN_BBL_APP_IDENTITY: ${{ secrets.OBN_BBL_APP_IDENTITY }}
+        run: |
+          set -euo pipefail
+          for pkg in pkg-config cmake openssl@3 curl cjson zlib uthash; do
+            brew list "$pkg" &>/dev/null || brew install "$pkg"
+          done
+          export OPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig:$(brew --prefix cjson)/lib/pkgconfig"
+          staging="${GITHUB_WORKSPACE}/oss-plugin-install"
+          mkdir -p "$staging"
+          pushd bambu_network_oss
+          ./configure \
+            --client-type=orca_slicer \
+            --with-version=02.08.02.99 \
+            --build-type=Release \
+            --no-conf-patch \
+            --prefix="$staging"
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+          popd
+          mkdir -p "${GITHUB_WORKSPACE}/resources/plugins"
+          cp -v "$staging"/plugins/* "${GITHUB_WORKSPACE}/resources/plugins/"
+          echo "Staged OSS plugin files into resources/plugins:"
+          ls -l "${GITHUB_WORKSPACE}/resources/plugins/"
+
       - name: Build slicer mac
         if: runner.os == 'macOS' && !inputs.macos-combine-only
         working-directory: ${{ github.workspace }}
@@ -295,6 +337,13 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: ${{ github.workspace }}/bambu_network_oss
         shell: pwsh
+        # Compile the slicer signing key, Bambu network AES key and app identity
+        # into the plugin so cloud login and printing work without per-user keys.
+        env:
+          OBN_SLICER_KEY_PEM: ${{ secrets.OBN_SLICER_KEY_PEM }}
+          OBN_SLICER_CERT_ID: ${{ secrets.OBN_SLICER_CERT_ID }}
+          OBN_AES_KEY: ${{ secrets.OBN_AES_KEY }}
+          OBN_BBL_APP_IDENTITY: ${{ secrets.OBN_BBL_APP_IDENTITY }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ([string]::IsNullOrEmpty($env:VCPKG_ROOT)) {
@@ -305,7 +354,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $staging | Out-Null
           .\configure.ps1 `
             -ClientType orca_slicer `
-            -WithVersion '02.07.01.51' `
+            -WithVersion '02.08.02.99' `
             -Prefix $staging `
             -PatchConf:$false `
             -RegisterDShowFilter:$false
@@ -419,6 +468,13 @@ jobs:
       - name: Build + stage OSS network plugin Linux
         if: runner.os == 'Linux'
         shell: bash
+        # Compile the slicer signing key, Bambu network AES key and app identity
+        # into the plugin so cloud login and printing work without per-user keys.
+        env:
+          OBN_SLICER_KEY_PEM: ${{ secrets.OBN_SLICER_KEY_PEM }}
+          OBN_SLICER_CERT_ID: ${{ secrets.OBN_SLICER_CERT_ID }}
+          OBN_AES_KEY: ${{ secrets.OBN_AES_KEY }}
+          OBN_BBL_APP_IDENTITY: ${{ secrets.OBN_BBL_APP_IDENTITY }}
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -431,7 +487,7 @@ jobs:
           pushd bambu_network_oss
           ./configure \
             --client-type=orca_slicer \
-            --with-version=02.07.01.51 \
+            --with-version=02.08.02.99 \
             --build-type=Release \
             --no-conf-patch \
             --prefix="$staging"
