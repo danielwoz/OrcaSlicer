@@ -7,6 +7,7 @@ add_executable(${_TEST_NAME}_tests
 	test_fill.cpp
 	test_flow.cpp
 	test_gcode.cpp
+	test_gcode_timing.cpp
 	test_gcodewriter.cpp
 	test_model.cpp
 	test_surface_wall_override_filament.cpp
@@ -23,4 +24,4 @@ set_property(TARGET ${_TEST_NAME}_tests PROPERTY FOLDER "tests")
 
 orcaslicer_copy_test_dlls()
 
-catch_discover_tests(${_TEST_NAME}_tests)
+orcaslicer_discover_tests(${_TEST_NAME}_tests)

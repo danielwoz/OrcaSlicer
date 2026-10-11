@@ -525,7 +525,7 @@ void Selection::center()
 
 void Selection::drop()
 {
-    if (this->get_bounding_box().min.z() < SINKING_Z_THRESHOLD) {
+    if (std::abs(this->get_bounding_box().min.z()) < -SINKING_Z_THRESHOLD) {
         return; // shouldnt happen, but better check anyways, already checked in append_menu_item_drop()
     }
 
@@ -535,6 +535,9 @@ void Selection::drop()
 
     for (unsigned int i : m_list) {
         GLVolume&    volume = *(*m_volumes)[i];
+        // Skip the wipe tower: its synthetic id (>= 1000) is not an index into m_model->objects.
+        if (volume.object_idx() >= 1000)
+            continue;
         ModelObject* model_object = m_model->objects[volume.object_idx()];
 
         if (model_object != nullptr) {
@@ -1848,6 +1851,9 @@ void Selection::notify_instance_update(int object_idx, int instance_idx)
         for (unsigned int i : m_list)
         {
             int obj_index = (*m_volumes)[i]->object_idx();
+            // Skip the wipe tower: its synthetic id (>= 1000) is not an index into m_model->objects.
+            if (obj_index >= 1000)
+                continue;
             //-1 means all the instance in this object
             if (instance_idx == -1)
             {
