@@ -162,6 +162,8 @@ jobs:
           path: build/tests/**/*.log
       - name: Publish Test Results
         if: always()
+        # Forks with a read-only GITHUB_TOKEN cannot create the check run; the test step above gates pass/fail.
+        continue-on-error: ${{ github.repository != 'OrcaSlicer/OrcaSlicer' }}
         uses: EnricoMi/publish-unit-test-result-action@v2
         with:
           files: "ctest_results.xml"
