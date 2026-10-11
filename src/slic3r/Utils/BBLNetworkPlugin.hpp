@@ -68,7 +68,7 @@ typedef std::string (*func_build_login_info)(void *agent);
 typedef int (*func_ping_bind)(void *agent, std::string ping_code);
 typedef int (*func_bind_detect)(void *agent, std::string dev_ip, std::string sec_link, detectResult& detect);
 typedef int (*func_set_server_callback)(void *agent, OnServerErrFn fn);
-typedef int (*func_bind)(void *agent, std::string dev_ip, std::string dev_id, std::string sec_link, std::string timezone, bool improved, OnUpdateStatusFn update_fn);
+typedef int (*func_bind)(void *agent, std::string dev_ip, std::string dev_id, std::string dev_model, std::string sec_link, std::string timezone, bool improved, OnUpdateStatusFn update_fn);
 typedef int (*func_unbind)(void *agent, std::string dev_id);
 typedef std::string (*func_get_bambulab_host)(void *agent);
 typedef std::string (*func_get_user_selected_machine)(void *agent);
@@ -127,6 +127,7 @@ typedef int (*func_start_local_print_legacy)(void *agent, PrintParams_Legacy par
 typedef int (*func_start_sdcard_print_legacy)(void* agent, PrintParams_Legacy params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn);
 typedef int (*func_send_message_legacy)(void* agent, std::string dev_id, std::string json_str, int qos);
 typedef int (*func_send_message_to_printer_legacy)(void* agent, std::string dev_id, std::string json_str, int qos);
+typedef int (*func_bind_legacy)(void *agent, std::string dev_ip, std::string dev_id, std::string sec_link, std::string timezone, bool improved, OnUpdateStatusFn update_fn);
 
 /**
  * BBLNetworkPlugin - Singleton managing the Bambu Lab network DLL.
@@ -269,6 +270,8 @@ public:
     static bool is_legacy_version(const std::string& version) { return version == BAMBU_NETWORK_AGENT_VERSION_LEGACY; }
     bool use_legacy_network() const { return m_use_legacy_network; }
     void set_use_legacy_network(bool legacy) { m_use_legacy_network = legacy; }
+    // Loaded plugin predates the 02.08 series and takes bind() without dev_model
+    bool use_legacy_bind() const { return m_use_legacy_bind; }
 
     // ========================================================================
     // Function Pointer Accessors
@@ -406,6 +409,7 @@ private:
 
     // Legacy network compatibility flag
     bool m_use_legacy_network{false};
+    bool m_use_legacy_bind{false};
 
     // Function pointers
     func_check_debug_consistent m_check_debug_consistent{nullptr};

@@ -179,9 +179,11 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
             m_use_legacy_network = is_legacy_version(loaded_version);
         }
     }
+    m_use_legacy_bind = !network_bind_has_dev_model(loaded_version.empty() ? version : loaded_version);
 
     BOOST_LOG_TRIVIAL(info) << "BBLNetworkPlugin::initialize: legacy_mode="
         << (m_use_legacy_network ? "true" : "false")
+        << ", legacy_bind=" << (m_use_legacy_bind ? "true" : "false")
         << ", library=" << library
         << ", version=" << (loaded_version.empty() ? "unknown" : loaded_version)
         << ", send_message=" << (m_send_message ? "loaded" : "null")
@@ -219,6 +221,7 @@ int BBLNetworkPlugin::unload()
     clear_all_function_pointers();
 
     m_use_legacy_network = false;
+    m_use_legacy_bind = false;
 
     return 0;
 }

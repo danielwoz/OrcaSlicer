@@ -96,3 +96,45 @@ TEST_CASE("NetworkLibraryVersionInfo::from_discovered", "[BambuNetworking]") {
         REQUIRE(info.is_discovered == true);
     }
 }
+
+TEST_CASE("network_bind_has_dev_model", "[BambuNetworking]") {
+    SECTION("02.08 series and later pass dev_model") {
+        REQUIRE(network_bind_has_dev_model("02.08.00.50"));
+        REQUIRE(network_bind_has_dev_model("02.08.02.54"));
+        REQUIRE(network_bind_has_dev_model("02.08.02.60"));
+        REQUIRE(network_bind_has_dev_model("02.08.02.60-mod"));
+        REQUIRE(network_bind_has_dev_model("02.09.00.00"));
+    }
+
+    SECTION("older plugins use the bind signature without dev_model") {
+        REQUIRE_FALSE(network_bind_has_dev_model("02.07.01.51"));
+        REQUIRE_FALSE(network_bind_has_dev_model("02.07.01.75-mod"));
+        REQUIRE_FALSE(network_bind_has_dev_model("02.03.00.62"));
+        REQUIRE_FALSE(network_bind_has_dev_model(BAMBU_NETWORK_AGENT_VERSION_LEGACY));
+        REQUIRE_FALSE(network_bind_has_dev_model(""));
+    }
+}
+
+TEST_CASE("latest network version uses the 02.08 plugin ABI", "[BambuNetworking]") {
+    const std::string latest = get_latest_network_version();
+    REQUIRE(latest.substr(0, 8) == "02.08.02");
+    REQUIRE(network_bind_has_dev_model(latest));
+}
+
+TEST_CASE("network_print_params_compatible", "[BambuNetworking]") {
+    SECTION("02.07 series and later share the PrintParams layout") {
+        REQUIRE(network_print_params_compatible("02.07.01.51"));
+        REQUIRE(network_print_params_compatible("02.08.02.54"));
+        REQUIRE(network_print_params_compatible("02.08.02.60-mod"));
+        REQUIRE(network_print_params_compatible(BAMBU_NETWORK_AGENT_VERSION_LEGACY));
+    }
+
+    SECTION("older non-legacy plugins expect another layout") {
+        REQUIRE_FALSE(network_print_params_compatible("02.03.00.62"));
+        REQUIRE_FALSE(network_print_params_compatible("02.03.00.62-mod"));
+        REQUIRE_FALSE(network_print_params_compatible("02.01.01.52"));
+        REQUIRE_FALSE(network_print_params_compatible("02.00.02.50"));
+        REQUIRE_FALSE(network_print_params_compatible("00.00.00.00"));
+        REQUIRE_FALSE(network_print_params_compatible(""));
+    }
+}

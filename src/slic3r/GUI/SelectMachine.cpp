@@ -2537,6 +2537,9 @@ void SelectMachineDialog::on_send_print()
         timelapse_option = m_checkbox_list["timelapse"]->getValue() == "on";
     }
 
+    // Printers that can record timelapse without an SD card store it internally
+    m_print_job->task_timelapse_use_internal = timelapse_option && obj_->is_support_internal_timelapse;
+
     m_print_job->set_print_config(
         MachineBedTypeString[0],
         (m_checkbox_list["bed_leveling"]->getValue() == "on"),

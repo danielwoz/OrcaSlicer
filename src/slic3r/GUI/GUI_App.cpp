@@ -1922,6 +1922,12 @@ bool GUI_App::check_networking_version()
 
     BOOST_LOG_TRIVIAL(info) << "check_networking_version: network_ver=" << network_ver << ", expected=" << studio_ver;
 
+    if (!network_print_params_compatible(network_ver)) {
+        BOOST_LOG_TRIVIAL(warning) << "check_networking_version: plugin " << network_ver << " uses an unsupported print interface";
+        m_networking_compatible = false;
+        return false;
+    }
+
     if (network_ver.length() >= 8 && studio_ver.length() >= 8) {
         if (network_ver.substr(0,8) == studio_ver.substr(0,8)) {
             m_networking_compatible = true;
@@ -3395,11 +3401,27 @@ bool GUI_App::on_init_network(bool try_backup)
             if (app_config && !loaded_version.empty() && loaded_version != "00.00.00.00") {
                 std::string config_version = app_config->get_network_plugin_version();
                 std::string config_base    = extract_base_version(config_version);
-                if (config_base != loaded_version) {
-                    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": syncing config version from " << config_version << " to loaded "
-                                            << loaded_version;
-                    app_config->set_network_plugin_version(loaded_version);
-                    app_config->save();
+                if (config_base.compare(0, 8, loaded_version, 0, 8) == 0) {
+                    // The server delivers the newest build of the requested series, which may differ from
+                    // the configured build; the library stays under the configured version.
+                    if (config_base != loaded_version)
+                        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": configured " << config_version << ", loaded build " << loaded_version;
+                } else {
+                    // Name the library after the loaded build so the synced version is found on the next start.
+                    const std::string config_lib = Slic3r::NetworkAgent::get_versioned_library_path(config_version);
+                    const std::string loaded_lib = Slic3r::NetworkAgent::get_versioned_library_path(loaded_version);
+                    boost::system::error_code ec;
+                    if (boost::filesystem::exists(config_lib) && !boost::filesystem::exists(loaded_lib))
+                        boost::filesystem::rename(config_lib, loaded_lib, ec);
+                    if (ec) {
+                        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": keeping config version " << config_version
+                                                   << ", could not rename library for loaded " << loaded_version << ": " << ec.message();
+                    } else {
+                        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": syncing config version from " << config_version << " to loaded "
+                                                << loaded_version;
+                        app_config->set_network_plugin_version(loaded_version);
+                        app_config->save();
+                    }
                 }
             }
 

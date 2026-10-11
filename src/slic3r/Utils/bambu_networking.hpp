@@ -258,28 +258,30 @@ struct PrintParams {
 
     /* access options */
     std::string     dev_ip;
-    bool            use_ssl_for_ftp;
-    bool            use_ssl_for_mqtt;
+    bool            use_ssl_for_ftp{ false };
+    bool            use_ssl_for_mqtt{ false };
     std::string     username;
     std::string     password;
 
     /*user options */
-    bool            task_bed_leveling;      /* bed leveling of task */
-    bool            task_flow_cali;         /* flow calibration of task */
-    bool            task_vibration_cali;    /* vibration calibration of task */
-    bool            task_layer_inspect;     /* first layer inspection of task */
-    bool            task_record_timelapse;  /* record timelapse of task */
-    bool            task_timelapse_use_internal;
-    bool            task_use_ams;
+    bool            task_bed_leveling{ false };      /* bed leveling of task */
+    bool            task_flow_cali{ false };         /* flow calibration of task */
+    bool            task_vibration_cali{ false };    /* vibration calibration of task */
+    bool            task_layer_inspect{ false };     /* first layer inspection of task */
+    bool            task_record_timelapse{ false };  /* record timelapse of task */
+    bool            task_timelapse_use_internal{ false };
+    bool            task_use_ams{ false };
     std::string     task_bed_type;
     std::string     extra_options;
     int             auto_bed_leveling{ 0 };
     int             auto_flow_cali{ 0 };
     int             auto_offset_cali{ 0 };
     int             extruder_cali_manual_mode{ -1 };
-    bool            task_ext_change_assist;
-    bool            try_emmc_print;
+    bool            task_ext_change_assist{ false };
+    bool            try_emmc_print{ false };
     std::string     svc_context;
+    std::string     slicer_uid;
+    std::string     queue_plate_id;
 };
 
 struct TaskQueryParams
@@ -316,10 +318,8 @@ struct NetworkLibraryVersion {
 };
 
 static const NetworkLibraryVersion AVAILABLE_NETWORK_VERSIONS[] = {
-    {"02.07.01.51", "02.07.01.51", nullptr, true, nullptr},
-    {"02.03.00.62", "02.03.00.62", nullptr, false, nullptr},
-    {"02.01.01.52", "02.01.01.52", nullptr, false, nullptr},
-    {"02.00.02.50", "02.00.02.50", nullptr, false, "This version may crash on startup due to Bambu Lab's signature verification."},
+    // Non-legacy entries must share the PrintParams layout above (the 02.08.02 plugin ABI).
+    {"02.08.02.60", "02.08.02.60", nullptr, true, nullptr},
     {BAMBU_NETWORK_AGENT_VERSION_LEGACY, BAMBU_NETWORK_AGENT_VERSION_LEGACY " (legacy)", nullptr, false, nullptr},
 };
 
@@ -371,6 +371,17 @@ inline std::string extract_base_version(const std::string& full_version) {
 inline std::string extract_suffix(const std::string& full_version) {
     auto pos = full_version.find('-');
     return (pos == std::string::npos) ? "" : full_version.substr(pos + 1);
+}
+
+// Plugins from the 02.08 series onwards take a dev_model argument in bind().
+inline bool network_bind_has_dev_model(const std::string& version) {
+    return extract_base_version(version).compare(0, 5, "02.08") >= 0;
+}
+
+// Plugins from the 02.07 series onwards read PrintParams with the layout above (the 02.08 fields
+// are trailing); the legacy plugin goes through PrintParams_Legacy.
+inline bool network_print_params_compatible(const std::string& version) {
+    return version == BAMBU_NETWORK_AGENT_VERSION_LEGACY || extract_base_version(version).compare(0, 5, "02.07") >= 0;
 }
 
 std::vector<NetworkLibraryVersionInfo> get_all_available_versions();
