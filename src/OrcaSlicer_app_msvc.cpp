@@ -212,6 +212,7 @@ extern "C" {
     Slic3rMainFunc orcaslicer_main = nullptr;
 }
 
+#ifdef ORCA_BBL_HOST
 // ---- Genuine-host staging (defense-in-depth backup for the installer) --------------
 // The installer normally stages a genuine Bambu-signed bambu-studio.exe + BambuStudio.dll
 // next to OrcaSlicer at install time (elevated). As a backup, the launcher self-heals on
@@ -359,6 +360,7 @@ static int ask_stage_bridge()
     return 2;
 }
 // ------------------------------------------------------------------------------------
+#endif // ORCA_BBL_HOST
 
 extern "C" {
 #ifdef SLIC3R_WRAPPER_NOCONSOLE
@@ -389,7 +391,9 @@ int wmain(int argc, wchar_t **argv)
 #endif /* SLIC3R_GUI */
     bool stage_only = false;                 // internal: elevated genuine-host staging pass
     for (int i = 1; i < argc; ++ i) {
+#ifdef ORCA_BBL_HOST
         if (wcscmp(argv[i], L"--stage-genuine") == 0) { stage_only = true; continue; }  // not forwarded
+#endif // ORCA_BBL_HOST
 #ifdef SLIC3R_GUI
         if (wcscmp(argv[i], L"--sw-renderer") == 0)
             force_mesa = true;
@@ -422,6 +426,7 @@ int wmain(int argc, wchar_t **argv)
     _wsplitpath(path_to_exe, drive, dir, fname, ext);
     _wmakepath(path_to_exe, drive, dir, nullptr, nullptr);
 
+#ifdef ORCA_BBL_HOST
     // Elevated entry point: a UAC-elevated copy of ourselves (launched by the self-heal
     // below) runs ONLY the staging and exits, so it can write into a protected install
     // dir (Program Files) on behalf of the normal-user launch.
@@ -463,19 +468,21 @@ int wmain(int argc, wchar_t **argv)
             // StageResult::NoBambu -> no Bambu Studio installed; fall through to vanilla.
         }
 
-        if (::GetFileAttributesW(host_exe) != INVALID_FILE_ATTRIBUTES) {
-            // The genuine host loads its studio dll by the fixed name BambuStudio.dll;
-            // ensure it exists (a vanilla install may ship it as OrcaSlicer.dll).
-            {
-                wchar_t studio_dll[MAX_PATH + 1] = { 0 };
-                wcscpy(studio_dll, path_to_exe); wcscat(studio_dll, L"BambuStudio.dll");
-                if (::GetFileAttributesW(studio_dll) == INVALID_FILE_ATTRIBUTES) {
-                    wchar_t orca_dll[MAX_PATH + 1] = { 0 };
-                    wcscpy(orca_dll, path_to_exe); wcscat(orca_dll, L"OrcaSlicer.dll");
-                    if (::GetFileAttributesW(orca_dll) != INVALID_FILE_ATTRIBUTES)
-                        ::CopyFileW(orca_dll, studio_dll, FALSE);
-                }
-            }
+        // The genuine host loads its studio dll by the fixed name BambuStudio.dll;
+        // ensure it exists (a vanilla install may ship it as OrcaSlicer.dll).
+        wchar_t studio_dll[MAX_PATH + 1] = { 0 };
+        wcscpy(studio_dll, path_to_exe); wcscat(studio_dll, L"BambuStudio.dll");
+        if (::GetFileAttributesW(host_exe) != INVALID_FILE_ATTRIBUTES
+            && ::GetFileAttributesW(studio_dll) == INVALID_FILE_ATTRIBUTES) {
+            wchar_t orca_dll[MAX_PATH + 1] = { 0 };
+            wcscpy(orca_dll, path_to_exe); wcscat(orca_dll, L"OrcaSlicer.dll");
+            if (::GetFileAttributesW(orca_dll) != INVALID_FILE_ATTRIBUTES)
+                ::CopyFileW(orca_dll, studio_dll, FALSE);
+        }
+
+        // The host cannot start without the studio dll; otherwise run in-process below.
+        if (::GetFileAttributesW(host_exe) != INVALID_FILE_ATTRIBUTES
+            && ::GetFileAttributesW(studio_dll) != INVALID_FILE_ATTRIBUTES) {
             std::wstring cmd = L"\"";
             cmd += host_exe;
             cmd += L"\"";
@@ -533,6 +540,7 @@ int wmain(int argc, wchar_t **argv)
         // studio dll in-process -> plain OrcaSlicer ("vanilla mode", no Bambu network).
     }
     // ---------------------------------------------------------------------------
+#endif // ORCA_BBL_HOST
 
 #ifdef SLIC3R_GUI
 // https://wiki.qt.io/Cross_compiling_Mesa_for_Windows
@@ -555,15 +563,21 @@ int wmain(int argc, wchar_t **argv)
     // The studio DLL ships as BambuStudio.dll (the genuine name) so the network
     // plugin's name-based studio lookups — used on the control-command signing
     // path — resolve to our module. Its signature is handled by the redirect.
+#ifdef ORCA_BBL_HOST
+    // This build ships the studio dll as BambuStudio.dll; OrcaSlicer.dll is its vanilla-install rename.
+    const wchar_t* studio_dll_names[] = { L"BambuStudio.dll", L"OrcaSlicer.dll" };
+#else
+    const wchar_t* studio_dll_names[] = { L"OrcaSlicer.dll", L"BambuStudio.dll" };
+#endif
     wchar_t path_to_slic3r[MAX_PATH + 1] = { 0 };
-    wcscpy(path_to_slic3r, path_to_exe);
-    wcscat(path_to_slic3r, L"OrcaSlicer.dll");
-//	printf("Loading Slic3r library: %S\n", path_to_slic3r);
-    HINSTANCE hInstance_Slic3r = LoadLibraryExW(path_to_slic3r, nullptr, 0);
-    if (hInstance_Slic3r == nullptr) {
-        // a Bambu install ships the studio dll as BambuStudio.dll -- try that name too.
-        wcscpy(path_to_slic3r, path_to_exe); wcscat(path_to_slic3r, L"BambuStudio.dll");
+    HINSTANCE hInstance_Slic3r = nullptr;
+    for (const wchar_t* dll_name : studio_dll_names) {
+        wcscpy(path_to_slic3r, path_to_exe);
+        wcscat(path_to_slic3r, dll_name);
+//	    printf("Loading Slic3r library: %S\n", path_to_slic3r);
         hInstance_Slic3r = LoadLibraryExW(path_to_slic3r, nullptr, 0);
+        if (hInstance_Slic3r != nullptr)
+            break;
     }
     if (hInstance_Slic3r == nullptr) {
         printf("BambuStudio.dll was not loaded, error=%d\n", GetLastError());

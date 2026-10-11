@@ -137,7 +137,7 @@ if (MSVC)
     target_link_options(OrcaSlicer PRIVATE /FORCE:MULTIPLE /IGNORE:4006)
 endif ()
 
-if (WIN32)
+if (ORCA_BBL_HOST)
     # Emit the studio DLL as BambuStudio.dll. The Bambu network plugin looks up
     # the studio module by this exact name on its control-command signing path,
     # so naming our forked DLL OrcaSlicer.dll connects but breaks control (e.g.
@@ -202,6 +202,9 @@ if (WIN32)
         target_link_options(OrcaSlicer_app_gui PUBLIC "$<$<CONFIG:RELEASE>:/DEBUG>")
     endif()
     target_compile_definitions(OrcaSlicer_app_gui PRIVATE -DSLIC3R_WRAPPER_NOCONSOLE)
+    if (ORCA_BBL_HOST)
+        target_compile_definitions(OrcaSlicer_app_gui PRIVATE ORCA_BBL_HOST)
+    endif ()
     add_dependencies(OrcaSlicer_app_gui OrcaSlicer)
     set_target_properties(OrcaSlicer_app_gui PROPERTIES OUTPUT_NAME "orca-slicer")
     target_link_libraries(OrcaSlicer_app_gui PRIVATE boost_headeronly)

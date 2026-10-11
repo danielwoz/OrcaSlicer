@@ -3,7 +3,7 @@
 
 namespace Slic3r {
 
-// Windows-only. When running a forked/unsigned BambuStudio under a GENUINE,
+// Windows x64 only. When running a forked/unsigned BambuStudio under a GENUINE,
 // version-matched bambu-studio.exe launcher, the network plugin's "signed
 // studio" gate still verifies *this* BambuStudio.dll via WinVerifyTrust and
 // rejects it (unsigned). This installs in-process inline hooks (MinHook) so the

@@ -1,6 +1,6 @@
 #include "PluginVerifyRedirect.hpp"
 
-#ifdef _WIN32
+#ifdef ORCA_BBL_HOST
 
 #include <windows.h>
 #include <wincrypt.h>
@@ -188,7 +188,7 @@ void install_plugin_verify_redirect()
 
 } // namespace Slic3r
 
-#else  // !_WIN32
+#else  // !ORCA_BBL_HOST
 
 namespace Slic3r { void install_plugin_verify_redirect() {} }
 

@@ -882,6 +882,15 @@ function(orcaslicer_copy_dlls target config postfix output_dlls)
 
 endfunction()
 
+# Running under the genuine Bambu Studio host (studio DLL named BambuStudio.dll, MinHook
+# plugin-verify redirect, installer staging of bambu-studio.exe) relies on the x64-only
+# Bambu Studio host and MinHook, so it is enabled for Windows x64 only. Other Windows
+# targets (ARM64) build as plain OrcaSlicer.
+if (MSVC AND "${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "AMD64")
+    set(ORCA_BBL_HOST ON)
+else ()
+    set(ORCA_BBL_HOST OFF)
+endif ()
 
 # libslic3r, OrcaSlicer GUI and the OrcaSlicer executable.
 add_subdirectory(deps_src)
@@ -973,8 +982,12 @@ set(CPACK_GENERATOR NSIS)
 # exe's Authenticode signature). The installer runs elevated, so it can write Program
 # Files; the launcher's non-elevated self-heal cannot. $R registers + quadruple-backslash
 # escaping keep cpack's CPackConfig re-parse clean under CMP0010/CMP0053 (same convention
-# as CPACK_NSIS_INSTALLED_ICON_NAME above). No Bambu Studio -> rename to OrcaSlicer.dll.
+# as CPACK_NSIS_INSTALLED_ICON_NAME above). No Bambu Studio and no previously staged
+# host -> rename to OrcaSlicer.dll. A stale OrcaSlicer.dll from an earlier install is
+# removed first, since the uninstaller only deletes the files it installed.
+if (ORCA_BBL_HOST)
 set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
+  Delete '$INSTDIR\\\\OrcaSlicer.dll'
   SetRegView 64
   ReadRegStr $R0 HKLM 'SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\Bambu Studio' 'DisplayIcon'
   StrCmp $R0 '' orca_no_bambu 0
@@ -985,9 +998,21 @@ set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
   CopyFiles /SILENT '$R1BambuStudio.dll' '$INSTDIR\\\\BambuStudioOriginal.dll'
   Goto orca_host_done
   orca_no_bambu:
+  IfFileExists '$INSTDIR\\\\bambu-studio.exe' orca_host_done 0
   IfFileExists '$INSTDIR\\\\BambuStudio.dll' 0 orca_host_done
   Rename '$INSTDIR\\\\BambuStudio.dll' '$INSTDIR\\\\OrcaSlicer.dll'
   orca_host_done:
 ")
+# Uninstall: remove the files the install commands created. The staged host is kept on a
+# silent uninstall (the uninstall-before-install pass of an upgrade) so Bambu mode survives
+# upgrades after Bambu Studio itself was removed.
+set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "
+  Delete '$INSTDIR\\\\OrcaSlicer.dll'
+  IfSilent orca_un_done 0
+  Delete '$INSTDIR\\\\bambu-studio.exe'
+  Delete '$INSTDIR\\\\BambuStudioOriginal.dll'
+  orca_un_done:
+")
+endif ()
 
 include(CPack)
