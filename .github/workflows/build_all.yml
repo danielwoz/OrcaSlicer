@@ -81,11 +81,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # x64 only: the Bambu genuine-host integration is x64-only, and the ARM64 leg's pinned
+        # CMake 3.31 cannot use the Visual Studio 2026 now on windows-11-arm runners.
         include:
           - arch: x64
             os: windows-latest
-          - arch: arm64
-            os: windows-11-arm
     # Don't run scheduled builds on forks:
     if: ${{ !cancelled() && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') }}
     uses: ./.github/workflows/build_check_cache.yml
