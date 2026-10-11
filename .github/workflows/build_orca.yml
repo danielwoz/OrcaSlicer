@@ -137,6 +137,9 @@ jobs:
           done
           export OPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
           export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig:$(brew --prefix cjson)/lib/pkgconfig"
+          # Match the app's minimum-OS floor (arm64 floor is 11.0) so dyld will
+          # load the plugin on older Apple Silicon systems, not just the runner's.
+          export MACOSX_DEPLOYMENT_TARGET=11.0
           staging="${GITHUB_WORKSPACE}/oss-plugin-install"
           mkdir -p "$staging"
           pushd bambu_network_oss

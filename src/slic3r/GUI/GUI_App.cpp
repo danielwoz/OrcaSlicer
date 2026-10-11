@@ -897,9 +897,14 @@ void GUI_App::post_init()
     hms_query = new HMSQuery();
 
     m_show_gcode_window = app_config->get_bool("show_gcode_window");
+#ifndef ORCA_OSS_NETWORK_PLUGIN
+    // The OSS build bundles the plugin and has no download path (the proprietary
+    // download is compiled out), so a download dialog is a dead end — e.g. on an
+    // Intel Mac where the bundled arm64 plugin cannot load. Skip it.
     if (m_networking_need_update) {
         show_network_plugin_download_dialog(false);
     }
+#endif
 
     // Start preset sync after project opened, otherwise we could have preset change during project opening which could cause crash 
     if (app_config->get("sync_user_preset") == "true") {
@@ -3342,6 +3347,28 @@ void GUI_App::ensure_oss_network_plugin()
     provision_file("libBambuSource.so");
     provision_file("liblive555.so");
 #endif
+
+    // Seed the plugin's obn.conf so the bundled build is cloud-capable out of
+    // the box yet still prints on a LAN without a Bambu login. The plugin's own
+    // defaults block the cloud, route prints cloud-only and report a client
+    // name the cloud rejects for print records; write our defaults once and
+    // never overwrite a config the user has edited. The plugin reads this from
+    // its config dir, which is the OrcaSlicer data dir.
+    {
+        fs::path conf = fs::path(data_dir()) / "obn.conf";
+        if (!fs::exists(conf)) {
+            boost::nowide::ofstream f(conf.string().c_str(), std::ios::binary);
+            if (f) {
+                f << "# OrcaSlicer bundled open-source network plugin settings.\n"
+                     "# Written once when the bundled plugin is provisioned; edit freely.\n"
+                     "block_cloud = 0\n"
+                     "client_name = BambuStudio\n"
+                     "cloud_print = try_lan_first\n"
+                     "import_studio_session = 1\n"
+                     "app_cert_source = auto\n";
+            }
+        }
+    }
 
     app_config->set_bool("installed_networking", true);
     app_config->set_network_plugin_version(ver);
