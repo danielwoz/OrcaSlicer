@@ -1728,7 +1728,10 @@ void SendToPrinterDialog::GetConnection()
         else if (m_tutk_try_connect)
         {
             std::string protocols[] = {"", "\"tutk\"", "\"agora\"", "\"tutk\",\"agora\""};
-            agent->get_camera_url(obj->get_dev_id() + "|" + dev_ver + "|" + protocols[1], [this, m = dev_id, v = agent->get_version(), dv = dev_ver](std::string url) {
+            const unsigned gen = ++m_url_request_gen;
+            agent->get_camera_url(obj->get_dev_id() + "|" + dev_ver + "|" + protocols[1], [this, gen, token = std::weak_ptr<int>(m_token), m = dev_id, v = agent->get_version(), dv = dev_ver](std::string url) {
+                if (token.expired())
+                    return;
                 if (boost::algorithm::starts_with(url, "bambu:///")) {
                     url += "&device=" + m;
                     url += "&net_ver=" + v;
@@ -1738,37 +1741,40 @@ void SendToPrinterDialog::GetConnection()
                     url += "&cli_ver=" + std::string(SLIC3R_VERSION);
                 }
 
-                if (m_url_timer && m_url_timer->IsRunning())
-                {
-                    m_url_timer->Stop();
-                }
+                // The plugin may answer from its own thread; handle the reply on the UI thread and drop it
+                // when a newer request, a reset or the connect timeout has superseded it.
+                CallAfter([this, gen, url]() {
+                    if (gen != m_url_request_gen || !m_url_timer || !m_url_timer->IsRunning())
+                        return;
 
-                #if !BBL_RELEASE_TO_PUBLIC
-                                BOOST_LOG_TRIVIAL(info) << "SendToPrinter::camera_url: " << hide_passwd(url, {"?uid=", "authkey=", "passwd="});
-                #endif
+                    #if !BBL_RELEASE_TO_PUBLIC
+                                    BOOST_LOG_TRIVIAL(info) << "SendToPrinter::camera_url: " << hide_passwd(url, {"?uid=", "authkey=", "passwd="});
+                    #endif
 
-
-                if (boost::algorithm::starts_with(url, "bambu:///"))
-                {
-                    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": Connect method tutk";
-                    m_filetransfer_tunnel = std::make_unique<FileTransferTunnel>(module(), url);
-                    m_filetransfer_tunnel->on_connection([this](bool is_success, int err_code, std::string error_msg) {
-                        CallAfter([this, is_success, err_code, error_msg]() { OnConnection(is_success, err_code, error_msg); });
-                    });
-                    m_filetransfer_tunnel->start_connect();
-                }
-                else
-                {
-                    std::string res = "";
-                    if (!url.empty() && boost::ends_with(url, "]"))
+                    if (boost::algorithm::starts_with(url, "bambu:///"))
                     {
-                        size_t n = url.find_last_of('[');
-                        if (n != std::string::npos)
-                            res = url.substr(n + 1, url.length() - n - 2);
+                        m_url_timer->Stop();
+                        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": Connect method tutk";
+                        m_filetransfer_tunnel = std::make_unique<FileTransferTunnel>(module(), url);
+                        m_filetransfer_tunnel->on_connection([this](bool is_success, int err_code, std::string error_msg) {
+                            CallAfter([this, is_success, err_code, error_msg]() { OnConnection(is_success, err_code, error_msg); });
+                        });
+                        m_filetransfer_tunnel->start_connect();
                     }
-                    BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << " : Tutk url error: ress = " << res;
-                }
-            });
+                    else
+                    {
+                        // Leave the connect timer running so its timeout handles the failure.
+                        std::string res = "";
+                        if (!url.empty() && boost::ends_with(url, "]"))
+                        {
+                            size_t n = url.find_last_of('[');
+                            if (n != std::string::npos)
+                                res = url.substr(n + 1, url.length() - n - 2);
+                        }
+                        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << " : Tutk url error: ress = " << res;
+                    }
+                });
+            }, wxGetApp().get_printer_cloud_provider());
         }
     }
 }

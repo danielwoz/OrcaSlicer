@@ -129,6 +129,7 @@ private:
     wxTimer*                            m_refresh_timer{ nullptr };
     std::unique_ptr<wxTimer>            m_task_timer{ nullptr };
     std::unique_ptr<wxTimer>            m_url_timer{nullptr};
+    unsigned                            m_url_request_gen{0};
     std::shared_ptr<BBLStatusBarSend>   m_status_bar;
     std::unique_ptr<Worker>             m_worker;
     wxScrolledWindow                   *m_sw_print_failed_info{nullptr};
