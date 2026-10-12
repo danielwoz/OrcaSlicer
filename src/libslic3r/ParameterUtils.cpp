@@ -6,19 +6,24 @@ namespace Slic3r {
 std::vector<LayerPrintSequence> get_other_layers_print_sequence(int sequence_nums, const std::vector<int> &sequence)
 {
     std::vector<LayerPrintSequence> res;
-    if (sequence_nums == 0 || sequence.empty())
+    if (sequence_nums <= 0 || sequence.empty())
         return res;
 
-    assert(sequence.size() % sequence_nums == 0);
+    // Each entry is a layer range (begin, end) followed by one or more extruder
+    // ids, so the flattened data must split evenly into entries of at least
+    // three values; ignore malformed data rather than reading past its end.
+    if (sequence.size() % sequence_nums != 0)
+        return res;
+
+    size_t item_nums = sequence.size() / sequence_nums;
+    if (item_nums < 3)
+        return res;
 
     res.reserve(sequence_nums);
-    size_t item_nums = sequence.size() / sequence_nums;
-
     for (int i = 0; i < sequence_nums; ++i) {
         std::vector<int> item;
         item.assign(sequence.begin() + i * item_nums, sequence.begin() + ((i + 1) * item_nums));
 
-        assert(item.size() > 2);
         std::pair<std::pair<int, int>, std::vector<int>> res_item;
         res_item.first.first  = item[0];
         res_item.first.second = item[1];

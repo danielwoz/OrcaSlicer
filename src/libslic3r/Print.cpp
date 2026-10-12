@@ -1269,6 +1269,20 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
     if (extruders.empty())
         return { L("No extrusions under current settings.") };
 
+    // A used filament marked non-printable in every available extruder (its
+    // "filament_printable" bitmask has no bit set for any physical extruder)
+    // can never be assigned to a nozzle; reject it here rather than aborting
+    // deep inside tool ordering during g-code export.
+    if (is_BBL_printer()) {
+        if (const auto *printable_opt = m_config.option<ConfigOptionInts>("filament_printable")) {
+            const unsigned int extruder_mask = (nozzles >= 31) ? ~0u : ((1u << nozzles) - 1u);
+            for (unsigned int filament_id : extruders) {
+                if ((static_cast<unsigned int>(printable_opt->get_at(filament_id)) & extruder_mask) == 0)
+                    return { L("The filament cannot be placed in any extruder with the current \"filament_printable\" setting.") };
+            }
+        }
+    }
+
     if (nozzles < 2 && extruders.size() > 1) {
         auto ret = check_multi_filament_valid(*this);
         if (!ret.string.empty())
