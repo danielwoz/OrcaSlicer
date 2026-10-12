@@ -1588,6 +1588,18 @@ const ConfigOption* DynamicConfig::optptr(const t_config_option_key &opt_key) co
     return (it == options.end()) ? nullptr : it->second.get();
 }
 
+// Map the common word spellings of a boolean onto the canonical "1"/"0" the
+// option types deserialize; anything else is returned unchanged so it is
+// reported as an invalid value rather than silently ignored.
+static std::string normalize_cli_bool_literal(const std::string &value)
+{
+    if (boost::iequals(value, "true") || boost::iequals(value, "yes") || boost::iequals(value, "on") || boost::iequals(value, "enabled"))
+        return "1";
+    if (boost::iequals(value, "false") || boost::iequals(value, "no") || boost::iequals(value, "off") || boost::iequals(value, "disabled"))
+        return "0";
+    return value;
+}
+
 bool DynamicConfig::read_cli(int argc, const char* const argv[], t_config_option_keys* extra, t_config_option_keys* keys)
 {
     // cache the CLI option => opt_key mapping
@@ -1685,17 +1697,31 @@ bool DynamicConfig::read_cli(int argc, const char* const argv[], t_config_option
             // to the end of the value.
             if (opt_base->type() == coBools && value.empty())
                 static_cast<ConfigOptionBools*>(opt_base)->values.push_back(!no);
-            else
+            else {
                 // Deserialize any other vector value (ConfigOptionInts, Floats, Percents, Points) the same way
                 // they get deserialized from an .ini file. For ConfigOptionStrings, that means that the C-style unescape
                 // will be applied for values enclosed in quotes, while values non-enclosed in quotes are left to be
                 // unescaped by the calling shell.
-				opt_vector->deserialize(value, true);
+                // Report an unusable value (including one that fails to deserialize, e.g. "nil" into a
+                // non-nullable vector) as a clean CLI error instead of letting it abort the process.
+                bool ok = false;
+                try {
+                    ok = opt_vector->deserialize(value, true);
+                } catch (const std::exception &) {
+                    ok = false;
+                }
+                if (! ok) {
+                    boost::nowide::cerr << "Invalid value for option --" << token.c_str() << std::endl;
+                    return false;
+                }
+            }
         } else if (opt_base->type() == coBool) {
             if (value.empty())
                 static_cast<ConfigOptionBool*>(opt_base)->value = !no;
-            else
-                opt_base->deserialize(value);
+            else if (! opt_base->deserialize(normalize_cli_bool_literal(value))) {
+                boost::nowide::cerr << "Invalid value for option --" << token.c_str() << std::endl;
+                return false;
+            }
         } else if (opt_base->type() == coString) {
             // Do not unescape single string values, the unescaping is left to the calling shell.
             static_cast<ConfigOptionString*>(opt_base)->value = value;

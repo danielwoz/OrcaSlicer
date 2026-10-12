@@ -9914,11 +9914,17 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
+                        int vi = variant_index[f_index];
+                        if (vi < 0 || static_cast<size_t>(vi) >= opt->size()) {
+                            if (opt->size() == 0) {
+                                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range and empty, skipping")%__LINE__%key%variant_index[f_index];
+                                continue;
+                            }
+                            // Fewer entries than filaments (a single registered value or a short variant
+                            // column): keep the first value instead of leaving a zero for the rest.
+                            vi = 0;
                         }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -9935,11 +9941,17 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
+                        int vi = variant_index[f_index];
+                        if (vi < 0 || static_cast<size_t>(vi) >= opt->size()) {
+                            if (opt->size() == 0) {
+                                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range and empty, skipping")%__LINE__%key%variant_index[f_index];
+                                continue;
+                            }
+                            // Fewer entries than filaments (a single registered value or a short variant
+                            // column): keep the first value instead of leaving a zero for the rest.
+                            vi = 0;
                         }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -9956,11 +9968,17 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
+                        int vi = variant_index[f_index];
+                        if (vi < 0 || static_cast<size_t>(vi) >= opt->size()) {
+                            if (opt->size() == 0) {
+                                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range and empty, skipping")%__LINE__%key%variant_index[f_index];
+                                continue;
+                            }
+                            // Fewer entries than filaments (a single registered value or a short variant
+                            // column): keep the first value instead of leaving a zero for the rest.
+                            vi = 0;
                         }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -9977,11 +9995,17 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
+                        int vi = variant_index[f_index];
+                        if (vi < 0 || static_cast<size_t>(vi) >= opt->size()) {
+                            if (opt->size() == 0) {
+                                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range and empty, skipping")%__LINE__%key%variant_index[f_index];
+                                continue;
+                            }
+                            // Fewer entries than filaments (a single registered value or a short variant
+                            // column): keep the first value instead of leaving a zero for the rest.
+                            vi = 0;
                         }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -9998,11 +10022,17 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
+                        int vi = variant_index[f_index];
+                        if (vi < 0 || static_cast<size_t>(vi) >= opt->size()) {
+                            if (opt->size() == 0) {
+                                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range and empty, skipping")%__LINE__%key%variant_index[f_index];
+                                continue;
+                            }
+                            // Fewer entries than filaments (a single registered value or a short variant
+                            // column): keep the first value instead of leaving a zero for the rest.
+                            vi = 0;
                         }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -10019,11 +10049,17 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
+                        int vi = variant_index[f_index];
+                        if (vi < 0 || static_cast<size_t>(vi) >= opt->size()) {
+                            if (opt->size() == 0) {
+                                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range and empty, skipping")%__LINE__%key%variant_index[f_index];
+                                continue;
+                            }
+                            // Fewer entries than filaments (a single registered value or a short variant
+                            // column): keep the first value instead of leaving a zero for the rest.
+                            vi = 0;
                         }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -10040,11 +10076,17 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
+                        int vi = variant_index[f_index];
+                        if (vi < 0 || static_cast<size_t>(vi) >= opt->size()) {
+                            if (opt->size() == 0) {
+                                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range and empty, skipping")%__LINE__%key%variant_index[f_index];
+                                continue;
+                            }
+                            // Fewer entries than filaments (a single registered value or a short variant
+                            // column): keep the first value instead of leaving a zero for the rest.
+                            vi = 0;
                         }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -10710,13 +10752,11 @@ CLIActionsConfigDef::CLIActionsConfigDef()
     def = this->add("load_defaultfila", coBool);
     def->label = L("Load default filaments");
     def->tooltip = L("Load first filament as default for those not loaded.");
-    def->cli_params = "option";
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("min_save", coBool);
     def->label = L("Minimum save");
     def->tooltip = L("Export 3MF with minimum size.");
-    def->cli_params = "option";
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("mtcpp", coInt);
@@ -10742,7 +10782,6 @@ CLIActionsConfigDef::CLIActionsConfigDef()
     def = this->add("normative_check", coBool);
     def->label = L("Normative check");
     def->tooltip = L("Check the normative items.");
-    def->cli_params = "option";
     def->set_default_value(new ConfigOptionBool(true));
 
     /*def = this->add("help_fff", coBool);
@@ -11057,7 +11096,6 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def = this->add("skip_modified_gcodes", coBool);
     def->label = L("Skip modified G-code in 3MF");
     def->tooltip = L("Skip the modified G-code in 3MF from printer or filament presets.");
-    def->cli_params = "option";
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("makerlab_name", coString);
@@ -11087,14 +11125,12 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def = this->add("allow_newer_file", coBool);
     def->label = L("Allow 3MF with newer version to be sliced");
     def->tooltip = L("Allow 3MF with newer version to be sliced.");
-    def->cli_params = "option";
     def->set_default_value(new  ConfigOptionBool(false));
 
     def = this->add("allow_mix_temp", coBool);
     // internal use only, don't need translation
     def->label = "Allow filaments with high/low temperature to be printed together";
     def->tooltip = "Allow filaments with high/low temperature to be printed together.";
-    def->cli_params = "option";
     def->set_default_value(new  ConfigOptionBool(false));
 }
 

@@ -2676,9 +2676,18 @@ const Polygon& ModelVolume::get_convex_hull_2d(const Transform3d &trafo_instance
 
     if ((new_matrix.matrix() != m_cached_trans_matrix.matrix()) || !m_convex_hull_2d.is_valid())
     {
-        Geometry::Transformation new_trans(new_matrix), old_trans(m_cached_trans_matrix);
+        Geometry::Transformation new_trans(new_matrix);
 
-        if (need_recompute(old_trans, new_trans) || !m_convex_hull_2d.is_valid())
+        // When there is no valid cached hull yet, recompute directly: the cached
+        // matrix has not been set, so comparing against it (which decomposes it
+        // via SVD) would operate on an undefined transform.
+        bool recompute = !m_convex_hull_2d.is_valid();
+        if (!recompute) {
+            Geometry::Transformation old_trans(m_cached_trans_matrix);
+            recompute = need_recompute(old_trans, new_trans);
+        }
+
+        if (recompute)
         {
             //need to update
             calculate_convex_hull_2d(new_trans);
