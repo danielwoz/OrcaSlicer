@@ -650,6 +650,11 @@ private:
     unsigned int m_toolchange_count;
     coordf_t m_nominal_z;
     bool m_need_change_layer_lift_z = false;
+    // Mixed-color sublayer state: while a mixed slot's geometry is being emitted at one of its
+    // sub-layer heights, these scale the extrusion flow and report the sub-layer height.
+    // Inert (ratio == 0) outside the sublayer emission block.
+    double   m_sub_layer_flow_ratio = 0.0;
+    double   m_sub_layer_height     = 0.0;
     int m_start_gcode_filament = -1;
     std::string m_filament_instances_code;
 

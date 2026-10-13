@@ -3375,6 +3375,19 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    // Filaments loaded only on the command line (e.g. onto a plain mesh) can leave the classic
+    // per-filament vectors shorter than the filament count, because preset-derived keys such as
+    // filament_diameter are not re-emitted per filament during the merge above. Normalize them to
+    // the filament count so num_extruders (derived from filament_diameter) and every per-filament
+    // lookup match the loaded filament set instead of collapsing an assigned slot onto filament 1.
+    {
+        auto *fd = m_print_config.option<ConfigOptionFloats>("filament_diameter", true);
+        if (fd->values.empty())
+            fd->values.push_back(1.75);
+        if (fd->values.size() < (size_t)filament_count)
+            fd->values.resize(filament_count, fd->values.back());
+    }
+
     // A mixed filament slot is virtual but still needs a filament of its own loaded for it. When
     // the slot is declared on the command line beyond the loaded filaments, the per-filament
     // vectors would be left inconsistent (and feature ids aimed at it silently fall back to
@@ -3464,8 +3477,18 @@ int CLI::run(int argc, char **argv)
 
             //computing
             ConfigOptionBools* filament_is_support = m_print_config.option<ConfigOptionBools>("filament_is_support", true);
+            // Filaments supplied only on the command line (e.g. onto a plain mesh with no project
+            // filament config) can leave filament_is_support shorter than the filament count; pad it
+            // with false so it matches instead of rejecting an otherwise valid multi-filament job.
+            if (filament_is_support->size() < project_filament_count)
+                filament_is_support->values.resize(project_filament_count, false);
 
-            const std::vector<int> &min_flush_volumes = Slic3r::GUI::get_min_flush_volumes(m_print_config, 0);
+            std::vector<int> min_flush_volumes = Slic3r::GUI::get_min_flush_volumes(m_print_config, 0);
+            // get_min_flush_volumes sizes its result to filament_diameter; filaments supplied only
+            // on the command line can leave that shorter than the filament count, so pad it to match
+            // before the flush matrix indexes it per filament.
+            if (min_flush_volumes.size() < project_filament_count)
+                min_flush_volumes.resize(project_filament_count, min_flush_volumes.empty() ? 0 : min_flush_volumes.back());
 
             if (filament_is_support->size() != project_filament_count)
             {
