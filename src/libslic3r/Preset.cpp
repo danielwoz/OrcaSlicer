@@ -1128,6 +1128,7 @@ static std::vector<std::string> s_Preset_print_options{
     "flush_into_infill",
     "flush_into_objects",
     "flush_into_support",
+    "enable_mixed_color_sublayer",
     "tree_support_branch_angle",
     "tree_support_angle_slow",
     "tree_support_wall_count",
@@ -1311,7 +1312,11 @@ static std::vector<std::string> s_Preset_filament_options {/*"filament_colour", 
     "filament_long_retractions_when_cut","filament_retraction_distances_when_cut", "idle_temperature",
     //BBS filament change length while the extruder color
     "filament_change_length","filament_flush_volumetric_speed","filament_flush_temp", "filament_cooling_before_tower",
-    "long_retractions_when_ec", "retraction_distances_when_ec"
+    "long_retractions_when_ec", "retraction_distances_when_ec",
+    // Multi-nozzle ramming volumetric-speed filament overrides
+    "filament_ramming_volumetric_speed", "filament_ramming_volumetric_speed_nc",
+    //ams chamber
+    "filament_dev_ams_drying_ams_limitations"
     };
 
 static std::vector<std::string> s_Preset_machine_limits_options {

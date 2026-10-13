@@ -54,7 +54,18 @@ static std::vector<std::string> s_project_options {
     "flush_multiplier",
     "nozzle_volume_type",
     "filament_map_mode",
-    "filament_map"
+    "filament_map",
+    // Mixed-color filament slots. Project-level parallel arrays indexed like
+    // filament_colour: which slots are virtual mixes, their component filaments,
+    // blend ratios and the optional Z-gradient description. Kept with the project
+    // so a saved 3mf round-trips the mix setup.
+    "filament_is_mixed",
+    "filament_mixed_components",
+    "filament_mixed_sublayer_ratios",
+    "filament_mixed_gradient",
+    "filament_mixed_gradient_range",
+    "filament_mixed_gradient_curve",
+    "filament_mixed_gradient_per_part"
 };
 
 //Orca: add custom as default
