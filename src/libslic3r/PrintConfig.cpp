@@ -8886,6 +8886,21 @@ void  handle_legacy_sla(DynamicPrintConfig &config)
     }
 }
 
+void resize_mixed_filament_metadata(DynamicPrintConfig &config, size_t old_slot_count, size_t new_slot_count)
+{
+    auto resize = [old_slot_count, new_slot_count](auto *opt) {
+        opt->values.resize(std::min(old_slot_count, opt->values.size()));
+        opt->values.resize(new_slot_count);
+    };
+    resize(config.option<ConfigOptionBools>("filament_is_mixed", true));
+    resize(config.option<ConfigOptionStrings>("filament_mixed_components", true));
+    resize(config.option<ConfigOptionStrings>("filament_mixed_sublayer_ratios", true));
+    resize(config.option<ConfigOptionBools>("filament_mixed_gradient", true));
+    resize(config.option<ConfigOptionStrings>("filament_mixed_gradient_range", true));
+    resize(config.option<ConfigOptionStrings>("filament_mixed_gradient_curve", true));
+    resize(config.option<ConfigOptionBools>("filament_mixed_gradient_per_part", true));
+}
+
 size_t DynamicPrintConfig::get_parameter_size(const std::string& param_name, size_t extruder_nums)
 {
     constexpr size_t default_param_length = 1;

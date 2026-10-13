@@ -70,6 +70,7 @@ using namespace nlohmann;
 
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/FilamentMixer.hpp"
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/GCode.hpp"
 #include "libslic3r/GCode/PostProcessor.hpp"
@@ -175,6 +176,7 @@ std::map<int, std::string> cli_errors = {
     {CLI_FILAMENT_CAN_NOT_MAP, "Some filaments cannot be mapped to correct extruders for multi-extruder Printer."},
     {CLI_ONLY_ONE_TPU_SUPPORTED, "Not support printing 2 or more TPU filaments."},
     {CLI_FILAMENTS_NOT_SUPPORTED_BY_EXTRUDER, "Some filaments cannot be printed on the extruder mapped to."},
+    {CLI_MIXED_FILAMENT_INVALID, "A mixed filament is invalid: its components are different filament types, or it has no filament of its own."},
     {CLI_SLICING_ERROR, "Failed slicing the model. Please verify the slicing of all plates on Orca Slicer before uploading."},
     {CLI_GCODE_PATH_CONFLICTS, " G-code conflicts detected after slicing. Please make sure the 3mf file can be successfully sliced in the latest Orca Slicer. If the file slices normally in Orca Slicer, try moving the wipe tower further from other models, as we use more conservative parameters for it during upload."},
     {CLI_GCODE_PATH_IN_UNPRINTABLE_AREA, "Found G-code in unprintable area of multi-extruder printers after slicing. Please make sure the 3mf file can be successfully sliced in the latest Orca Slicer."}
@@ -3373,6 +3375,23 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    // A mixed filament slot is virtual but still needs a filament of its own loaded for it. When
+    // the slot is declared on the command line beyond the loaded filaments, the per-filament
+    // vectors would be left inconsistent (and feature ids aimed at it silently fall back to
+    // filament 1), so reject it here, before the colour/flush bookkeeping assumes matching sizes.
+    if (const auto *cli_is_mixed = m_extra_config.option<ConfigOptionBools>("filament_is_mixed")) {
+        const auto &cli_mixed = cli_is_mixed->values;
+        for (size_t slot = 0; slot < cli_mixed.size(); ++slot) {
+            if (cli_mixed[slot] && static_cast<int>(slot) >= load_filament_count) {
+                BOOST_LOG_TRIVIAL(error) << boost::format("mixed filament slot %1% has no filament of its own, only %2% filaments are loaded; "
+                                                          "load one filament per slot, including each mixed one")
+                                                % (slot + 1) % load_filament_count;
+                record_exit_reson(outfile_dir, CLI_MIXED_FILAMENT_INVALID, 0, cli_errors[CLI_MIXED_FILAMENT_INVALID], sliced_info);
+                flush_and_exit(CLI_MIXED_FILAMENT_INVALID);
+            }
+        }
+    }
+
     //compute the flush volume
     ConfigOptionStrings *selected_filament_colors_option = m_extra_config.option<ConfigOptionStrings>("filament_colour");
     ConfigOptionStrings *project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour");
@@ -3501,6 +3520,15 @@ int CLI::run(int argc, char **argv)
                 }
             }
 
+            // A mixed slot never reaches a nozzle, so its row and column stay empty, as in the GUI.
+            // Command line options are not merged into m_print_config yet, so they win here.
+            const ConfigOptionBools *is_mixed_opt = m_extra_config.option<ConfigOptionBools>("filament_is_mixed");
+            if (!is_mixed_opt)
+                is_mixed_opt = m_print_config.option<ConfigOptionBools>("filament_is_mixed");
+            auto is_mixed_slot = [is_mixed_opt](int idx) {
+                return is_mixed_opt && idx < static_cast<int>(is_mixed_opt->values.size()) && is_mixed_opt->values[idx];
+            };
+
             for (size_t nozzle_id = 0; nozzle_id < new_extruder_count; ++nozzle_id) {
             std::vector<double> flush_vol_mtx = get_flush_volumes_matrix(flush_vol_matrix, nozzle_id, new_extruder_count);
                 for (int from_idx = 0; from_idx < project_filament_count; from_idx++) {
@@ -3510,7 +3538,7 @@ int CLI::run(int argc, char **argv)
                     bool is_from_support = filament_is_support->get_at(from_idx);
                     for (int to_idx = 0; to_idx < project_filament_count; to_idx++) {
                         bool is_to_support = filament_is_support->get_at(to_idx);
-                        if (from_idx == to_idx) {
+                        if (from_idx == to_idx || is_mixed_slot(from_idx) || is_mixed_slot(to_idx)) {
                             flush_vol_mtx[project_filament_count * from_idx + to_idx] = 0.f;
                         } else {
                             int flushing_volume = 0;
@@ -3653,6 +3681,24 @@ int CLI::run(int argc, char **argv)
     // Normalizing after importing the 3MFs / AMFs
     m_print_config.normalize_fdm();
 
+    // A mixed slot is virtual but still needs a filament entry of its own. Without one, feature
+    // filament ids aimed at it fall outside the filament count, are reset to the first filament
+    // and the model silently prints in a single colour.
+    if (const auto *is_mixed_opt = m_print_config.option<ConfigOptionBools>("filament_is_mixed")) {
+        const auto &is_mixed = is_mixed_opt->values;
+        for (size_t slot = static_cast<size_t>(std::max(filament_count, 0)); slot < is_mixed.size(); ++slot) {
+            if (!is_mixed[slot])
+                continue;
+            BOOST_LOG_TRIVIAL(error) << boost::format("mixed filament slot %1% has no filament of its own, only %2% filaments are loaded; "
+                                                      "load one filament per slot, including each mixed one")
+                                            % (slot + 1) % filament_count;
+            record_exit_reson(outfile_dir, CLI_MIXED_FILAMENT_INVALID, 0, cli_errors[CLI_MIXED_FILAMENT_INVALID], sliced_info);
+            flush_and_exit(CLI_MIXED_FILAMENT_INVALID);
+        }
+    }
+    if (filament_count > 0)
+        resize_mixed_filament_metadata(m_print_config, size_t(filament_count), size_t(filament_count));
+
     m_print_config.option<ConfigOptionEnum<PrinterTechnology>>("printer_technology", true)->value = printer_technology;
 
     bool has_wipe_tower_position = m_print_config.option<ConfigOptionFloats>("wipe_tower_x") && m_print_config.option<ConfigOptionFloats>("wipe_tower_y");
@@ -3707,6 +3753,15 @@ int CLI::run(int argc, char **argv)
     bool is_smooth_timelapse = false;
     if (enable_timelapse && timelapse_type_opt && (timelapse_type_opt->getInt() == TimelapseType::tlSmooth))
         is_smooth_timelapse = true;
+    // A mixed filament swaps between its components every layer, so it needs the tower even when
+    // every loaded preset is the same.
+    if (disable_wipe_tower_after_mapping) {
+        if (const auto *is_mixed_opt = m_print_config.option<ConfigOptionBools>("filament_is_mixed");
+            is_mixed_opt && has_any_mixed_filament(is_mixed_opt->values)) {
+            disable_wipe_tower_after_mapping = false;
+            BOOST_LOG_TRIVIAL(info) << boost::format("%1%, set disable_wipe_tower_after_mapping back to false due to a mixed filament")%__LINE__;
+        }
+    }
     if (disable_wipe_tower_after_mapping) {
         if (is_smooth_timelapse)
         {
@@ -5876,6 +5931,36 @@ int CLI::run(int argc, char **argv)
                                 BOOST_LOG_TRIVIAL(error) << boost::format("plate %1% : Found 2 or more tpu filaments on plate ") % (index + 1);
                                 record_exit_reson(outfile_dir, CLI_ONLY_ONE_TPU_SUPPORTED, index + 1, cli_errors[CLI_ONLY_ONE_TPU_SUPPORTED], sliced_info);
                                 flush_and_exit(CLI_ONLY_ONE_TPU_SUPPORTED);
+                            }
+
+                            // Same type gate as the GUI's Sidebar::has_broken_mixed_filament: refuse a plate that uses a
+                            // mixed slot whose components are different filament types. Missing or out-of-range
+                            // components never get here, validate() already rejects them for the whole project.
+                            const auto *is_mixed_opt   = m_print_config.option<ConfigOptionBools>("filament_is_mixed");
+                            const auto *components_opt = m_print_config.option<ConfigOptionStrings>("filament_mixed_components");
+                            if (is_mixed_opt && components_opt && has_any_mixed_filament(is_mixed_opt->values)) {
+                                const auto &is_mixed   = is_mixed_opt->values;
+                                const auto &components = components_opt->values;
+                                const size_t num_physical = static_cast<size_t>(filament_count) - static_cast<size_t>(std::count(is_mixed.begin(), is_mixed.end(), true));
+                                std::vector<std::string> physical_types(num_physical);
+                                for (size_t f_index = 0; f_index < num_physical; ++f_index) {
+                                    std::string displayed_type;
+                                    physical_types[f_index] = m_print_config.get_filament_type(displayed_type, static_cast<int>(f_index));
+                                    if (physical_types[f_index].empty())
+                                        physical_types[f_index] = "PLA";
+                                }
+                                const std::vector<size_t> mismatched_slots = check_mixed_filament_type_consistency(is_mixed, components, physical_types);
+                                // get_extruders_under_cli does not expand mixed slots in this build, so plate_filaments
+                                // already lists the slots the gate needs.
+                                const std::vector<int> &plate_slots = plate_filaments;
+                                for (size_t slot : mismatched_slots) {
+                                    if (std::find(plate_slots.begin(), plate_slots.end(), static_cast<int>(slot) + 1) == plate_slots.end())
+                                        continue;
+                                    BOOST_LOG_TRIVIAL(error) << boost::format("plate %1%: mixed filament %2% mixes components of different filament types")
+                                                                    % (index + 1) % (slot + 1);
+                                    record_exit_reson(outfile_dir, CLI_MIXED_FILAMENT_INVALID, index + 1, cli_errors[CLI_MIXED_FILAMENT_INVALID], sliced_info);
+                                    flush_and_exit(CLI_MIXED_FILAMENT_INVALID);
+                                }
                             }
 
                             if (new_extruder_count > 1) {

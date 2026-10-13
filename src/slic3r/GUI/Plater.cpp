@@ -767,12 +767,13 @@ std::vector<int> get_min_flush_volumes(const DynamicPrintConfig &full_config, si
     }
     const ConfigOptionBools* long_retractions_when_cut_opt = full_config.option<ConfigOptionBools>("long_retractions_when_cut");
     bool machine_activated = false;
-    if (long_retractions_when_cut_opt) {
+    if (long_retractions_when_cut_opt && nozzle_id < long_retractions_when_cut_opt->values.size()) {
         machine_activated = long_retractions_when_cut_opt->values[nozzle_id] == 1;
-        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": get long_retractions_when_cut from config, value=%1%, activated=%2%")%long_retractions_when_cut_opt->values[0] %machine_activated;
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": get long_retractions_when_cut from config, value=%1%, activated=%2%")%long_retractions_when_cut_opt->values[nozzle_id] %machine_activated;
     }
 
-    size_t filament_size = full_config.option<ConfigOptionFloats>("filament_diameter")->values.size();
+    const ConfigOptionFloats* filament_diameter_opt = full_config.option<ConfigOptionFloats>("filament_diameter");
+    size_t filament_size = filament_diameter_opt ? filament_diameter_opt->values.size() : 0;
     std::vector<double> filament_retraction_distance_when_cut(filament_size, 18.0f), printer_retraction_distance_when_cut(filament_size, 18.0f);
     std::vector<unsigned char> filament_long_retractions_when_cut(filament_size, 0);
     const ConfigOptionFloats* filament_retraction_distances_when_cut_opt = full_config.option<ConfigOptionFloats>("filament_retraction_distances_when_cut");
@@ -792,6 +793,16 @@ std::vector<int> get_min_flush_volumes(const DynamicPrintConfig &full_config, si
         filament_long_retractions_when_cut = filament_long_retractions_when_cut_opt->values;
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": get filament_long_retractions_when_cut from config, size=%1%, values=%2%")%filament_long_retractions_when_cut.size() %filament_long_retractions_when_cut_opt->serialize();
     }
+
+    // Pad per-filament vectors that arrived shorter than the filament count (e.g. a mesh sliced
+    // with filaments supplied only on the command line) so the indexing below never reads past them.
+    const size_t guard_size = std::max(filament_size, nozzle_id + 1);
+    if (filament_retraction_distance_when_cut.size() < guard_size)
+        filament_retraction_distance_when_cut.resize(guard_size, filament_retraction_distance_when_cut.empty() ? 18.0 : filament_retraction_distance_when_cut.back());
+    if (printer_retraction_distance_when_cut.size() < guard_size)
+        printer_retraction_distance_when_cut.resize(guard_size, printer_retraction_distance_when_cut.empty() ? 18.0 : printer_retraction_distance_when_cut.back());
+    if (filament_long_retractions_when_cut.size() < guard_size)
+        filament_long_retractions_when_cut.resize(guard_size, filament_long_retractions_when_cut.empty() ? (unsigned char) 0 : filament_long_retractions_when_cut.back());
 
     for (size_t idx = 0; idx < filament_size; ++idx) {
         int extra_flush_volume = nozzle_volume_val;

@@ -705,6 +705,10 @@ extern void compute_filament_override_value(const std::string& opt_key, const Co
 
 void handle_legacy_sla(DynamicPrintConfig &config);
 
+// Orca: sizes the per-slot mixed-colour metadata options to new_slot_count, keeping the first
+// old_slot_count values; an option the config lacks is created.
+void resize_mixed_filament_metadata(DynamicPrintConfig &config, size_t old_slot_count, size_t new_slot_count);
+
 class StaticPrintConfig : public StaticConfig
 {
 public:
