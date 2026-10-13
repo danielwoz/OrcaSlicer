@@ -2299,7 +2299,11 @@ int CLI::run(int argc, char **argv)
         }
     }
 
-    if (filament_count == 0)
+    // Grow the filament count to cover a larger loaded set, so the per-filament arrays below
+    // (inherits_group, different_settings, old_start_indice, old_variant_counts) are sized for
+    // every loaded filament instead of being overrun when more filaments are loaded than the
+    // project defines.
+    if (filament_count < load_filament_count)
         filament_count = load_filament_count;
 
     if (is_bbl_3mf && (load_filament_count > 0) && (load_filaments_set.size() == 1))
@@ -3149,7 +3153,10 @@ int CLI::run(int argc, char **argv)
         std::vector<int> old_variant_counts(filament_count, 1), new_variant_counts;
 
         ConfigOptionInts* filament_self_index_opt = m_print_config.option<ConfigOptionInts>("filament_self_index");
-        if (!filament_self_index_opt) {
+        if (!filament_self_index_opt || filament_self_index_opt->values.size() < (size_t)filament_count) {
+            // Regenerate a 1:1 single-variant mapping when the project carries fewer
+            // filament_self_index entries than the filaments being loaded, so the arrays below are
+            // built for every filament instead of indexing past the project's filament count.
             filament_self_index_opt = m_print_config.option<ConfigOptionInts>("filament_self_index", true);
             std::vector<int>& filament_self_indice = filament_self_index_opt->values;
             filament_self_indice.resize(filament_count);

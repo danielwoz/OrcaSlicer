@@ -536,8 +536,21 @@ public:
 
             if (other->values.size() != (restore_index.size())) {
                 if (skip_error) {
-                    T default_v = other->values.front();
-                    other->values.resize(restore_index.size(), default_v);
+                    if (other->values.empty()) {
+                        // The source supplies no value for this per-variant block. Rebuild it from
+                        // the destination's own backup so an absent override is a no-op, instead of
+                        // reading front() off an empty vector and zero-filling every slot.
+                        other->values.reserve(restore_index.size());
+                        for (size_t i = 0; i < restore_index.size(); i++) {
+                            size_t bi = (size_t)start + i;
+                            other->values.push_back(bi < backup_values.size() ? backup_values[bi]
+                                : (backup_values.empty() ? T() : backup_values.back()));
+                        }
+                    }
+                    else {
+                        T default_v = other->values.front();
+                        other->values.resize(restore_index.size(), default_v);
+                    }
                 }
                 else
                     throw ConfigurationError("ConfigOptionVector::set_with_restore_2(): Assigning from an vector with invalid restore_index size");

@@ -1733,9 +1733,10 @@ std::vector<int> PartPlate::get_extruders_under_cli(bool conside_custom_gcode, D
             else
                 obj_support = glb_support;
 
-            if (!obj_support)
-                continue;
-
+            // Support filament ids only apply when support is enabled for this object; the
+            // per-feature filament overrides collected afterwards are independent of support and
+            // must always be counted, so gate only the support-filament block.
+            if (obj_support) {
             int obj_support_intf_extr = 0;
             const ConfigOption* support_intf_extr_opt = object->config.option("support_interface_filament");
             if (support_intf_extr_opt != nullptr)
@@ -1753,6 +1754,7 @@ std::vector<int> PartPlate::get_extruders_under_cli(bool conside_custom_gcode, D
                 plate_extruders.push_back(obj_support_extr);
             else if (glb_support_extr != 0)
                 plate_extruders.push_back(glb_support_extr);
+            }
 
 			int obj_outer_wall_extr = 0;
 			if (const ConfigOption* wall_opt = object->config.option("outer_wall_filament_id"); wall_opt != nullptr)
