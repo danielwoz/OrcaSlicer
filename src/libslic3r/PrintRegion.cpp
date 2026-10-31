@@ -30,7 +30,7 @@ unsigned int PrintRegion::extruder(FlowRole role) const
     return extruder;
 }
 
-Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_height, bool first_layer) const
+Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_height, bool first_layer, unsigned int filament_id) const
 {
     const PrintConfig          &print_config = object.print()->config();
     ConfigOptionFloatOrPercent config_width;
@@ -57,7 +57,7 @@ Flow PrintRegion::flow(const PrintObject &object, FlowRole role, double layer_he
     
     // Get the configured nozzle_diameter for the extruder associated to the flow role requested.
     // Here this->extruder(role) - 1 may underflow to MAX_INT, but then the get_at() will follback to zero'th element, so everything is all right.
-    auto nozzle_diameter = float(nozzle_diameter_for_filament(print_config, this->extruder(role), object.print()->is_BBL_printer()));
+    auto nozzle_diameter = float(nozzle_diameter_for_filament(print_config, filament_id > 0 ? int(filament_id) : int(this->extruder(role)), object.print()->is_BBL_printer()));
     return Flow::new_from_config_width(role, config_width, nozzle_diameter, float(layer_height));
 }
 
@@ -99,12 +99,22 @@ void PrintRegion::collect_object_printing_extruders(const PrintConfig &print_con
     }
     if (region_config.sparse_infill_density.value > 0)
     	emplace_extruder(region_config.sparse_infill_filament_id);
+    if (const unsigned int filament = negative_space_infill_filament(print_config, region_config); filament > 0)
+        emplace_extruder(int(filament));
     if (region_config.sparse_infill_density.value > 0 || region_config.top_shell_layers.value > 0 || region_config.bottom_shell_layers.value > 0)
     	emplace_extruder(region_config.internal_solid_filament_id);
     if (region_config.top_shell_layers.value > 0)
     	emplace_extruder(region_config.top_surface_filament_id);
     if (region_config.bottom_shell_layers.value > 0)
     	emplace_extruder(region_config.bottom_surface_filament_id);
+}
+
+unsigned int PrintRegion::negative_space_infill_filament(const PrintConfig &print_config, const PrintRegionConfig &region_config)
+{
+    // Only a sparse infill that is neither empty nor solid leaves gaps, and a spiral vase has none.
+    const int    filament = region_config.negative_space_infill_filament_id.value;
+    const double density  = region_config.sparse_infill_density.value;
+    return filament > 0 && density > 0. && density < 100. && ! print_config.spiral_mode.value ? unsigned(filament) : 0;
 }
 
 void PrintRegion::collect_object_printing_extruders(const Print &print, std::vector<unsigned int> &object_extruders) const
@@ -120,6 +130,7 @@ void PrintRegion::collect_object_printing_extruders(const Print &print, std::vec
     assert(this->config().internal_solid_filament_id <= num_extruders);
     assert(this->config().top_surface_filament_id <= num_extruders);
     assert(this->config().bottom_surface_filament_id <= num_extruders);
+    assert(this->config().negative_space_infill_filament_id <= num_extruders);
 #endif
     collect_object_printing_extruders(print.config(), this->config(), print.has_brim(), object_extruders);
 }

@@ -1589,6 +1589,32 @@ TEST_CASE("normalize_fdm leaves feature filaments on Default", "[Config]") {
     CHECK_FALSE(config.has("bottom_surface_filament_id"));
 }
 
+TEST_CASE("Negative space infill is off by default and normalize_fdm never switches it on", "[Config][NegativeSpace]") {
+    const ConfigOptionDef *def = print_config_def.get("negative_space_infill_filament_id");
+    REQUIRE(def != nullptr);
+    CHECK(def->category == "Extruders");
+    CHECK_THAT(def->min, Catch::Matchers::WithinAbs(0., 1e-9));
+    CHECK(def->gui_type == ConfigOptionDef::GUIType::i_enum_open);
+    CHECK(DynamicPrintConfig::full_print_config().opt_int("negative_space_infill_filament_id") == 0);
+    // The object filament replaces the feature filaments left on Default, which must not include this one.
+    DynamicPrintConfig config;
+    config.set_key_value("extruder", new ConfigOptionInt(2));
+    SECTION("absent") {
+        config.normalize_fdm();
+        CHECK_FALSE(config.has("negative_space_infill_filament_id"));
+    }
+    SECTION("Disabled") {
+        config.set_key_value("negative_space_infill_filament_id", new ConfigOptionInt(0));
+        const bool full = GENERATE(true, false);
+        CAPTURE(full);
+        if (full)
+            config.normalize_fdm();
+        else
+            config.normalize_fdm_1();
+        CHECK(config.opt_int("negative_space_infill_filament_id") == 0);
+    }
+}
+
 TEST_CASE("silent_mode is no longer saved and is dropped on load", "[Config]") {
     DynamicPrintConfig full;
     full.apply(FullPrintConfig::defaults());

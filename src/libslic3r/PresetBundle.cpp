@@ -5832,8 +5832,8 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
     static const char* keys_with_default[] = {
         "outer_wall_filament_id", "inner_wall_filament_id", "sparse_infill_filament_id",
         "internal_solid_filament_id", "top_surface_filament_id", "bottom_surface_filament_id",
-        // Orca: 0 disables the surface / outer wall override.
-        "surface_wall_override_filament"
+        // Orca: 0 disables the surface / outer wall override and the negative space infill.
+        "surface_wall_override_filament", "negative_space_infill_filament_id"
     };
     for (size_t i = 0; i < sizeof(keys_with_default) / sizeof(keys_with_default[0]); ++ i) {
         std::string key = std::string(keys_with_default[i]);

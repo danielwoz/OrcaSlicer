@@ -271,6 +271,44 @@ TEST_CASE("Print::validate rejects a mixed filament as the wipe tower filament",
     }
 }
 
+TEST_CASE("Print::validate rejects a mixed filament as the negative space infill filament", "[MixedFilament][NegativeSpace]")
+{
+    // Every region role on physical filament 1, so only negative space infill may use the mixed slot. The
+    // layer-change reset avoids an unrelated relative-extrusion error.
+    DynamicPrintConfig config = mixed_config(false);
+    config.set_deserialize_strict({
+        {"enable_prime_tower",         "0"},
+        {"sparse_infill_density",      "20%"},
+        {"layer_change_gcode",         "G92 E0\n"},
+        {"outer_wall_filament_id",     "1"},
+        {"inner_wall_filament_id",     "1"},
+        {"sparse_infill_filament_id",  "1"},
+        {"internal_solid_filament_id", "1"},
+        {"top_surface_filament_id",    "1"},
+        {"bottom_surface_filament_id", "1"},
+    });
+
+    SECTION("a physical filament validates") {
+        config.set_deserialize_strict({{"negative_space_infill_filament_id", "2"}});
+        Print print;
+        Model model;
+        init_print({cube(20)}, print, model, config);
+        const StringObjectException err = print.validate();
+        INFO(err.string);
+        CHECK(err.string.empty());
+    }
+
+    SECTION("the mixed slot is refused") {
+        config.set_deserialize_strict({{"negative_space_infill_filament_id", "3"}});
+        Print print;
+        Model model;
+        init_print({cube(20)}, print, model, config);
+        const StringObjectException err = print.validate();
+        CHECK_FALSE(err.string.empty());
+        CHECK(err.opt_key == "negative_space_infill_filament_id");
+    }
+}
+
 TEST_CASE("Print::validate warns when a gradient mixed filament is used without sublayer mixing", "[MixedFilament]")
 {
     // A gradient mixed filament only renders its gradient with the process option enabled; without

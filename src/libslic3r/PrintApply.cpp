@@ -1268,7 +1268,7 @@ static PrintObjectRegions* generate_print_object_regions(
 // creates them. Derive it from the filaments the new model prints with instead of from the existing PrintObjects and
 // their regions, which do not exist yet on the first apply(). Every feature filament of every part, height range and
 // modifier counts, whether the feature ends up printing or not, so filaments that disagree switch the compensation
-// off rather than letting a wrong compensation through.
+// off rather than letting a wrong compensation through. Negative space infill counts only where it prints.
 void Print::update_shrinkage_compensation(size_t num_extruders, std::vector<int> &variant_index)
 {
     const auto set_compensation = [this](unsigned int extruder) {
@@ -1292,7 +1292,7 @@ void Print::update_shrinkage_compensation(size_t num_extruders, std::vector<int>
     }
 
     std::vector<unsigned int> extruders;
-    const auto append_feature_extruders = [num_extruders, &extruders](const PrintRegionConfig &config) {
+    const auto append_feature_extruders = [this, num_extruders, &extruders](const PrintRegionConfig &config) {
         for (int id : { config.outer_wall_filament_id.value, config.inner_wall_filament_id.value, config.sparse_infill_filament_id.value,
                         config.internal_solid_filament_id.value, config.top_surface_filament_id.value, config.bottom_surface_filament_id.value }) {
             const unsigned int i = (unsigned int)std::max(0, id - 1);
@@ -1303,6 +1303,9 @@ void Print::update_shrinkage_compensation(size_t num_extruders, std::vector<int>
             const unsigned int i = (unsigned int)(ov - 1);
             extruders.emplace_back(i >= num_extruders ? 0 : i);
         }
+        // Orca: negative space infill counts only where it prints, so an idle one leaves the compensation unchanged.
+        if (const unsigned int id = PrintRegion::negative_space_infill_filament(m_config, config); id > 0)
+            extruders.emplace_back(id - 1);
     };
     for (const ModelObject *model_object : m_model.objects) {
         if (std::none_of(model_object->instances.begin(), model_object->instances.end(), [](const ModelInstance *mi) { return mi->is_printable(); }))

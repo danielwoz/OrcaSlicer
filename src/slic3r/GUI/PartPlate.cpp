@@ -2994,6 +2994,22 @@ int PartPlate::picking_id_component(int idx) const
     return this->m_plate_index * GRABBER_COUNT + idx;
 }
 
+// 1-based filament printing the negative space infill of an object, 0 when it prints none. A value set on the object,
+// 0 included, overrides the global one.
+static int object_negative_space_filament(const DynamicPrintConfig &global_config, const ModelObject &object)
+{
+    const auto effective = [&](const char *key) {
+        const ConfigOption *option = object.config.option(key);
+        return option != nullptr ? option : global_config.option(key);
+    };
+    const ConfigOption *filament = effective("negative_space_infill_filament_id");
+    const ConfigOption *density  = effective("sparse_infill_density");
+    const ConfigOption *spiral   = global_config.option("spiral_mode");
+    if (filament == nullptr || density == nullptr || (spiral != nullptr && spiral->getBool()))
+        return 0;
+    return density->getFloat() > 0. && density->getFloat() < 100. ? filament->getInt() : 0;
+}
+
 std::vector<int> PartPlate::get_extruders(bool conside_custom_gcode, bool expand_mixed_slots) const
 {
 	std::vector<int> plate_extruders;
@@ -3148,6 +3164,8 @@ std::vector<int> PartPlate::get_extruders(bool conside_custom_gcode, const Dynam
 		else if (glb_bottom_surface_extr != 0)
 			plate_extruders.push_back(glb_bottom_surface_extr);
 
+		if (const int id = object_negative_space_filament(glb_config, *mo); id > 0)
+			plate_extruders.push_back(id);
 	}
 
 	if (conside_custom_gcode) {
@@ -3330,6 +3348,9 @@ std::vector<int> PartPlate::get_extruders_under_cli(bool conside_custom_gcode, D
 				plate_extruders.push_back(obj_bottom_surface_extr);
 			else if (glb_bottom_surface_extr != 0)
 				plate_extruders.push_back(glb_bottom_surface_extr);
+
+			if (const int id = object_negative_space_filament(full_config, *object); id > 0)
+				plate_extruders.push_back(id);
         }
     }
 
@@ -3533,7 +3554,7 @@ std::map<int, size_t> PartPlate::get_object_filament_extruders(
     const int bottom_shell_layers = effective_int("bottom_shell_layers");
     // Orca: the surface / outer wall override filament prints the outer walls and/or the top and bottom surfaces.
     const int override_target = effective_int("surface_wall_override_filament_target");
-    const std::array<std::pair<const char *, bool>, 7> feature_filament_keys = {
+    const std::array<std::pair<const char *, bool>, 8> feature_filament_keys = {
         std::pair{ "outer_wall_filament_id", wall_loops > 0 || has_brim },
         std::pair{ "inner_wall_filament_id", wall_loops > 1 },
         std::pair{ "sparse_infill_filament_id", sparse_infill_density > 0.0 },
@@ -3542,7 +3563,8 @@ std::map<int, size_t> PartPlate::get_object_filament_extruders(
         std::pair{ "bottom_surface_filament_id", bottom_shell_layers > 0 },
         std::pair{ "surface_wall_override_filament",
                    (override_target != int(SurfaceWallOverrideFilamentTarget::Surfaces) && wall_loops > 0) ||
-                   (override_target != int(SurfaceWallOverrideFilamentTarget::Walls) && (top_shell_layers > 0 || bottom_shell_layers > 0)) }
+                   (override_target != int(SurfaceWallOverrideFilamentTarget::Walls) && (top_shell_layers > 0 || bottom_shell_layers > 0)) },
+        std::pair{ "negative_space_infill_filament_id", sparse_infill_density > 0.0 && sparse_infill_density < 100.0 && !effective_bool("spiral_mode") }
     };
     auto collect_config_filaments = [&filament_ids, &feature_filament_keys](const DynamicConfig &config) {
         for (const auto &[key, active] : feature_filament_keys) {

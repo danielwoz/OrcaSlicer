@@ -2062,6 +2062,13 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         }
     }
 
+    // Orca: negative space infill takes physical filaments only.
+    for (const PrintObject *object : m_objects)
+        for (const PrintRegion &region : object->all_regions())
+            if (const unsigned int filament = PrintRegion::negative_space_infill_filament(m_config, region.config());
+                filament > 0 && filament <= m_config.filament_is_mixed.values.size() && m_config.filament_is_mixed.values[filament - 1])
+                return { L("The negative space infill filament cannot be a mixed filament."), object, "negative_space_infill_filament_id" };
+
     // IDEX/IQEX: block multi-color in non-primary parallel modes when the active
     // configuration can't physically support it (no within-gantry toolchange path
     // or MMU lane sharing). See imex_multicolor_block_reason() for the full rule.

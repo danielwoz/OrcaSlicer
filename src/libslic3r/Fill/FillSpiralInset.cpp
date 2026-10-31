@@ -355,7 +355,7 @@ void FillSpiralInset::_fill_surface_single(const FillParams& params,
     // Internal solid infill must not add Arachne's standalone thin walls: one of those walls can
     // become the extra centre point after the spiral has finished. Top and bottom surfaces keep
     // Arachne, including the centre plug handled by generate_spiral_insets().
-    if (params.extrusion_role == erSolidInfill) {
+    if (params.extrusion_role == erSolidInfill || params.extrusion_role == erNegativeSpaceInfill) {
         Polylines polylines;
         this->_fill_surface_single(params, thickness_layers, direction, expolygon, polylines);
         append(thick_polylines_out, to_thick_polylines(std::move(polylines), scaled<coord_t>(this->spacing)));

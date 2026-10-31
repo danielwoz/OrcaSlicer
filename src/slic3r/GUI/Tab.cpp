@@ -3401,6 +3401,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("outer_wall_count", "multimaterial_settings_filament_for_features#outer-walls");
         optgroup->append_single_option_line("surface_wall_override_filament_target", "multimaterial_settings_filament_for_features#outer-walls");
         optgroup->append_single_option_line("sparse_infill_filament_id", "multimaterial_settings_filament_for_features#sparse-infill");
+        optgroup->append_single_option_line("negative_space_infill_filament_id", "multimaterial_settings_filament_for_features#negative-space-infill");
         optgroup->append_single_option_line("internal_solid_filament_id", "multimaterial_settings_filament_for_features#internal-solid-infill");
         optgroup->append_single_option_line("top_surface_filament_id", "multimaterial_settings_filament_for_features#top-surface");
         optgroup->append_single_option_line("bottom_surface_filament_id", "multimaterial_settings_filament_for_features#bottom-surface");

@@ -191,3 +191,20 @@ TEST_CASE("Scarf loop drops the micro segments the seam insertion leaves at both
         CHECK_THAT(unscale_(loop.paths.front().polyline.lines().back().length()), WithinAbs(0.3, 1e-3));
     }
 }
+
+TEST_CASE("Every extrusion role keeps its feature name through the G-code", "[ExtrusionEntity]")
+{
+    for (int role = erNone; role < erCount; ++ role)
+        DYNAMIC_SECTION("role " << role) {
+            CHECK(int(ExtrusionEntity::string_to_role(ExtrusionEntity::role_to_string(ExtrusionRole(role)))) == role);
+        }
+}
+
+TEST_CASE("Negative space infill is an internal solid infill role appended after the existing ones", "[ExtrusionEntity][NegativeSpace]")
+{
+    CHECK(int(erMixed) == 19); // values written to G-code tags and the CLI cache are unchanged
+    CHECK(int(erNegativeSpaceInfill) == 20);
+    CHECK(ExtrusionEntity::role_to_string(erNegativeSpaceInfill) == "Negative space infill");
+    CHECK(is_infill(erNegativeSpaceInfill));
+    CHECK(is_solid_infill(erNegativeSpaceInfill));
+}

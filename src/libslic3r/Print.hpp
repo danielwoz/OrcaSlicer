@@ -163,7 +163,8 @@ public:
     ObjectID                    gradient_volume_id() const throw() { return m_gradient_volume_id; }
 	// 1-based extruder identifier for this region and role.
 	unsigned int 				extruder(FlowRole role) const;
-    Flow                        flow(const PrintObject &object, FlowRole role, double layer_height, bool first_layer = false) const;
+    // filament_id: 1-based filament whose nozzle sizes the flow; 0 uses the filament of the role.
+    Flow                        flow(const PrintObject &object, FlowRole role, double layer_height, bool first_layer = false, unsigned int filament_id = 0) const;
     // Average diameter of nozzles participating on extruding this region.
     coordf_t                    nozzle_dmr_avg(const PrintConfig &print_config) const;
     // Average diameter of nozzles participating on extruding this region.
@@ -172,6 +173,8 @@ public:
     // Collect 0-based extruder indices used to print this region's object.
 	void                        collect_object_printing_extruders(const Print &print, std::vector<unsigned int> &object_extruders) const;
 	static void                 collect_object_printing_extruders(const PrintConfig &print_config, const PrintRegionConfig &region_config, const bool has_brim, std::vector<unsigned int> &object_extruders);
+    // 1-based filament filling the gaps between the sparse infill lines of a region, 0 when they stay empty.
+    static unsigned int         negative_space_infill_filament(const PrintConfig &print_config, const PrintRegionConfig &region_config);
 
 // Methods modifying the PrintRegion's state:
 public:

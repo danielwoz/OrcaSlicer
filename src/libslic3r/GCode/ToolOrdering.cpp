@@ -168,6 +168,8 @@ static unsigned int region_filament(const ExtrusionEntityCollection &extrusions,
             return config.top_surface_filament_id.value;
         if (role == erBottomSurface)
             return config.bottom_surface_filament_id.value;
+        if (role == erNegativeSpaceInfill)
+            return config.negative_space_infill_filament_id.value;
         return config.internal_solid_filament_id.value;
     }
     // Walls, and the gap fill between them.
@@ -3426,7 +3428,8 @@ bool WipingExtrusions::is_overriddable(const ExtrusionEntityCollection& eec, con
     if (!object.config().flush_into_infill || eec.role() != erInternalInfill)
         return false;
 
-    return true;
+    // Orca: the sparse lines around negative space infill keep their filament, which sets them apart from it.
+    return PrintRegion::negative_space_infill_filament(print_config, region.config()) == 0;
 }
 
 // BBS

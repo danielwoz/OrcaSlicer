@@ -163,6 +163,7 @@ enum class EGCodeExtrusionRole : uint8_t
       Brim,
       SupportTransition,
       Mixed,
+      NegativeSpaceInfill,
     COUNT
 };
 

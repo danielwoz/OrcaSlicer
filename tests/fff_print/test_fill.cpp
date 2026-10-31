@@ -2530,3 +2530,81 @@ TEST_CASE("Monotonic line top surfaces print their gap fill next to their lines 
     REQUIRE(gap_fills > 0);
     CHECK(gap_fills_before_a_line > 0);
 }
+
+// Orca: Two filaments, a 20% sparse infill between 3 bottom and 3 top shells, and negative space infill on `negative_space`.
+static DynamicPrintConfig negative_space_fill_config(int negative_space, const char *pattern = "rectilinear", bool symmetric = false)
+{
+    return Slic3r::Test::multifilament_config(2, {
+        { "layer_height", 0.2 }, { "initial_layer_print_height", 0.2 },
+        { "top_shell_layers", 3 }, { "bottom_shell_layers", 3 }, { "top_shell_thickness", 0 }, { "bottom_shell_thickness", 0 },
+        { "sparse_infill_density", "20%" }, { "sparse_infill_pattern", pattern }, { "symmetric_infill_y_axis", symmetric },
+        { "negative_space_infill_filament_id", negative_space },
+        { "enable_prime_tower", 0 }, { "skirt_loops", 0 }, { "brim_type", "no_brim" },
+    });
+}
+
+TEST_CASE("Sparse infill and negative space infill together fill the sparse infill area", "[Fill][NegativeSpace]")
+{
+    // Orca: The L (10 mm tall) is not symmetric in X, so a negative space cut from the mirrored area would miss the lines.
+    auto [pattern, symmetric] = GENERATE(table<const char *, bool>({ { "rectilinear", false }, { "grid", false }, { "gyroid", false },
+        { "honeycomb", false }, { "lightning", false }, { "concentric", false }, { "zigzag", true }, { "lockedzag", true } }));
+    CAPTURE(pattern, symmetric);
+    Print print;
+    Slic3r::Test::init_and_process_print({ Slic3r::Test::TestMesh::L }, print, negative_space_fill_config(2, pattern, symmetric));
+    size_t checked = 0;
+    double uncovered_area = 0., total_area = 0.;
+    for (const Layer *layer : print.objects().front()->layers())
+        for (const LayerRegion *layerm : layer->regions()) {
+            Polygons sparse_area;
+            layerm->fill_surfaces.filter_by_type(stInternal, &sparse_area);
+            if (sparse_area.empty())
+                continue;
+            Polygons lines, negative;
+            for (const ExtrusionEntity *ee : layerm->fills.entities) {
+                const auto &fill = static_cast<const ExtrusionEntityCollection &>(*ee);
+                if (std::any_of(fill.entities.begin(), fill.entities.end(), [](const ExtrusionEntity *e) { return e->role() == erNegativeSpaceInfill; }))
+                    fill.polygons_covered_by_spacing(negative, 0.f);
+                else if (fill.role() == erInternalInfill)
+                    fill.polygons_covered_by_spacing(lines, 0.f);
+            }
+            CAPTURE(layer->print_z);
+            REQUIRE_FALSE(negative.empty());
+            negative = union_(negative);
+            lines    = union_(lines);
+            const double negative_area = area(negative);
+            CHECK(area(diff(negative, offset(sparse_area, float(scale_(0.05))))) < 0.01 * negative_area); // stays inside
+            CHECK(area(intersection(negative, lines)) < 0.05 * negative_area);                         // stays off the lines
+            // About 80% of the area is empty without it. Line ends meeting curved cells (gyroid) leave the most behind.
+            const double uncovered = area(diff(sparse_area, union_(lines, negative)));
+            CHECK(uncovered < 0.15 * area(sparse_area));
+            uncovered_area += uncovered;
+            total_area += area(sparse_area);
+            ++ checked;
+        }
+    CHECK(checked > 30); // 44 sparse layers
+    CHECK(uncovered_area < 0.10 * total_area);
+}
+
+TEST_CASE("Negative space infill set on a modifier fills only the sparse infill inside it", "[Fill][NegativeSpace]")
+{
+    DynamicPrintConfig modifier_config;
+    modifier_config.set_deserialize_strict({ { "negative_space_infill_filament_id", 2 } });
+    Print print;
+    slice_parts(print, negative_space_fill_config(0), { Slic3r::Test::cube(20) }, { { make_cube(10, 20, 20), modifier_config } });
+    size_t with_negative = 0;
+    for (const Layer *layer : print.objects().front()->layers())
+        for (const LayerRegion *layerm : layer->regions()) {
+            const bool enabled = layerm->region().config().negative_space_infill_filament_id.value == 2;
+            const ExtrusionEntityCollection fills = layerm->fills.flatten();
+            const bool has_negative = std::any_of(fills.entities.begin(), fills.entities.end(),
+                                                  [](const ExtrusionEntity *e) { return e->role() == erNegativeSpaceInfill; });
+            CAPTURE(layer->print_z, enabled);
+            if (! enabled)
+                CHECK_FALSE(has_negative);
+            else if (layerm->fill_surfaces.has(stInternal)) {
+                CHECK(has_negative);
+                ++ with_negative;
+            }
+        }
+    CHECK(with_negative > 80); // 94 sparse layers
+}

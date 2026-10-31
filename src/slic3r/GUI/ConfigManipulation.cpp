@@ -639,12 +639,13 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
     // Reset filament overrides pointing at a slot that no longer exists. Support and the wipe
     // tower additionally reject mixed slots: the engine consumes those keys directly, so a virtual
     // slot would reach the G-code unresolved, while the per-feature keys are resolved per layer.
+    // Negative space infill takes physical filaments only, and an invalid one turns it off.
     static const char* physical_only_keys[] = { "support_filament", "support_interface_filament", "wipe_tower_filament" };
     static const char* feature_keys[] = { "outer_wall_filament_id", "inner_wall_filament_id",
                                           "sparse_infill_filament_id", "internal_solid_filament_id",
                                           "top_surface_filament_id", "bottom_surface_filament_id",
                                           "surface_wall_override_filament" };
-    auto reset_invalid_filament = [this, config, filament_cnt](const char* key, bool allow_mixed) {
+    auto reset_invalid_filament = [this, config, filament_cnt](const char* key, bool allow_mixed, bool reset_to_disabled) {
         auto* opt = dynamic_cast<ConfigOptionInt*>(config->option(key, false));
         if (opt == nullptr)
             return;
@@ -656,7 +657,7 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
             return;
         DynamicPrintConfig new_conf = *config;
         int new_value = 0;
-        if (out_of_range) {
+        if (out_of_range && !reset_to_disabled) {
             const DynamicPrintConfig *conf_temp = wxGetApp().plater()->config();
             if (conf_temp != nullptr && conf_temp->has(key))
                 new_value = conf_temp->opt_int(key);
@@ -665,9 +666,10 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
         apply(config, &new_conf);
     };
     for (const char* key : physical_only_keys)
-        reset_invalid_filament(key, false);
+        reset_invalid_filament(key, false, false);
     for (const char* key : feature_keys)
-        reset_invalid_filament(key, true);
+        reset_invalid_filament(key, true, false);
+    reset_invalid_filament("negative_space_infill_filament_id", false, true);
 
     // Sub-layer splitting divides each layer by the mix ratio; an adaptive layer profile makes
     // those sub-layer heights vary per layer, which degrades the blend. Warn once per enable.
@@ -895,6 +897,9 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
                      "infill_complete_top",
         "minimum_sparse_infill_area", "sparse_infill_filament_id","infill_shift_step","sparse_infill_rotate_template","symmetric_infill_y_axis"})
         toggle_line(el, have_infill, -1, _L("This setting is hidden because sparse infill density is zero."));
+    toggle_line("negative_space_infill_filament_id", have_infill && config->option<ConfigOptionPercent>("sparse_infill_density")->value < 100, -1,
+                // xgettext:no-c-format, no-boost-format
+                _L("Set sparse infill density greater than zero and less than 100% to use this setting."));
 
     InfillPattern pattern = config->opt_enum<InfillPattern>("sparse_infill_pattern");
 

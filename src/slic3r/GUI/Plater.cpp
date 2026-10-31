@@ -1333,10 +1333,12 @@ struct DynamicFilamentList : DynamicList
     // resolution (see ConfigManipulation::update_print_fff_config), so their dropdowns list
     // physical slots only; the per-feature *_filament_id keys keep every slot. BBS uses one
     // physical-only list for all of its keys.
-    explicit DynamicFilamentList(bool physical_only = false) : physical_only(physical_only) {}
+    // zero_disables: index 0 turns the option off instead of using the object/part filament.
+    explicit DynamicFilamentList(bool physical_only = false, bool zero_disables = false) : physical_only(physical_only), zero_disables(zero_disables) {}
     bool physical_only;
+    bool zero_disables;
     std::vector<std::pair<wxString, wxBitmap *>> items;
-    std::vector<int> slot_map{0}; // combo index -> 1-based filament slot; slot_map[0] = 0 is "Default"
+    std::vector<int> slot_map{0}; // combo index -> 1-based filament slot; slot_map[0] = 0 is "Default" (or "Disabled")
 
     void apply_on(Choice *c) override
     {
@@ -1353,7 +1355,7 @@ struct DynamicFilamentList : DynamicList
         // still listed and sends a vanished slot to the fallback below.
         int old_slot = old_index >= 0 && old_index < int(slot_map.size()) ? slot_map[old_index] : -1;
         cb->Clear();
-        cb->Append(_L("Default"));
+        cb->Append(zero_disables ? _L("Disabled") : _L("Default"));
         for (auto i : items) {
             cb->Append(i.first, i.second ? *i.second : wxNullBitmap);
         }
@@ -1428,6 +1430,7 @@ static bool has_junction_deviation(const DynamicPrintConfig* printer_config)
 
 static DynamicFilamentList dynamic_filament_list;                // every slot, mixed included (per-feature *_filament_id keys)
 static DynamicFilamentList dynamic_physical_filament_list(true); // physical slots only (support_*, wipe_tower_filament)
+static DynamicFilamentList dynamic_negative_space_filament_list(true, true); // physical slots only; slot 0 disables negative space infill
 
 class AMSCountPopupWindow : public PopupWindow
 {
@@ -2791,6 +2794,7 @@ Sidebar::Sidebar(Plater *parent)
     Choice::register_dynamic_list("inner_wall_filament_id", &dynamic_filament_list);
     Choice::register_dynamic_list("surface_wall_override_filament", &dynamic_filament_list);
     Choice::register_dynamic_list("sparse_infill_filament_id", &dynamic_filament_list);
+    Choice::register_dynamic_list("negative_space_infill_filament_id", &dynamic_negative_space_filament_list);
     Choice::register_dynamic_list("internal_solid_filament_id", &dynamic_filament_list);
     Choice::register_dynamic_list("top_surface_filament_id", &dynamic_filament_list);
     Choice::register_dynamic_list("bottom_surface_filament_id", &dynamic_filament_list);
@@ -6655,6 +6659,7 @@ void Sidebar::update_dynamic_filament_list()
 {
     dynamic_filament_list.update();
     dynamic_physical_filament_list.update();
+    dynamic_negative_space_filament_list.update();
 }
 
 PlaterPresetComboBox* Sidebar::printer_combox()
@@ -7876,7 +7881,8 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
         "extruder_colour", "filament_colour", "filament_type", "filament_is_support", "material_colour", "printable_height", "extruder_printable_height", "printer_model", "printer_technology",
         // These values are necessary to construct SlicingParameters by the Canvas3D variable layer height editor.
         "layer_height", "initial_layer_print_height", "min_layer_height", "max_layer_height",
-        "wall_loops", "outer_wall_filament_id", "inner_wall_filament_id", "surface_wall_override_filament", "outer_wall_count", "sparse_infill_density", "sparse_infill_filament_id", "top_shell_layers",
+        "wall_loops", "outer_wall_filament_id", "inner_wall_filament_id", "surface_wall_override_filament", "outer_wall_count", "sparse_infill_density", "sparse_infill_filament_id",
+        "negative_space_infill_filament_id", "top_shell_layers",
         "enable_support", "support_filament", "support_interface_filament",
         "support_top_z_distance", "support_bottom_z_distance", "raft_layers",
         "wipe_tower_rotation_angle", "wipe_tower_cone_angle", "wipe_tower_extra_spacing", "wipe_tower_extra_flow", "wipe_tower_max_purge_speed",
@@ -21701,7 +21707,7 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
         else if (opt_key == "support_interface_filament" || opt_key == "support_filament" ||
                  opt_key == "outer_wall_filament_id" || opt_key == "inner_wall_filament_id" ||
                  opt_key == "surface_wall_override_filament" || opt_key == "outer_wall_count" ||
-                 opt_key == "sparse_infill_filament_id" || opt_key == "internal_solid_filament_id" ||
+                 opt_key == "sparse_infill_filament_id" || opt_key == "negative_space_infill_filament_id" || opt_key == "internal_solid_filament_id" ||
                  opt_key == "top_surface_filament_id" || opt_key == "bottom_surface_filament_id" ||
                  opt_key == "enable_support" || opt_key == "raft_layers" || opt_key == "wall_loops" ||
                  opt_key == "sparse_infill_density" || opt_key == "top_shell_layers" ||
