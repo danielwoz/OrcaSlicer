@@ -4212,6 +4212,21 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(0));
 
+    def = this->add("negative_space_infill_filament_id", coInt);
+    def->gui_type = ConfigOptionDef::GUIType::i_enum_open;
+    def->label = L("Negative space infill");
+    def->category = L("Extruders");
+    // xgettext:no-c-format, no-boost-format
+    def->tooltip = L("Filament that fills the gaps between the sparse infill lines, so that every sparse infill layer prints solid: "
+                     "the pattern in the sparse infill filament and the gaps in this one. The gaps print like internal solid infill, "
+                     "with its pattern, direction, line width, speed, acceleration and flow ratio.\n"
+                     "\"Disabled\" leaves the gaps empty. It has no effect at 0% or 100% sparse infill density or in spiral vase mode, "
+                     "and it cannot be a mixed filament. Where it is used, sparse infill is not combined across layers, no internal "
+                     "bridge is printed above it, and its sparse infill is not used for flushing.");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
+
     def = this->add("sparse_infill_line_width", coFloatOrPercent);
     def->label = L("Sparse infill");
     def->category = L("Quality");
@@ -11631,7 +11646,7 @@ CustomGcodeSpecificConfigDef::CustomGcodeSpecificConfigDef()
 
 // change_extrusion_role_gcode
     std::string extrusion_role_types = "Possible Values:\n[\"Perimeter\", \"ExternalPerimeter\", "
-                                                     "\"OverhangPerimeter\", \"InternalInfill\", \"SolidInfill\", \"TopSolidInfill\", \"BottomSurface\", \"BridgeInfill\", \"GapFill\", \"Ironing\", "
+                                                     "\"OverhangPerimeter\", \"InternalInfill\", \"SolidInfill\", \"NegativeSpaceInfill\", \"TopSolidInfill\", \"BottomSurface\", \"BridgeInfill\", \"GapFill\", \"Ironing\", "
                                                      "\"Skirt\", \"Brim\", \"SupportMaterial\", \"SupportMaterialInterface\", \"SupportTransition\", \"WipeTower\", \"Mixed\"]";
 
     new_def("extrusion_role", coString, "Extrusion role", "The new extrusion role/type that is going to be used\n" + extrusion_role_types);

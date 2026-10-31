@@ -144,6 +144,10 @@ unsigned int LayerTools::extruder(const ExtrusionEntityCollection &extrusions, c
                     extruder = region.config().top_surface_filament_id;
                 else if (role == erBottomSurface)
                     extruder = region.config().bottom_surface_filament_id;
+                // Orca: a negative space infill island, with or without its gap fill, takes its own filament.
+                else if (std::any_of(extrusions.entities.begin(), extrusions.entities.end(),
+                                     [](const ExtrusionEntity *ee) { return ee->role() == erNegativeSpaceInfill; }))
+                    extruder = region.config().negative_space_infill_filament_id;
                 else
                     extruder = region.config().internal_solid_filament_id;
             } else {
@@ -759,6 +763,7 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
             bool has_internal_solid     = false;
             bool has_top_solid_surface  = false;
             bool has_bottom_surface     = false;
+            bool has_negative_space     = false;
             bool something_nonoverriddable = false;
             for (const ExtrusionEntity *ee : layerm->fills.entities) {
                 // fill represents infill extrusions of a single island.
@@ -768,6 +773,8 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                     has_top_solid_surface = true;
                 else if (role == erBottomSurface)
                     has_bottom_surface = true;
+                else if (role == erNegativeSpaceInfill)
+                    has_negative_space = true;
                 else if (is_solid_infill(role))
                     has_internal_solid = true;
                 else if (role != erNone)
@@ -789,10 +796,12 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
                         layer_tools.extruders.emplace_back(region.config().bottom_surface_filament_id);
 	                if (has_infill)
 	                    layer_tools.extruders.emplace_back(region.config().sparse_infill_filament_id);
-                } else if (has_internal_solid || has_top_solid_surface || has_bottom_surface || has_infill)
+                    if (has_negative_space)
+                        layer_tools.extruders.emplace_back(region.config().negative_space_infill_filament_id);
+                } else if (has_internal_solid || has_top_solid_surface || has_bottom_surface || has_infill || has_negative_space)
             		layer_tools.extruders.emplace_back(extruder_override);
             }
-            if (has_internal_solid || has_top_solid_surface || has_bottom_surface || has_infill)
+            if (has_internal_solid || has_top_solid_surface || has_bottom_surface || has_infill || has_negative_space)
                 layer_tools.has_object = true;
         }
         layerCount++;
@@ -1641,7 +1650,8 @@ bool WipingExtrusions::is_overriddable(const ExtrusionEntityCollection& eec, con
     if (!object.config().flush_into_infill || eec.role() != erInternalInfill)
         return false;
 
-    return true;
+    // Orca: the sparse lines around negative space infill keep their filament, which sets them apart from it.
+    return PrintRegion::negative_space_infill_filament(print_config, region.config()) == 0;
 }
 
 // BBS

@@ -323,6 +323,7 @@ std::vector<std::set<int>> PrintObject::detect_extruder_geometric_unprintables()
                 int top_surface_filament_id = region.config().top_surface_filament_id;
                 int bottom_surface_filament_id = region.config().bottom_surface_filament_id;
                 int sparse_infill_filament_id = region.config().sparse_infill_filament_id;
+                int negative_space_filament_id = int(PrintRegion::negative_space_infill_filament(m_print->config(), region.config()));
 
                 if (!layerm->fills.entities.empty()) {
                     if (internal_solid_filament_id > 0)
@@ -333,6 +334,8 @@ std::vector<std::set<int>> PrintObject::detect_extruder_geometric_unprintables()
                         geometric_unprintables[extruder_id].insert(bottom_surface_filament_id - 1);
                     if (sparse_infill_filament_id > 0)
                         geometric_unprintables[extruder_id].insert(sparse_infill_filament_id - 1);
+                    if (negative_space_filament_id > 0)
+                        geometric_unprintables[extruder_id].insert(negative_space_filament_id - 1);
                 }
                 if (!layerm->perimeters.entities.empty()) {
                     if (outer_wall_filament_id > 0)
@@ -370,6 +373,7 @@ std::vector<std::set<int>> PrintObject::detect_extruder_geometric_unprintables()
                     int top_surface_filament_id = region.config().top_surface_filament_id;
                     int bottom_surface_filament_id = region.config().bottom_surface_filament_id;
                     int sparse_infill_filament_id = region.config().sparse_infill_filament_id;
+                    int negative_space_filament_id = int(PrintRegion::negative_space_infill_filament(m_print->config(), region.config()));
                     std::optional<ExPolygons> fill_expolys;
                     BoundingBox fill_bbox;
                     std::optional<ExPolygons> wall_expolys;
@@ -379,13 +383,15 @@ std::vector<std::set<int>> PrintObject::detect_extruder_geometric_unprintables()
                         bool do_infill_filament_detect = (internal_solid_filament_id > 0 && tbb_geometric_unprintables[idx].count(internal_solid_filament_id - 1) == 0) ||
                             (top_surface_filament_id > 0 && tbb_geometric_unprintables[idx].count(top_surface_filament_id - 1) == 0) ||
                             (bottom_surface_filament_id > 0 && tbb_geometric_unprintables[idx].count(bottom_surface_filament_id - 1) == 0) ||
-                            (sparse_infill_filament_id > 0 && tbb_geometric_unprintables[idx].count(sparse_infill_filament_id-1) == 0);
+                            (sparse_infill_filament_id > 0 && tbb_geometric_unprintables[idx].count(sparse_infill_filament_id-1) == 0) ||
+                            (negative_space_filament_id > 0 && tbb_geometric_unprintables[idx].count(negative_space_filament_id - 1) == 0);
 
                         bool infill_unprintable = !layerm->fills.entities.empty() &&
                             ((internal_solid_filament_id > 0 && tbb_geometric_unprintables[idx].count(internal_solid_filament_id - 1) > 0) ||
                                 (top_surface_filament_id > 0 && tbb_geometric_unprintables[idx].count(top_surface_filament_id - 1) > 0) ||
                                 (bottom_surface_filament_id > 0 && tbb_geometric_unprintables[idx].count(bottom_surface_filament_id - 1) > 0) ||
-                                (sparse_infill_filament_id > 0 && tbb_geometric_unprintables[idx].count(sparse_infill_filament_id - 1) > 0));
+                                (sparse_infill_filament_id > 0 && tbb_geometric_unprintables[idx].count(sparse_infill_filament_id - 1) > 0) ||
+                                (negative_space_filament_id > 0 && tbb_geometric_unprintables[idx].count(negative_space_filament_id - 1) > 0));
 
                         if (!layerm->fills.entities.empty() && do_infill_filament_detect) {
                             if (!fill_expolys) {
@@ -402,6 +408,8 @@ std::vector<std::set<int>> PrintObject::detect_extruder_geometric_unprintables()
                                     tbb_geometric_unprintables[idx].insert(bottom_surface_filament_id - 1);
                                 if (sparse_infill_filament_id > 0)
                                     tbb_geometric_unprintables[idx].insert(sparse_infill_filament_id - 1);
+                                if (negative_space_filament_id > 0)
+                                    tbb_geometric_unprintables[idx].insert(negative_space_filament_id - 1);
                                 infill_unprintable = true;
                             }
                         }
@@ -1328,6 +1336,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "internal_solid_filament_id"
             || opt_key == "top_surface_filament_id"
             || opt_key == "bottom_surface_filament_id"
+            || opt_key == "negative_space_infill_filament_id"
             || opt_key == "sparse_infill_line_width"
             || opt_key == "skin_infill_line_width"
             || opt_key == "skeleton_infill_line_width"
@@ -2563,7 +2572,9 @@ void PrintObject::bridge_over_infill()
                     // initially consider the whole layer unsupported, but also gather solid layers to later cut off supported parts
                     unsupported_area.insert(unsupported_area.end(), fill_polys.begin(), fill_polys.end());
                     for (const Surface &surface : region->fill_surfaces) {
-                        if (surface.surface_type != stInternal || region->region().config().sparse_infill_density.value == 100) {
+                        if (surface.surface_type != stInternal || region->region().config().sparse_infill_density.value == 100 ||
+                            // Orca: a sparse infill with negative space infill prints solid.
+                            PrintRegion::negative_space_infill_filament(po->print()->config(), region->region().config()) > 0) {
                             Polygons p = to_polygons(surface.expolygon);
                             lower_layer_solids.insert(lower_layer_solids.end(), p.begin(), p.end());
                         }
@@ -2873,7 +2884,8 @@ void PrintObject::bridge_over_infill()
                 break;
 
             for (const LayerRegion *region : layer->regions()) {
-                bool has_low_density = region->region().config().sparse_infill_density.value < 100;
+                bool has_low_density = region->region().config().sparse_infill_density.value < 100 &&
+                                       PrintRegion::negative_space_infill_filament(po->print()->config(), region->region().config()) == 0;
                 for (const Surface &surface : region->fill_surfaces) {
                     if ((surface.surface_type == stInternal && has_low_density) || surface.surface_type == stInternalVoid ) {
                         layers_sparse_infill.push_back(surface.expolygon);
@@ -3744,6 +3756,9 @@ PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &defau
     clamp_feature_filament_to_valid(config.internal_solid_filament_id, num_extruders);
     clamp_feature_filament_to_valid(config.top_surface_filament_id, num_extruders);
     clamp_feature_filament_to_valid(config.bottom_surface_filament_id, num_extruders);
+    // A filament past the last one turns negative space infill off, as 0 does.
+    if (config.negative_space_infill_filament_id.value < 0 || config.negative_space_infill_filament_id.value > int(num_extruders))
+        config.negative_space_infill_filament_id.value = 0;
     if (config.sparse_infill_density.value < 0.00011f)
         // Switch of infill for very low infill rates, also avoid division by zero in infill generator for these very low rates.
         // See GH issue #5910.
@@ -3812,7 +3827,8 @@ SlicingParameters PrintObject::slicing_parameters(const DynamicPrintConfig &full
 					range_and_config.second.has("sparse_infill_filament_id") ||
 					range_and_config.second.has("internal_solid_filament_id") ||
 					range_and_config.second.has("top_surface_filament_id") ||
-					range_and_config.second.has("bottom_surface_filament_id"))
+					range_and_config.second.has("bottom_surface_filament_id") ||
+					range_and_config.second.has("negative_space_infill_filament_id"))
 					PrintRegion::collect_object_printing_extruders(
 						print_config,
 						region_config_from_model_volume(default_region_config, &range_and_config.second.get(), *model_volume, filament_extruders),
@@ -4217,7 +4233,9 @@ void PrintObject::combine_infill()
         const PrintRegion &region = this->printing_region(region_id);
         //BBS
         const bool enable_combine_infill = region.config().infill_combination.value;
-        if (enable_combine_infill == false || region.config().sparse_infill_density == 0.)
+        if (enable_combine_infill == false || region.config().sparse_infill_density == 0. ||
+            // Orca: negative space infill fills the gaps of the sparse lines of each layer.
+            PrintRegion::negative_space_infill_filament(this->print()->config(), region.config()) > 0)
             continue;
 
         // Support internal solid infill when sparse_infill_density is 100%

@@ -499,6 +499,24 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
         }
     }
 
+    // Orca: negative space infill takes physical filaments only, and a filament that is missing or mixed turns it off.
+    if (auto *opt = dynamic_cast<ConfigOptionInt*>(config->option("negative_space_infill_filament_id", false)); opt != nullptr) {
+        const int                value    = opt->getInt();
+        const ConfigOptionBools *is_mixed = wxGetApp().preset_bundle->project_config.option<ConfigOptionBools>("filament_is_mixed");
+        const bool mixed = value > 0 && value <= filament_cnt && is_mixed != nullptr && size_t(value) <= is_mixed->values.size() && is_mixed->values[value - 1];
+        if (value > filament_cnt || mixed) {
+            DynamicPrintConfig new_conf = *config;
+            new_conf.set_key_value("negative_space_infill_filament_id", new ConfigOptionInt(0));
+            // A missing slot is reset silently like the other filament keys; a mixed slot tells the user why.
+            is_msg_dlg_already_exist = mixed;
+            if (mixed)
+                MessageDialog(m_msg_dlg_parent, _L("The negative space infill filament cannot be a mixed filament.\nReset to Disabled."), "",
+                              wxICON_WARNING | wxOK).ShowModal();
+            apply(config, &new_conf);
+            is_msg_dlg_already_exist = false;
+        }
+    }
+
     if (config->opt_enum<SeamScarfType>("seam_slope_type") != SeamScarfType::None &&
         config->get_abs_value("seam_slope_start_height") >= layer_height) {
         const wxString     msg_text = _(L("seam_slope_start_height need to be smaller than layer_height.\nReset to 0."));
@@ -667,6 +685,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     for (auto el : { "sparse_infill_pattern", "infill_combination", "fill_multiline","infill_direction",
         "minimum_sparse_infill_area", "sparse_infill_filament_id", "infill_anchor", "infill_anchor_max","infill_shift_step","sparse_infill_rotate_template","symmetric_infill_y_axis"})
         toggle_line(el, have_infill);
+    toggle_line("negative_space_infill_filament_id", have_infill && config->option<ConfigOptionPercent>("sparse_infill_density")->value < 100);
 
     bool have_combined_infill = config->opt_bool("infill_combination") && have_infill;
     toggle_line("infill_combination_max_layer_height", have_combined_infill);

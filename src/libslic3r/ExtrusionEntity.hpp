@@ -39,6 +39,8 @@ enum ExtrusionRole : uint8_t {
     erCustom,
     // Extrusion role for a collection with multiple extrusion roles.
     erMixed,
+    // Orca: solid fill of the gaps between the sparse infill lines, printed with its own filament.
+    erNegativeSpaceInfill,
     erCount
 };
 
@@ -78,7 +80,8 @@ inline bool is_infill(ExtrusionRole role)
         || role == erSolidInfill
         || role == erTopSolidInfill
         || role == erBottomSurface
-        || role == erIroning;
+        || role == erIroning
+        || role == erNegativeSpaceInfill;
 }
 
 inline bool is_top_surface(ExtrusionRole role)
@@ -93,7 +96,8 @@ inline bool is_solid_infill(ExtrusionRole role)
         || role == erSolidInfill
         || role == erTopSolidInfill
         || role == erBottomSurface
-        || role == erIroning;
+        || role == erIroning
+        || role == erNegativeSpaceInfill;
 }
 
 inline bool is_bridge(ExtrusionRole role) {

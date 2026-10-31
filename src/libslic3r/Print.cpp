@@ -1283,6 +1283,13 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
         }
     }
 
+    // Orca: negative space infill takes physical filaments only.
+    for (const PrintObject *object : m_objects)
+        for (const PrintRegion &region : object->all_regions())
+            if (const unsigned int filament = PrintRegion::negative_space_infill_filament(m_config, region.config());
+                filament > 0 && filament <= m_config.filament_is_mixed.values.size() && m_config.filament_is_mixed.values[filament - 1])
+                return { L("The negative space infill filament cannot be a mixed filament."), object, "negative_space_infill_filament_id" };
+
     if (nozzles < 2 && extruders.size() > 1) {
         auto ret = check_multi_filament_valid(*this);
         if (!ret.string.empty())

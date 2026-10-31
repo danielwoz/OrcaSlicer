@@ -6530,7 +6530,7 @@ bool GCode::_needSAFC(const ExtrusionPath &path)
 
     return std::any_of(std::begin(supported_patterns), std::end(supported_patterns), [&](const InfillPattern pattern) {
         return (this->on_first_layer() && this->config().bottom_surface_pattern == pattern) ||
-               (path.role() == erSolidInfill && this->config().internal_solid_infill_pattern == pattern) ||
+               ((path.role() == erSolidInfill || path.role() == erNegativeSpaceInfill) && this->config().internal_solid_infill_pattern == pattern) ||
                (path.role() == erTopSolidInfill && this->config().top_surface_pattern == pattern);
     });
 }
@@ -6639,7 +6639,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             acceleration = m_config.get_abs_value("bridge_acceleration");
         } else if (m_config.get_abs_value("sparse_infill_acceleration") > 0 && (path.role() == erInternalInfill)) {
             acceleration = m_config.get_abs_value("sparse_infill_acceleration");
-        } else if (m_config.get_abs_value("internal_solid_infill_acceleration") > 0 && (path.role() == erSolidInfill)) {
+        } else if (m_config.get_abs_value("internal_solid_infill_acceleration") > 0 && (path.role() == erSolidInfill || path.role() == erNegativeSpaceInfill)) {
             acceleration = m_config.get_abs_value("internal_solid_infill_acceleration");
         } else if (m_config.outer_wall_acceleration.value > 0 && is_external_perimeter(path.role())) {
             acceleration = m_config.outer_wall_acceleration.value;
@@ -6706,7 +6706,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             _mm3_per_mm *= m_config.overhang_flow_ratio;
         } else if (path.role() == erInternalInfill) {
             _mm3_per_mm *= m_config.sparse_infill_flow_ratio;
-        } else if (path.role() == erSolidInfill) {
+        } else if (path.role() == erSolidInfill || path.role() == erNegativeSpaceInfill) {
             _mm3_per_mm *= m_config.internal_solid_infill_flow_ratio;
         } else if (path.role() == erGapFill) {
             _mm3_per_mm *= m_config.gap_fill_flow_ratio;
@@ -6755,7 +6755,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             speed = m_config.get_abs_value("bridge_speed");
         } else if (path.role() == erInternalInfill) {
             speed = m_config.get_abs_value("sparse_infill_speed");
-        } else if (path.role() == erSolidInfill) {
+        } else if (path.role() == erSolidInfill || path.role() == erNegativeSpaceInfill) {
             speed = m_config.get_abs_value("internal_solid_infill_speed");
         } else if (path.role() == erTopSolidInfill) {
             speed = m_config.get_abs_value("top_surface_speed");
@@ -7493,6 +7493,7 @@ std::string GCode::extrusion_role_to_string_for_parser(const ExtrusionRole & rol
         case erOverhangPerimeter: return "OverhangPerimeter";
         case erInternalInfill: return "InternalInfill";
         case erSolidInfill: return "SolidInfill";
+        case erNegativeSpaceInfill: return "NegativeSpaceInfill";
         case erTopSolidInfill: return "TopSolidInfill";
         case erBottomSurface: return "BottomSurface";
         case erBridgeInfill:

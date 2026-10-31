@@ -385,7 +385,7 @@ public:
         EGCodeExtrusionRole::WipeTower, EGCodeExtrusionRole::Custom,
         // ORCA
         EGCodeExtrusionRole::BottomSurface, EGCodeExtrusionRole::InternalBridgeInfill, EGCodeExtrusionRole::Brim,
-        EGCodeExtrusionRole::SupportTransition, EGCodeExtrusionRole::Mixed
+        EGCodeExtrusionRole::SupportTransition, EGCodeExtrusionRole::Mixed, EGCodeExtrusionRole::NegativeSpaceInfill
     }) const;
     //
     // Return the size of the used cpu memory, in bytes

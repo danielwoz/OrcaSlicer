@@ -8,6 +8,9 @@ namespace Slic3r {
 class FillConcentricInternal : public Fill
 {
 public:
+    // Narrowest bead, as a share of the nozzle diameter, that the fill prints without widening it.
+    static constexpr double min_bead_width_ratio = 0.85;
+
     ~FillConcentricInternal() override = default;
     void fill_surface_extrusion(const Surface *surface, const FillParams &params, ExtrusionEntitiesPtr &out) override;
     bool is_self_crossing() override { return false; }

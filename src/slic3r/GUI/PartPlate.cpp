@@ -1507,6 +1507,22 @@ int PartPlate::picking_id_component(int idx) const
     return this->m_plate_index * GRABBER_COUNT + idx;
 }
 
+// 1-based filament printing the negative space infill of an object, 0 when it prints none. A value set on the object,
+// 0 included, overrides the global one.
+static int object_negative_space_filament(const DynamicPrintConfig &global_config, const ModelObject &object)
+{
+    const auto effective = [&](const char *key) {
+        const ConfigOption *option = object.config.option(key);
+        return option != nullptr ? option : global_config.option(key);
+    };
+    const ConfigOption *filament = effective("negative_space_infill_filament_id");
+    const ConfigOption *density  = effective("sparse_infill_density");
+    const ConfigOption *spiral   = global_config.option("spiral_mode");
+    if (filament == nullptr || density == nullptr || (spiral != nullptr && spiral->getBool()))
+        return 0;
+    return density->getFloat() > 0. && density->getFloat() < 100. ? filament->getInt() : 0;
+}
+
 std::vector<int> PartPlate::get_extruders(bool conside_custom_gcode) const
 {
 	std::vector<int> plate_extruders;
@@ -1650,6 +1666,8 @@ std::vector<int> PartPlate::get_extruders(bool conside_custom_gcode) const
 		else if (glb_bottom_surface_extr != 0)
 			plate_extruders.push_back(glb_bottom_surface_extr);
 
+		if (const int id = object_negative_space_filament(glb_config, *mo); id > 0)
+			plate_extruders.push_back(id);
 	}
 
 	if (conside_custom_gcode) {
@@ -1823,6 +1841,9 @@ std::vector<int> PartPlate::get_extruders_under_cli(bool conside_custom_gcode, D
 				plate_extruders.push_back(obj_bottom_surface_extr);
 			else if (glb_bottom_surface_extr != 0)
 				plate_extruders.push_back(glb_bottom_surface_extr);
+
+			if (const int id = object_negative_space_filament(full_config, *object); id > 0)
+				plate_extruders.push_back(id);
         }
     }
 

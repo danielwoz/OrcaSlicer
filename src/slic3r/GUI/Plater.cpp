@@ -830,6 +830,9 @@ std::vector<int> get_min_flush_volumes(const DynamicPrintConfig &full_config, si
 
 struct DynamicFilamentList : DynamicList
 {
+    // zero_disables: index 0 turns the option off instead of using the object/part filament.
+    explicit DynamicFilamentList(bool zero_disables = false) : zero_disables(zero_disables) {}
+    bool zero_disables;
     std::vector<std::pair<wxString, wxBitmap *>> items;
 
     void apply_on(Choice *c) override
@@ -840,7 +843,7 @@ struct DynamicFilamentList : DynamicList
         wxString old_selection = cb->GetStringSelection();
         int old_index  = cb->GetSelection();
         cb->Clear();
-        cb->Append(_L("Default"));
+        cb->Append(zero_disables ? _L("Disabled") : _L("Default"));
         for (auto i : items) {
             cb->Append(i.first, i.second ? *i.second : wxNullBitmap);
         }
@@ -877,11 +880,16 @@ struct DynamicFilamentList : DynamicList
             return;
         auto icons = get_extruder_color_icons(true);
         auto presets = wxGetApp().preset_bundle->filament_presets;
+        // The zero_disables list (negative space infill) takes physical filaments only, so mixed slots are marked.
+        // They stay listed so that the combo index remains the slot number.
+        const ConfigOptionBools *is_mixed = zero_disables ? wxGetApp().preset_bundle->project_config.option<ConfigOptionBools>("filament_is_mixed") : nullptr;
         for (int i = 0; i < presets.size(); ++i) {
             wxString str;
             std::string type;
             wxGetApp().preset_bundle->filaments.find_preset(presets[i])->get_filament_type(type);
             str << type;
+            if (is_mixed != nullptr && size_t(i) < is_mixed->values.size() && is_mixed->values[i])
+                str << " (" << _L("mixed, not supported") << ")";
             items.push_back({str, i < icons.size() ? icons[i] : nullptr});
         }
         DynamicList::update();
@@ -904,6 +912,7 @@ static bool has_junction_deviation(const DynamicPrintConfig* printer_config)
 }
 
 static DynamicFilamentList dynamic_filament_list;
+static DynamicFilamentList dynamic_negative_space_filament_list(true); // slot 0 disables negative space infill
 
 class AMSCountPopupWindow : public PopupWindow
 {
@@ -1614,6 +1623,7 @@ Sidebar::Sidebar(Plater *parent)
     Choice::register_dynamic_list("inner_wall_filament_id", &dynamic_filament_list);
     Choice::register_dynamic_list("surface_wall_override_filament", &dynamic_filament_list);
     Choice::register_dynamic_list("sparse_infill_filament_id", &dynamic_filament_list);
+    Choice::register_dynamic_list("negative_space_infill_filament_id", &dynamic_negative_space_filament_list);
     Choice::register_dynamic_list("internal_solid_filament_id", &dynamic_filament_list);
     Choice::register_dynamic_list("top_surface_filament_id", &dynamic_filament_list);
     Choice::register_dynamic_list("bottom_surface_filament_id", &dynamic_filament_list);
@@ -3151,6 +3161,7 @@ void Sidebar::on_filaments_delete(size_t filament_id)
     p->m_panel_filament_title->Refresh();
     update_ui_from_settings();
     dynamic_filament_list.update();
+    dynamic_negative_space_filament_list.update();
 }
 
 void Sidebar::add_filament() {
@@ -3504,6 +3515,7 @@ void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
             wxGetApp().get_tab(Preset::TYPE_FILAMENT)->select_preset(wxGetApp().preset_bundle->filament_presets[0], false, "", false, true);
             wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
             dynamic_filament_list.update();
+            dynamic_negative_space_filament_list.update();
         }
         m_sync_dlg->set_check_dirty_fialment(false);
         dlg_res = m_sync_dlg->ShowModal();
@@ -3730,6 +3742,7 @@ void Sidebar::show_SEMM_buttons()
 void Sidebar::update_dynamic_filament_list()
 {
     dynamic_filament_list.update();
+    dynamic_negative_space_filament_list.update();
 }
 
 PlaterPresetComboBox* Sidebar::printer_combox()
@@ -4883,7 +4896,8 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
         "extruder_colour", "filament_colour", "filament_type", "material_colour", "printable_height", "extruder_printable_height", "printer_model", "printer_technology",
         // These values are necessary to construct SlicingParameters by the Canvas3D variable layer height editor.
         "layer_height", "initial_layer_print_height", "min_layer_height", "max_layer_height",
-        "wall_loops", "outer_wall_filament_id", "inner_wall_filament_id", "surface_wall_override_filament", "outer_wall_count", "sparse_infill_density", "sparse_infill_filament_id", "top_shell_layers",
+        "wall_loops", "outer_wall_filament_id", "inner_wall_filament_id", "surface_wall_override_filament", "outer_wall_count", "sparse_infill_density", "sparse_infill_filament_id",
+        "negative_space_infill_filament_id", "top_shell_layers",
         "enable_support", "support_filament", "support_interface_filament",
         "support_top_z_distance", "support_bottom_z_distance", "raft_layers",
         "wipe_tower_rotation_angle", "wipe_tower_cone_angle", "wipe_tower_extra_spacing", "wipe_tower_extra_flow", "wipe_tower_max_purge_speed",
@@ -16680,7 +16694,7 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
         else if (opt_key == "support_interface_filament" || opt_key == "support_filament" ||
                  opt_key == "outer_wall_filament_id" || opt_key == "inner_wall_filament_id" ||
                  opt_key == "surface_wall_override_filament" || opt_key == "outer_wall_count" ||
-                 opt_key == "sparse_infill_filament_id" || opt_key == "internal_solid_filament_id" ||
+                 opt_key == "sparse_infill_filament_id" || opt_key == "negative_space_infill_filament_id" || opt_key == "internal_solid_filament_id" ||
                  opt_key == "top_surface_filament_id" || opt_key == "bottom_surface_filament_id") {
             update_scheduled = true;
         }

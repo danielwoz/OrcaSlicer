@@ -272,6 +272,11 @@ struct SurfaceFillParams
     // For Gyroid: when true, use the parameterized "optimized" wave.
     bool gyroid_optimized = false;
 
+    // Orca: 1-based filament filling the gaps between the sparse lines of this fill, 0 when they stay empty, and the
+    // region whose internal solid infill settings fill them, so that no two such regions are merged.
+    unsigned int negative_space_filament = 0;
+    size_t       negative_space_region   = 0;
+
 	bool operator<(const SurfaceFillParams &rhs) const {
 #define RETURN_COMPARE_NON_EQUAL(KEY) if (this->KEY < rhs.KEY) return true; if (this->KEY > rhs.KEY) return false;
 #define RETURN_COMPARE_NON_EQUAL_TYPED(TYPE, KEY) if (TYPE(this->KEY) < TYPE(rhs.KEY)) return true; if (TYPE(this->KEY) > TYPE(rhs.KEY)) return false;
@@ -303,6 +308,8 @@ struct SurfaceFillParams
 		RETURN_COMPARE_NON_EQUAL(infill_lock_depth);
 		RETURN_COMPARE_NON_EQUAL(skin_infill_depth);		RETURN_COMPARE_NON_EQUAL(infill_overhang_angle);
 		RETURN_COMPARE_NON_EQUAL(gyroid_optimized);
+		RETURN_COMPARE_NON_EQUAL(negative_space_filament);
+		RETURN_COMPARE_NON_EQUAL(negative_space_region);
 
 		return false;
 	}
@@ -329,7 +336,9 @@ struct SurfaceFillParams
 				this->infill_lock_depth       == rhs.infill_lock_depth       &&
 				this->skin_infill_depth       == rhs.skin_infill_depth       &&
                 this->infill_overhang_angle   == rhs.infill_overhang_angle   &&
-                this->gyroid_optimized        == rhs.gyroid_optimized;
+                this->gyroid_optimized        == rhs.gyroid_optimized        &&
+                this->negative_space_filament == rhs.negative_space_filament &&
+                this->negative_space_region   == rhs.negative_space_region;
 	}
 };
 
@@ -826,6 +835,45 @@ void split_solid_surface(size_t layer_id, const SurfaceFill &fill, ExPolygons &n
 #endif
 }
 
+// BBS: detect narrow internal solid infill area and use ipConcentricInternal pattern instead
+static void split_narrow_internal_solid_fills(const Layer &layer, std::vector<SurfaceFill> &surface_fills, size_t first)
+{
+	if (! layer.object()->config().detect_narrow_internal_solid_infill)
+		return;
+	const size_t surface_fills_size = surface_fills.size();
+	for (size_t i = first; i < surface_fills_size; i++) {
+		if (surface_fills[i].surface.surface_type != stInternalSolid)
+			continue;
+
+		ExPolygons normal_infill;
+        ExPolygons narrow_infill;
+        split_solid_surface(layer.id(), surface_fills[i], normal_infill, narrow_infill);
+
+		if (narrow_infill.empty()) {
+			// BBS: has no narrow expolygon
+			continue;
+		} else if (normal_infill.empty()) {
+			// BBS: all expolygons are narrow, directly change the fill pattern
+			surface_fills[i].params.pattern = ipConcentricInternal;
+		}
+		else {
+			// BBS: some expolygons are narrow, spilit surface_fills[i] and rearrange the expolygons
+			SurfaceFillParams params = surface_fills[i].params;
+			params.pattern = ipConcentricInternal;
+			surface_fills.emplace_back(params);
+			surface_fills.back().region_id = surface_fills[i].region_id;
+			surface_fills.back().surface.surface_type = stInternalSolid;
+			surface_fills.back().surface.thickness = surface_fills[i].surface.thickness;
+            surface_fills.back().region_id_group       = surface_fills[i].region_id_group;
+            surface_fills.back().no_overlap_expolygons = surface_fills[i].no_overlap_expolygons;
+		    // BBS: move the narrow expolygons to new surface_fills.back();
+		    surface_fills.back().expolygons = std::move(narrow_infill);
+		    // BBS: delete the narrow expolygons from old surface_fills
+            surface_fills[i].expolygons = std::move(normal_infill);
+		}
+	}
+}
+
 std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_param)
 {
 	std::vector<SurfaceFill> surface_fills;
@@ -924,6 +972,10 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                     params.extruder = region_config.internal_solid_filament_id;
                 // Orca: apply fill multiline only for sparse infill
                 params.multiline = params.extrusion_role == erInternalInfill ? int(region_config.fill_multiline) : 1;
+                // Orca: only a sparse infill leaves gaps for negative space infill; reset otherwise, as params is reused.
+                params.negative_space_filament = params.extrusion_role == erInternalInfill ?
+                    PrintRegion::negative_space_infill_filament(layer.object()->print()->config(), region_config) : 0;
+                params.negative_space_region   = params.negative_space_filament > 0 ? region_id : 0;
 
                 // Pass through gyroid_optimized only when the effective pattern is Gyroid,
                 // so non-Gyroid fills do not differ in SurfaceFillParams by an irrelevant flag
@@ -1149,43 +1201,56 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 		}
     }
 
-	// BBS: detect narrow internal solid infill area and use ipConcentricInternal pattern instead
-	if (layer.object()->config().detect_narrow_internal_solid_infill) {
-		size_t surface_fills_size = surface_fills.size();
-		for (size_t i = 0; i < surface_fills_size; i++) {
-			if (surface_fills[i].surface.surface_type != stInternalSolid)
-				continue;
-
-			ExPolygons normal_infill;
-            ExPolygons narrow_infill;
-            split_solid_surface(layer.id(), surface_fills[i], normal_infill, narrow_infill);
-
-			if (narrow_infill.empty()) {
-				// BBS: has no narrow expolygon
-				continue;
-			} else if (normal_infill.empty()) {
-				// BBS: all expolygons are narrow, directly change the fill pattern
-				surface_fills[i].params.pattern = ipConcentricInternal;
-			}
-			else {
-				// BBS: some expolygons are narrow, spilit surface_fills[i] and rearrange the expolygons
-				params = surface_fills[i].params;
-				params.pattern = ipConcentricInternal;
-				surface_fills.emplace_back(params);
-				surface_fills.back().region_id = surface_fills[i].region_id;
-				surface_fills.back().surface.surface_type = stInternalSolid;
-				surface_fills.back().surface.thickness = surface_fills[i].surface.thickness;
-                surface_fills.back().region_id_group       = surface_fills[i].region_id_group;
-                surface_fills.back().no_overlap_expolygons = surface_fills[i].no_overlap_expolygons;
-			    // BBS: move the narrow expolygons to new surface_fills.back();
-			    surface_fills.back().expolygons = std::move(narrow_infill);
-			    // BBS: delete the narrow expolygons from old surface_fills
-                surface_fills[i].expolygons = std::move(normal_infill);
-			}
-		}
-	}
+	split_narrow_internal_solid_fills(layer, surface_fills, 0);
 
 	return surface_fills;
+}
+
+// Orca: Solid fill, in the negative space infill filament, of the gaps the lines of a sparse fill leave. They are laid out
+// as the region's internal solid infill, over the nozzle of the negative space infill filament, with narrow parts split off
+// to the concentric fill.
+static void append_negative_space_fills(const Layer &layer, const SurfaceFill &sparse, ExPolygons &&gaps, std::vector<SurfaceFill> &out)
+{
+    const PrintObject       &object        = *layer.object();
+    const PrintConfig       &print_config  = object.print()->config();
+    const PrintRegion       &region        = layer.regions()[sparse.region_id]->region();
+    const PrintRegionConfig &region_config = region.config();
+
+    // Parts narrower than the narrowest bead the concentric fill prints without widening it would be over-extruded
+    // onto the sparse lines. The opening works on the outlines: a sparse loop left open at its seam joins the area it
+    // encloses to the gap around it, and an ExPolygon offset would drop that area once the seam closes.
+    const double min_nozzle_diameter = *std::min_element(print_config.nozzle_diameter.values.begin(), print_config.nozzle_diameter.values.end());
+    gaps = union_ex(opening(to_polygons(std::move(gaps)), float(scale_(0.5 * FillConcentricInternal::min_bead_width_ratio * min_nozzle_diameter))));
+    if (gaps.empty())
+        return;
+
+    SurfaceFillParams params;
+    params.extruder       = sparse.params.negative_space_filament;
+    params.pattern        = region_config.internal_solid_infill_pattern.value;
+    params.density        = 100.f;
+    params.bridge         = false;
+    params.extrusion_role = erNegativeSpaceInfill;
+    params.angle          = float(calculate_infill_rotation_angle(&object, layer.id(), region_config.solid_infill_direction.value,
+                                                                  region_config.solid_infill_rotate_template.value));
+    params.fixed_angle    = ! region_config.solid_infill_rotate_template.value.empty();
+    if (region_config.align_infill_direction_to_model) {
+        const auto m = object.trafo().matrix();
+        params.angle += atan2((float)m(1, 0), (float)m(0, 0));
+    }
+    const double thickness   = sparse.surface.thickness == -1 ? layer.height : sparse.surface.thickness;
+    params.flow              = region.flow(object, frSolidInfill, thickness, layer.id() == 0, params.extruder);
+    params.spacing           = params.flow.spacing();
+
+    SurfaceFill &fill             = out.emplace_back(params);
+    fill.region_id                = sparse.region_id;
+    fill.region_id_group          = sparse.region_id_group;
+    // Internal solid flow, gap fill, elephant foot density and narrow split, as for internal solid infill.
+    fill.surface.surface_type     = stInternalSolid;
+    fill.surface.thickness        = thickness;
+    fill.surface.thickness_layers = sparse.surface.thickness_layers;
+    fill.no_overlap_expolygons    = sparse.no_overlap_expolygons;
+    fill.expolygons               = std::move(gaps);
+    split_narrow_internal_solid_fills(layer, out, out.size() - 1);
 }
 
 #ifdef SLIC3R_DEBUG_SLICE_PROCESSING
@@ -1231,7 +1296,10 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
 	}
 #endif /* SLIC3R_DEBUG_SLICE_PROCESSING */
 
-    for (SurfaceFill &surface_fill : surface_fills) {
+    // Orca: the first pass also collects the gaps the sparse fills leave, the second pass fills them.
+    std::vector<SurfaceFill> negative_space_fills;
+    for (std::vector<SurfaceFill> *pass : { &surface_fills, &negative_space_fills })
+    for (SurfaceFill &surface_fill : *pass) {
         // Create the filler object.
         std::unique_ptr<Fill> f = std::unique_ptr<Fill>(Fill::new_from_type(surface_fill.params.pattern));
         f->set_bounding_box(bbox);
@@ -1323,9 +1391,14 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
         }
 		if (surface_fill.params.pattern == ipGrid)
 			params.can_reverse = false;
+        // Orca: the area a sparse fill with negative space infill leaves empty.
+        const bool has_negative_space = surface_fill.params.extrusion_role == erInternalInfill && surface_fill.params.negative_space_filament > 0;
+        ExPolygons negative_space;
 		for (ExPolygon& expoly : surface_fill.expolygons) {
 
       f->no_overlap_expolygons = intersection_ex(surface_fill.no_overlap_expolygons, ExPolygons() = {expoly}, ApplySafetyOffset::Yes);
+            // The fill returns its lines unmirrored, so their gaps are cut from the unmirrored area.
+            const ExPolygon sparse_area = has_negative_space ? expoly : ExPolygon();
             if (params.symmetric_infill_y_axis) {
                 params.symmetric_y_axis = f->extended_object_bounding_box().center().x();
                 expoly.symmetric_y(params.symmetric_y_axis);
@@ -1375,7 +1448,16 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                             child->extruder_override = ov;
                 }
             }
+            if (has_negative_space) {
+                // Each sparse line covers its spacing, so the gaps meet it as a neighbouring solid infill line would.
+                Polygons covered;
+                for (size_t i = fill_entities_before; i < fill_entities.size(); ++ i)
+                    fill_entities[i]->polygons_covered_by_spacing(covered, 10.f);
+                append(negative_space, diff_ex(sparse_area, covered));
+            }
 		}
+        if (! negative_space.empty())
+            append_negative_space_fills(*this, surface_fill, std::move(negative_space), negative_space_fills);
     }
 
     // add thin fill regions
