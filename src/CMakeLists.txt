@@ -176,6 +176,17 @@ if (MSVC AND ORCA_PLUGIN_VERIFY_REDIRECT)
     target_link_options(OrcaSlicer PRIVATE /FORCE:MULTIPLE /IGNORE:4006)
 endif ()
 
+if (WIN32 AND ORCA_PLUGIN_VERIFY_REDIRECT)
+    # Emit the studio DLL as BambuStudio.dll. The proprietary Bambu network plugin
+    # looks up the studio module by this exact name on its control-command signing
+    # path, so naming our forked DLL OrcaSlicer.dll connects but breaks control
+    # (e.g. filament color / AMS). The DLL's (missing) signature is handled by
+    # PluginVerifyRedirect; only the filename has to match. Default builds keep
+    # OrcaSlicer.dll/OrcaSlicer.pdb (the open-source plugin needs no rename, and
+    # the Windows CI PDB check expects OrcaSlicer.pdb).
+    set_target_properties(OrcaSlicer PROPERTIES OUTPUT_NAME "BambuStudio")
+endif ()
+
 if (NOT WIN32 AND NOT APPLE)
     # Binary name on unix like systems (Linux, Unix)
     set_target_properties(OrcaSlicer PROPERTIES OUTPUT_NAME "orca-slicer")

@@ -297,6 +297,19 @@ int wmain(int argc, wchar_t **argv)
     wcscat(path_to_slic3r, L"OrcaSlicer.dll");
 //	printf("Loading Slic3r library: %S\n", path_to_slic3r);
     HINSTANCE hInstance_Slic3r = LoadLibraryExW(path_to_slic3r, nullptr, 0);
+#ifdef ORCA_PLUGIN_VERIFY_REDIRECT
+    // Built for the proprietary plugin, the studio DLL is BambuStudio.dll, the genuine name the
+    // plugin looks up on its control-command signing path. Both names export orcaslicer_main.
+    // The error reported is the one of the attempt that found a DLL.
+    if (hInstance_Slic3r == nullptr) {
+        const DWORD error = GetLastError();
+        wcscpy(path_to_slic3r, path_to_exe);
+        wcscat(path_to_slic3r, L"BambuStudio.dll");
+        hInstance_Slic3r = LoadLibraryExW(path_to_slic3r, nullptr, 0);
+        if (hInstance_Slic3r == nullptr && GetLastError() == ERROR_MOD_NOT_FOUND)
+            SetLastError(error);
+    }
+#endif
     if (hInstance_Slic3r == nullptr) {
         printf("OrcaSlicer.dll was not loaded, error=%lu\n", GetLastError());
         return -1;
