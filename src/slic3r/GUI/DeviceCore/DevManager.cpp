@@ -298,6 +298,27 @@ namespace Slic3r
                 bind_state   = "free";
             }
 
+#ifdef ORCA_OSS_NETWORK_PLUGIN
+            // Orca: a cloud-bound printer that is reachable on the LAN and for which we already
+            // hold an access code is driven directly over LAN MQTT (bblp + access code), with no
+            // cloud broker involved. The OSS network plugin labels every bound printer "cloud",
+            // which makes the host take the cloud path (set_user_selected_machine); when the
+            // plugin cannot reach the cloud that path never connects, so the printer shows up but
+            // its status never loads. Relabel such printers to "lan" so set_selected_machine opens
+            // a direct LAN session instead. Guarded on a stored access code so genuinely
+            // cloud-only printers (no LAN credentials) stay on the cloud path.
+            if (connect_type == "cloud" && !dev_ip.empty()) {
+                AppConfig* config = get_app_config();
+                if (config && !get_access_code_with_legacy_fallback(config, dev_id, get_current_printer_agent_id()).empty()) {
+                    connect_type = "lan";
+                    // Treat it exactly like a discovered LAN printer: "free" so is_avaliable()
+                    // passes and the device picker shows it as IN_LAN (online) rather than a
+                    // locked/greyed cloud entry.
+                    bind_state   = "free";
+                }
+            }
+#endif
+
             std::string sec_link = "";
             std::string ssdp_version = "";
             if (j.contains("sec_link")) {
@@ -778,7 +799,17 @@ namespace Slic3r
         if (selected_machine.empty()) return nullptr;
 
         MachineObject* obj = get_user_machine(selected_machine, GUI::wxGetApp().get_printer_cloud_provider());
-        if (obj)
+#ifdef ORCA_OSS_NETWORK_PLUGIN
+        // Orca: a cloud-bound printer relabeled to LAN in on_machine_alive() still has a
+        // userMachineList (cloud) object, but its live LAN data (push_status / get_version) is
+        // routed by the message handlers to the localMachineList object via get_my_machine().
+        // Returning the cloud object would leave the monitor page on "Failed to connect" with no
+        // temperatures, so prefer the local object that receives the data.
+        const bool prefer_local = obj && obj->is_lan_mode_printer();
+#else
+        const bool prefer_local = false;
+#endif
+        if (obj && !prefer_local)
             return obj;
 
         // return local machine has access code
@@ -788,7 +819,8 @@ namespace Slic3r
             if (it->second->has_access_right())
                 return it->second;
         }
-        return nullptr;
+        // The cloud object, if any, when no local one has access.
+        return obj;
     }
 
     void DeviceManager::add_user_subscribe()

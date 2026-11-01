@@ -179,6 +179,48 @@ TEST_CASE("Device manager filters and rehomes devices by printer-agent ownership
     CHECK(manager.get_my_machine_list("integration-agent-b").count(machine.dev_id) == 1);
 }
 
+#ifdef ORCA_OSS_NETWORK_PLUGIN
+TEST_CASE("Device manager connects a LAN-reachable bound printer over LAN", "[DeviceManager][integration]")
+{
+    ScopedAppConfig app_config;
+    auto agent = std::make_shared<TestPrinterAgent>(BBL_PRINTER_AGENT_ID);
+    NetworkAgent network(nullptr, agent);
+    DeviceManager manager(&network, false, &app_config.config);
+
+    // The cloud bind list delivered an access code for this printer.
+    app_config.config.set_str("access_code", "bound-device", "12345678");
+
+    auto alive = [&](const std::string& dev_id, const std::string& dev_ip) {
+        json j;
+        j["dev_name"]     = dev_id;
+        j["dev_id"]       = dev_id;
+        j["dev_ip"]       = dev_ip;
+        j["dev_type"]     = "C11";
+        j["dev_signal"]   = "strong";
+        j["connect_type"] = "cloud";
+        j["bind_state"]   = "occupied";
+        manager.on_machine_alive(j.dump());
+    };
+    alive("bound-device", "192.0.2.20");
+    alive("cloud-only-device", "192.0.2.21"); // no access code
+    app_config.config.set_str("access_code", "unreachable-device", "87654321");
+    alive("unreachable-device", "");          // no LAN address
+
+    MachineObject* bound = manager.get_local_machine("bound-device");
+    REQUIRE(bound != nullptr);
+    CHECK(bound->is_lan_mode_printer());
+    CHECK(bound->is_avaliable());
+    CHECK(manager.get_my_machine_list(BBL_PRINTER_AGENT_ID).count("bound-device") == 1);
+
+    for (const char* dev_id : {"cloud-only-device", "unreachable-device"}) {
+        MachineObject* obj = manager.get_local_machine(dev_id);
+        REQUIRE(obj != nullptr);
+        CHECK(obj->is_cloud_mode_printer());
+        CHECK_FALSE(obj->is_avaliable());
+    }
+}
+#endif
+
 TEST_CASE("Device manager remembers the last selected machine per printer agent", "[DeviceManager][integration]")
 {
     ScopedAppConfig app_config;

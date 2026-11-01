@@ -49,7 +49,8 @@ set(_oss_staged_path "${CMAKE_SOURCE_DIR}/resources/plugins/${_oss_staged_main}"
 
 if (EXISTS "${_oss_staged_path}")
     message(STATUS "ORCA_OSS_NETWORK_PLUGIN: found pre-staged plugin v${ORCA_OSS_NETWORK_PLUGIN_VERSION} at ${_oss_staged_path} (will be bundled via resources/).")
-    # Used by GUI_App (provisioning + load) and PresetUpdater (download bypass).
+    # Used by GUI_App (provisioning + load), PresetUpdater (download bypass) and DevManager
+    # (LAN connection of bound printers).
     add_compile_definitions(ORCA_OSS_NETWORK_PLUGIN ORCA_OSS_NETWORK_PLUGIN_VERSION="${ORCA_OSS_NETWORK_PLUGIN_VERSION}")
 else()
     message(WARNING "ORCA_OSS_NETWORK_PLUGIN: no pre-staged plugin at ${_oss_staged_path}. The OrcaSlicer package will NOT bundle the OSS network plugin and keeps the proprietary network plugin download. CI stages it before configuring; for a local build, build open-bamboo-networking (--client-type=orca_slicer --with-version=${ORCA_OSS_NETWORK_PLUGIN_VERSION}), copy plugins/* into resources/plugins/ and configure again.")
