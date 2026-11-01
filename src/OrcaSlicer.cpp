@@ -2553,8 +2553,23 @@ int CLI::run(int argc, char **argv)
         }
     }
 
-    if (filament_count == 0)
+    // Grow the filament count to cover more loaded filaments than the project defines, so the
+    // per-filament arrays below are sized for every loaded filament instead of being overrun.
+    if (filament_count < load_filament_count) {
+        // The project's per-preset columns hold the process, one entry per filament and the printer
+        // last; the new filament slots go in before the printer column so it stays last.
+        if (filament_count > 0) {
+            auto grow_columns = [old_count = size_t(filament_count), new_count = size_t(load_filament_count)](std::vector<std::string> &columns) {
+                if (columns.size() == old_count + 2)
+                    columns.insert(columns.end() - 1, new_count - old_count, std::string());
+            };
+            grow_columns(current_different_settings);
+            for (const char *key : {"inherits_group", "different_settings_to_system"})
+                if (ConfigOptionStrings *columns = m_print_config.option<ConfigOptionStrings>(key))
+                    grow_columns(columns->values);
+        }
         filament_count = load_filament_count;
+    }
 
     if (is_bbl_3mf && (load_filament_count > 0) && (load_filaments_set.size() == 1))
     {
@@ -3874,6 +3889,15 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    // A loaded filament preset without filament_diameter leaves it shorter than the filament count.
+    // num_extruders is derived from its size, so pad it; otherwise every slot past its end is
+    // treated as filament 1.
+    if (filament_count > 0) {
+        std::vector<double> &filament_diameters = m_print_config.option<ConfigOptionFloats>("filament_diameter", true)->values;
+        if (filament_diameters.size() < size_t(filament_count))
+            filament_diameters.resize(filament_count, filament_diameters.empty() ? 1.75 : filament_diameters.back());
+    }
+
     //compute the flush volume
     ConfigOptionStrings *selected_filament_colors_option = m_extra_config.option<ConfigOptionStrings>("filament_colour");
     ConfigOptionStrings *project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour");
@@ -3951,8 +3975,14 @@ int CLI::run(int argc, char **argv)
 
             //computing
             ConfigOptionBools* filament_is_support = m_print_config.option<ConfigOptionBools>("filament_is_support", true);
+            // Filament presets without filament_is_support leave it shorter than the filament count.
+            if (filament_is_support->size() < project_filament_count)
+                filament_is_support->values.resize(project_filament_count, false);
 
-            const std::vector<int> &min_flush_volumes = Slic3r::GUI::get_min_flush_volumes(m_print_config, 0);
+            // Sized to filament_diameter, which may still be shorter than the palette.
+            std::vector<int> min_flush_volumes = Slic3r::GUI::get_min_flush_volumes(m_print_config, 0);
+            if (min_flush_volumes.size() < project_filament_count)
+                min_flush_volumes.resize(project_filament_count, min_flush_volumes.empty() ? 0 : min_flush_volumes.back());
 
             if (filament_is_support->size() != project_filament_count)
             {
