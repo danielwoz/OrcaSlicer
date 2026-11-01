@@ -1,0 +1,229 @@
+# Windows x64 build of OrcaSlicer with MSVC profile-guided optimisation, on one runner:
+#   1. build instrumented (-DORCA_PGO=generate: /GL and the linker's /GENPROFILE) and install it
+#   2. train: slice a self-contained project with the instrumented app, which writes *.pgc
+#   3. merge the *.pgc into the .pgd with pgomgr
+#   4. build optimised (-DORCA_PGO=use -DORCA_PGO_DATA=<pgd>) and package it
+#
+# MSVC PGO has its own profile format, so the profile is trained here on every run.
+# This builds with cl rather than the clang-cl of the release builds, and does not
+# build or bundle the OSS network plugin.
+name: Windows PGO build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-pgo:
+    name: Windows MSVC PGO
+    runs-on: ${{ vars.SELF_HOSTED && 'orca-win-server' || 'windows-latest' }}
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      # A small calibration project with embedded project settings: it slices headless
+      # without any profile setup and still runs slicing, perimeters and G-code export.
+      # The instrumented build is slow, and a dense multi-material project takes over an hour.
+      train_model: resources/calib/pressure_advance/pa_pattern.3mf
+      NSIS_VERSION: '3.13'
+      NSIS_SHA256: BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          lfs: 'false'
+
+      # SLIC3R_VULKAN=ON needs the Vulkan submodules. The other submodules back options this build leaves off.
+      - name: Init the Vulkan submodules
+        run: git submodule update --init deps_src/Vulkan-Headers deps_src/Vulkan-Loader
+
+      - uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "~4.3.0"  # use most recent 4.3.x version
+          useLocalCache: true
+          useCloudCache: true
+
+      - name: setup MSVC
+        uses: microsoft/setup-msbuild@v3
+
+      # The trees as build_orca.yml lays them out for Windows x64. The installed app in
+      # build/OrcaSlicer is what the training runs; the instrumented DLL and its .pgd are
+      # in the build tree's output directory.
+      - name: Set build variables
+        run: |
+          $ws = "${{ github.workspace }}".Replace('\', '/')
+          "DEPS_DIR=$ws/deps/build",
+          "PGO_DIR=$ws/build/src/Release",
+          "PGO_DATA=$ws/orca-windows.pgd",
+          "RUN_EXE=$ws/build/OrcaSlicer/orca-slicer.exe" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+
+      # pgort140.dll and pgomgr.exe come with the default VC toolset, the one the build uses.
+      - name: Locate the VC tools
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -nologo -products * -latest -property installationPath
+          $verFile = "$vs\VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
+          $ver = if (Test-Path $verFile) { (Get-Content $verFile -TotalCount 1).Trim() } else {
+            (Get-ChildItem "$vs\VC\Tools\MSVC" -Directory | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1).Name
+          }
+          $bin = "$vs\VC\Tools\MSVC\$ver\bin\Hostx64\x64"
+          foreach ($tool in 'pgort140.dll', 'pgomgr.exe') {
+            if (-not (Test-Path "$bin\$tool")) { throw "$tool not found in $bin" }
+          }
+          Write-Host "VC tools: $bin"
+          "VC_BIN=$bin" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+
+      # ---- dependencies: cl builds them, so they are cached apart from the clang-cl deps ----
+      # The key is the one build_check_cache.yml gives an msvc deps build. It is computed
+      # before the deps build, after which hashing deps/** takes longer than hashFiles allows.
+      - name: Deps cache key
+        id: deps_key
+        run: |
+          "key=windows-x64-msvc-cache-orcaslicer_deps-build-${{ hashFiles('deps/**') }}" | Out-File -Append -FilePath $env:GITHUB_OUTPUT -Encoding utf8
+
+      - name: Restore deps cache
+        id: deps_cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: ${{ steps.deps_key.outputs.key }}
+
+      - name: Build deps
+        if: steps.deps_cache.outputs.cache-hit != 'true'
+        run: |
+          if (-not "${{ vars.SELF_HOSTED }}") {
+            choco install strawberryperl
+          }
+          .\build_win.bat -d --msvc --msbuild --arch x64 --deps-dir $env:DEPS_DIR
+
+      # Saved straight away, so a later failure does not lose an hour of deps build.
+      - name: Save deps cache
+        if: steps.deps_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: ${{ steps.deps_key.outputs.key }}
+
+      # ================= Phase 1: instrumented build =================
+      # -i installs a runnable app (resources, DLLs, vulkan-1.dll) into build/OrcaSlicer.
+      - name: Build instrumented
+        run: |
+          $env:ORCA_SLICER_CMAKE_ARGS = '-DSLIC3R_VULKAN=ON -DORCA_PGO=generate'
+          .\build_win.bat -s -i --msvc --msbuild --arch x64 --build-dir build --deps-dir $env:DEPS_DIR
+
+      # The instrumented DLL imports the PGO runtime, which is not on the app's DLL search path.
+      - name: Stage the PGO runtime
+        run: Copy-Item "$env:VC_BIN\pgort140.dll" (Split-Path $env:RUN_EXE) -Force
+
+      # The instrumented app writes the *.pgc when it exits cleanly; VCPROFILE_PATH puts them
+      # next to the .pgd. ORCA_CLI_SKIP_GL_THUMBNAILS skips the OpenGL probe and the thumbnail
+      # rendering, which can block on a runner without a display. The instrumented slice is
+      # slow, hence the long timeout.
+      - name: Train (slice)
+        env:
+          ORCA_CLI_SKIP_GL_THUMBNAILS: "1"
+        run: |
+          $env:VCPROFILE_PATH = (Resolve-Path $env:PGO_DIR).Path
+          $out = "${{ github.workspace }}/pgo_out"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $model = "${{ github.workspace }}/${{ env.train_model }}"
+          $p = Start-Process -FilePath $env:RUN_EXE -ArgumentList @('--slice', '0', '--outputdir', $out, $model) `
+                 -WorkingDirectory $env:PGO_DIR -NoNewWindow -PassThru
+          if ($p.WaitForExit(3600000)) { Write-Host "slice exit code: $($p.ExitCode)" }
+          else { Write-Host "::warning::the instrumented slice did not finish within 60 min; killing it"; $p.Kill() }
+          Get-ChildItem build -Recurse -Filter *.pgc -EA SilentlyContinue | Format-Table FullName,Length
+
+      - name: Merge profile (*.pgc -> .pgd)
+        run: |
+          $pgd = Get-ChildItem $env:PGO_DIR -Filter *.pgd | Select-Object -First 1
+          if (-not $pgd) { throw "no .pgd in $env:PGO_DIR; the instrumented link writes it" }
+          $pgcs = @(Get-ChildItem $env:PGO_DIR -Filter *.pgc -EA SilentlyContinue)
+          if (-not $pgcs) { $pgcs = @(Get-ChildItem build -Recurse -Filter *.pgc -EA SilentlyContinue) }
+          if (-not $pgcs) { throw "the training run wrote no .pgc" }
+          Write-Host "merging $($pgcs.Count) .pgc into $($pgd.FullName)"
+          & "$env:VC_BIN\pgomgr.exe" /merge @($pgcs.FullName) $pgd.FullName
+          if ($LASTEXITCODE -ne 0) { throw "pgomgr /merge failed with exit code $LASTEXITCODE" }
+          Copy-Item $pgd.FullName $env:PGO_DATA
+
+      # ================= Phase 2: optimised build =================
+      # Reconfigures the same tree. The compile flags do not change, so mainly the OrcaSlicer
+      # DLL is linked again, now against the profile.
+      - name: Build optimised
+        run: |
+          # The PGO runtime and any profile data the training left in the app are not part of it.
+          $appDir = Split-Path $env:RUN_EXE
+          Remove-Item "$appDir\pgort140.dll", "$appDir\*.pgc" -Force -EA SilentlyContinue
+          $env:ORCA_SLICER_CMAKE_ARGS = "-DSLIC3R_VULKAN=ON -DORCA_PGO=use -DORCA_PGO_DATA=$env:PGO_DATA"
+          .\build_win.bat -s -i --msvc --msbuild --arch x64 --build-dir build --deps-dir $env:DEPS_DIR
+
+      - name: Build system preset cache
+        shell: cmd
+        # As in build_orca.yml: shipped into the installed tree and the checkout cpack installs from.
+        run: scripts\build_preset_cache.bat --prune-source build "resources\profiles" "build\OrcaSlicer\resources\profiles"
+
+      # NSIS as in build_orca.yml: a pinned portable copy, kept in the Actions cache and
+      # otherwise fetched from SourceForge, first on PATH so cpack uses it.
+      - name: Restore NSIS
+        id: nsis-cache
+        if: ${{ !vars.SELF_HOSTED }}
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/nsis
+          key: nsis-${{ env.NSIS_VERSION }}
+
+      - name: Install NSIS
+        if: ${{ !vars.SELF_HOSTED }}
+        run: |
+          $nsisDir = Join-Path $env:RUNNER_TEMP 'nsis'
+          $makensis = Join-Path $nsisDir 'makensis.exe'
+          if (-not (Test-Path $makensis)) {
+            $zip = Join-Path $env:RUNNER_TEMP "nsis-$env:NSIS_VERSION.zip"
+            curl.exe -fsSL --retry 5 --retry-all-errors --retry-delay 15 -o $zip "https://downloads.sourceforge.net/project/nsis/NSIS%203/$env:NSIS_VERSION/nsis-$env:NSIS_VERSION.zip"
+            if ($LASTEXITCODE -ne 0) { throw "NSIS $env:NSIS_VERSION download failed." }
+            if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:NSIS_SHA256) {
+              throw "NSIS $env:NSIS_VERSION archive does not match its pinned SHA256."
+            }
+            Expand-Archive $zip $env:RUNNER_TEMP
+            Move-Item (Join-Path $env:RUNNER_TEMP "nsis-$env:NSIS_VERSION") $nsisDir
+          }
+          & $makensis /VERSION
+          $nsisDir | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+
+      - name: Save NSIS
+        if: ${{ !vars.SELF_HOSTED && steps.nsis-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/nsis
+          key: nsis-${{ env.NSIS_VERSION }}
+
+      # cpack runs the install rules against the optimised build, so the installer ships it.
+      - name: Create installer (NSIS)
+        if: ${{ !vars.SELF_HOSTED }}
+        working-directory: ${{ github.workspace }}/build
+        run: cpack -G NSIS
+
+      - name: Upload installer
+        if: ${{ !vars.SELF_HOSTED }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: OrcaSlicer_Windows_PGO_installer
+          path: ${{ github.workspace }}/build/OrcaSlicer*.exe
+          if-no-files-found: error
+
+      # The trained profile, reusable with -DORCA_PGO=use, and the optimised app.
+      - name: Upload PGO profile
+        uses: actions/upload-artifact@v7
+        with:
+          name: orca-windows-pgd
+          path: ${{ github.workspace }}/orca-windows.pgd
+          if-no-files-found: error
+
+      - name: Upload optimised app
+        uses: actions/upload-artifact@v7
+        with:
+          name: OrcaSlicer_Windows_PGO
+          path: ${{ github.workspace }}/build/OrcaSlicer
+          if-no-files-found: error

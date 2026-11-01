@@ -1321,10 +1321,12 @@ if (SLIC3R_LTO)
     endif ()
 endif ()
 
-# Profile-guided optimisation of the slicing core (libslic3r + libslic3r_cgal), Release only:
+# Profile-guided optimisation of the slicing core (libslic3r + libslic3r_cgal), Release only. With Clang:
 #   1. configure with -DORCA_PGO=generate, build, slice representative models (raw profiles land in ORCA_PGO_DIR)
 #   2. llvm-profdata merge -o <data> <ORCA_PGO_DIR>/*.profraw
 #   3. configure with -DORCA_PGO=use -DORCA_PGO_DATA=<data> (best with SLIC3R_LTO=ON) and rebuild
+# MSVC cl has its own profile format and flow, described in its branch below and run by
+# .github/workflows/windows_pgo.yml.
 set(ORCA_PGO "" CACHE STRING "PGO mode: <empty>|generate|use")
 set(ORCA_PGO_DIR  "${CMAKE_BINARY_DIR}/pgo-raw" CACHE PATH "Directory for the raw profiles (generate)")
 set(ORCA_PGO_DATA "${CMAKE_BINARY_DIR}/orca.profdata" CACHE FILEPATH "Merged profile (use)")
@@ -1345,8 +1347,35 @@ if (ORCA_PGO)
                 target_link_options(${_pgo_target} PUBLIC $<$<CONFIG:Release>:${_pgo_flags}>)
             endif ()
         endforeach ()
+    elseif (MSVC AND NOT IS_CLANG_CL)
+        # The profiled code is compiled with /GL (PGO also needs the /LTCG set for MSVC above) and
+        # linked into the OrcaSlicer DLL. generate links it with /GENPROFILE, which writes <dll>.pgd
+        # next to it; a training run then writes <dll>!<n>.pgc files, which
+        # "pgomgr /merge <pgc files> <pgd>" adds to the .pgd. use links with /USEPROFILE against
+        # the merged .pgd given as ORCA_PGO_DATA.
+        if (ORCA_PGO STREQUAL "generate")
+            set(_pgo_link_flag /GENPROFILE)
+        elseif (ORCA_PGO STREQUAL "use")
+            if (EXISTS "${ORCA_PGO_DATA}")
+                set(_pgo_link_flag /USEPROFILE:PGD=${ORCA_PGO_DATA})
+            else ()
+                set(_pgo_link_flag "")
+                message(WARNING "ORCA_PGO=use but the profile '${ORCA_PGO_DATA}' does not exist; linking without it.")
+            endif ()
+        else ()
+            message(FATAL_ERROR "ORCA_PGO must be 'generate' or 'use', got '${ORCA_PGO}'")
+        endif ()
+        message(STATUS "ORCA_PGO: ${ORCA_PGO} on libslic3r/libslic3r_cgal/OrcaSlicer (MSVC)")
+        foreach (_pgo_target libslic3r libslic3r_cgal OrcaSlicer)
+            if (TARGET ${_pgo_target})
+                target_compile_options(${_pgo_target} PRIVATE $<$<CONFIG:Release>:/GL>)
+            endif ()
+        endforeach ()
+        if (_pgo_link_flag AND TARGET OrcaSlicer)
+            target_link_options(OrcaSlicer PRIVATE $<$<CONFIG:Release>:${_pgo_link_flag}>)
+        endif ()
     else ()
-        message(WARNING "ORCA_PGO is only implemented for Clang (not clang-cl); skipping.")
+        message(WARNING "ORCA_PGO is only implemented for Clang and MSVC cl (not clang-cl); skipping.")
     endif ()
 endif ()
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT OrcaSlicer_app_gui)
