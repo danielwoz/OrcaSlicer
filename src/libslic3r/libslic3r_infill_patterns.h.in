@@ -1,3 +1,0 @@
-#pragma once
-// Infill patterns included in this build (1) or left out (0), set by the ORCA_INFILL_<NAME> CMake options.
-@ORCA_INFILL_PATTERN_DEFINES@

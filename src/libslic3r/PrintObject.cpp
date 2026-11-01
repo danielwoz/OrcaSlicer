@@ -1860,6 +1860,9 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "belt_purge_tower_object") {
             invalidated |= m_print->invalidate_step(psWipeTower);
             invalidated |= m_print->invalidate_step(psGCodeExport);
+        } else if (const InfillRegionOption *option = InfillPatternRegistry::region_option(opt_key)) {
+            // Orca: options added by infill modules name the step they invalidate.
+            steps.emplace_back(option->invalidates == InfillOptionStep::Infill ? posInfill : posPrepareInfill);
         } else {
             // for legacy, if we can't handle this option let's invalidate all steps
             this->invalidate_all_steps();

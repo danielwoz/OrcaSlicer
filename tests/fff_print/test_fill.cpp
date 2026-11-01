@@ -22,6 +22,7 @@
 #include <memory>
 #include <math.h>
 #include <numeric>
+#include <set>
 #include <sstream>
 #include <string>
 #include <typeindex>
@@ -2601,7 +2602,7 @@ TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]
         }
     }
     CHECK(Fill::new_from_type(std::string("no-such-pattern")) == nullptr);
-    CHECK_THROWS_AS(Fill::new_from_type(ipCount), Slic3r::InvalidArgument);
+    CHECK_THROWS_AS(Fill::new_from_type(InfillPattern(InfillPatternRegistry::patterns().size())), Slic3r::InvalidArgument);
 }
 
 TEST_CASE("Infill patterns this build leaves out slice like their fallbacks", "[Fill][InfillRegistry]")
@@ -2688,4 +2689,201 @@ TEST_CASE("An object's unavailable infill pattern is reported once for all its i
     CHECK(std::count_if(warnings.begin(), warnings.end(), [](const StringObjectException &warning) {
               return warning.type == STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE;
           }) == 1);
+}
+
+// The worked example module tests/infill_modules/staggered, compiled only with
+// -DORCA_INFILL_MODULE_DIRS=tests/infill_modules/staggered. Its settings are set through their keys, so this file
+// compiles in every build.
+TEST_CASE("The Staggered Lines module is configured through its token and settings", "[InfillModule]")
+{
+    if (InfillPatternRegistry::find("staggered") == nullptr) SKIP("built without tests/infill_modules/staggered");
+
+    DynamicPrintConfig dynamic = DynamicPrintConfig::full_print_config();
+    dynamic.set_deserialize_strict("sparse_infill_pattern", "staggered");
+    CHECK(dynamic.opt_serialize("sparse_infill_pattern") == "staggered");
+    CHECK(dynamic.validate().empty());
+    FullPrintConfig full;
+    full.set_deserialize_strict("sparse_infill_pattern", "staggered");
+    CHECK(full.opt_serialize("sparse_infill_pattern") == "staggered");
+    CHECK(full.option("sparse_infill_pattern")->getInt() == int(InfillPatternRegistry::find("staggered")->id));
+
+    const std::vector<std::string> &values = print_config_def.get("sparse_infill_pattern")->enum_values;
+    const auto line = std::find(values.begin(), values.end(), "line");
+    REQUIRE(line != values.end());
+    REQUIRE(line + 1 != values.end());
+    CHECK(*(line + 1) == "staggered");
+
+    const DynamicPrintConfig defaults = DynamicPrintConfig::full_print_config();
+    REQUIRE(defaults.has("staggered_spacing_scale"));
+    REQUIRE(defaults.has("staggered_cross"));
+    CHECK(defaults.opt_serialize("staggered_spacing_scale") == "1");
+    CHECK(defaults.opt_serialize("staggered_cross") == "0");
+}
+
+TEST_CASE("Staggered Lines keep their direction and move by half their distance on every other layer", "[InfillModule]")
+{
+    if (InfillPatternRegistry::find("staggered") == nullptr) SKIP("built without tests/infill_modules/staggered");
+    SKIP_UNLESS_INFILL_PATTERN_BUILT("staggered");
+
+    auto slice = [](std::initializer_list<ConfigBase::SetDeserializeItem> extra, Print &print) {
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_deserialize_strict({{"sparse_infill_pattern", "staggered"}, {"sparse_infill_density", "20%"}, {"layer_height", 0.2}});
+        config.set_deserialize_strict(extra);
+        Slic3r::Test::init_and_process_print({Slic3r::Test::cube(20)}, print, config);
+        return sparse_infill_shape(print);
+    };
+    Print print, scaled, crossed;
+    const SparseInfillShape shape = slice({}, print);
+    REQUIRE(shape.path_count > 0);
+
+    std::set<int> angles;
+    for (int angle : angles_per_layer(print, sparse_role))
+        if (angle >= 0)
+            angles.insert(angle);
+    CHECK(angles.size() == 1);
+
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(object.layer_count() > 12);
+    const Polylines layer10 = layer_paths(*object.get_layer(10), erInternalInfill);
+    const Polylines layer11 = layer_paths(*object.get_layer(11), erInternalInfill);
+    const Polylines layer12 = layer_paths(*object.get_layer(12), erInternalInfill);
+    REQUIRE_FALSE(layer10.empty());
+    CHECK(layer10 == layer12);
+    CHECK_FALSE(layer10 == layer11);
+
+    const double ratio = slice({{"staggered_spacing_scale", "2"}}, scaled).length / shape.length;
+    CHECK(ratio > 0.4);
+    CHECK(ratio < 0.6);
+    CHECK(slice({{"staggered_cross", "1"}}, crossed).sequence != shape.sequence);
+}
+
+TEST_CASE("Regions whose Staggered Lines settings differ are filled apart", "[InfillModule]")
+{
+    if (InfillPatternRegistry::find("staggered") == nullptr) SKIP("built without tests/infill_modules/staggered");
+    SKIP_UNLESS_INFILL_PATTERN_BUILT("staggered");
+
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"sparse_infill_pattern", "staggered"}, {"sparse_infill_density", "20%"}});
+    // A modifier over the right half of the cube with twice the line distance.
+    TriangleMesh modifier = make_cube(10, 30, 30);
+    modifier.translate(10, -5, -5);
+    DynamicPrintConfig wide;
+    wide.set_deserialize_strict({{"staggered_spacing_scale", "2"}});
+    Print print;
+    slice_parts(print, config, {Slic3r::Test::cube(20)}, {{modifier, wide}});
+
+    // Regions 2 mm inside the walls and the modifier, away from the links along them, in the coordinates of the
+    // layers, whose origin is the center of the cube.
+    auto rect = [](double x0, double y0, double x1, double y1) {
+        return Polygons{Polygon({Point::new_scale(x0, y0), Point::new_scale(x1, y0), Point::new_scale(x1, y1), Point::new_scale(x0, y1)})};
+    };
+    const double outside = sparse_infill_length(print, 0., 20., rect(-8, -8, -2, 8));
+    const double inside  = sparse_infill_length(print, 0., 20., rect(2, -8, 8, 8));
+    REQUIRE(outside > 0.);
+    CHECK(inside / outside > 0.4);
+    CHECK(inside / outside < 0.6);
+}
+
+TEST_CASE("Staggered Lines anchors match the printed infill above a raft", "[InfillModule][InternalBridge]")
+{
+    if (InfillPatternRegistry::find("staggered") == nullptr) SKIP("built without tests/infill_modules/staggered");
+    SKIP_UNLESS_INFILL_PATTERN_BUILT("staggered");
+
+    // An odd number of raft layers and a scale the default would not give: anchors on the wrong stagger or without
+    // the region's settings miss the printed lines.
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"sparse_infill_pattern", "staggered"},
+                                   {"sparse_infill_density", "15%"},
+                                   {"staggered_spacing_scale", "1.5"},
+                                   {"raft_layers", 3},
+                                   {"top_shell_layers", 0},
+                                   {"bottom_shell_layers", 0},
+                                   {"top_shell_thickness", 0},
+                                   {"bottom_shell_thickness", 0},
+                                   {"layer_height", 0.2},
+                                   {"initial_layer_print_height", 0.2},
+                                   {"resolution", 0.012}});
+    Print print;
+    Model model;
+    Slic3r::Test::init_print({make_cube(30, 24, 2)}, print, model, config, nullptr, false);
+    print.process();
+
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(object.get_layer(0)->id() == 3);
+    for (const int index : {4, 5}) {
+        CAPTURE(index);
+        const Layer &layer = *object.get_layer(index);
+        const Polylines printed = layer_paths(layer, erInternalInfill);
+        REQUIRE_FALSE(printed.empty());
+        const AABBTreeLines::LinesDistancer<Line> printed_tree(to_lines(printed));
+        // Perimeter connections are left out: anchoring and extrusion may trim those differently.
+        const Polylines anchors = intersection_pl(layer.generate_sparse_infill_polylines_for_anchoring(nullptr, nullptr),
+                                                  shrink(to_polygons(layer.lslices), scale_(3.)));
+        REQUIRE_FALSE(anchors.empty());
+        double max_distance = 0.;
+        for (const Polyline &path : anchors)
+            for (const Point &point : path.equally_spaced_points(scale_(0.25)))
+                max_distance = std::max(max_distance, printed_tree.distance_from_lines<false>(point));
+        CHECK(unscale<double>(max_distance) <= config.opt_float("resolution"));
+    }
+}
+
+TEST_CASE("Changing a Staggered Lines setting slices the infill again", "[InfillModule]")
+{
+    if (InfillPatternRegistry::find("staggered") == nullptr) SKIP("built without tests/infill_modules/staggered");
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"sparse_infill_pattern", "staggered"}, {"sparse_infill_density", "20%"}, {"gcode_comments", 1}});
+    Print print;
+    Model model;
+    Slic3r::Test::init_print({Slic3r::Test::cube(20)}, print, model, config);
+    print.process();
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(object.is_step_done(posPerimeters));
+    REQUIRE(object.is_step_done(posPrepareInfill));
+
+    config.set_deserialize_strict("staggered_spacing_scale", "2");
+    print.apply(model, config);
+    REQUIRE(print.objects().size() == 1);
+    CHECK(print.objects().front()->is_step_done(posPerimeters));
+    CHECK_FALSE(print.objects().front()->is_step_done(posPrepareInfill));
+}
+
+TEST_CASE("Staggered Lines left out of the build slice as Rectilinear", "[InfillModule]")
+{
+    const InfillPatternDescriptor *staggered = InfillPatternRegistry::find("staggered");
+    if (staggered == nullptr || staggered->available())
+        SKIP("runs only with tests/infill_modules/staggered left out of the build (ORCA_INFILL_STAGGERED=OFF)");
+
+    // Slices with the pattern; returns the options the unavailable-pattern warnings name.
+    auto slice = [](const char *pattern, Print &print) {
+        Model model;
+        Slic3r::Test::init_print({Slic3r::Test::cube(20)}, print, model,
+                                 {{"sparse_infill_pattern", pattern},
+                                  {"staggered_spacing_scale", "2"},
+                                  {"layer_height", 0.2},
+                                  {"layer_change_gcode", "G92 E0"}});
+        std::vector<StringObjectException> warnings;
+        CHECK(print.validate(&warnings).string == "");
+        print.process();
+        std::vector<std::string> unavailable;
+        for (const StringObjectException &warning : warnings)
+            if (warning.type == STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE)
+                unavailable.emplace_back(warning.opt_key);
+        return unavailable;
+    };
+    Print sliced, reference;
+    CHECK(slice("staggered", sliced) == std::vector<std::string>{"sparse_infill_pattern"});
+    CHECK(slice("rectilinear", reference).empty());
+    const SparseInfillShape shape = sparse_infill_shape(sliced), expected = sparse_infill_shape(reference);
+    REQUIRE(expected.path_count > 0);
+    CHECK(shape.path_count == expected.path_count);
+    CHECK(shape.point_count == expected.point_count);
+    CHECK(shape.sequence == expected.sequence);
+
+    DynamicPrintConfig dynamic = DynamicPrintConfig::full_print_config();
+    dynamic.set_deserialize_strict({{"sparse_infill_pattern", "staggered"}, {"staggered_spacing_scale", "2"}, {"staggered_cross", "1"}});
+    CHECK(dynamic.opt_serialize("sparse_infill_pattern") == "staggered");
+    CHECK(dynamic.opt_serialize("staggered_spacing_scale") == "2");
+    CHECK(dynamic.opt_serialize("staggered_cross") == "1");
 }

@@ -62,8 +62,8 @@ set_tests_properties(cli_malformed_input PROPERTIES
     SKIP_RETURN_CODE 77
     TIMEOUT 900)
 
-# Infill patterns left out of the build (ORCA_INFILL_<NAME>=OFF, see src/libslic3r/CMakeLists.txt) slice
-# as their fallbacks. Skipped when the build includes every pattern.
+# Infill patterns left out of the build (ORCA_INFILL_<NAME>=OFF, see src/libslic3r/Fill/Modules) slice
+# as their fallbacks. Skipped when the build includes every built-in pattern.
 add_test(NAME cli_infill_unavailable
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_infill_unavailable.sh $<TARGET_FILE:OrcaSlicer> ${ORCA_CLI_TEST_PYTHON}
         "${ORCA_INFILL_LEFT_OUT}")
@@ -71,3 +71,14 @@ set_tests_properties(cli_infill_unavailable PROPERTIES
     LABELS "CLI;RequiresApp"
     SKIP_RETURN_CODE 77
     TIMEOUT 900)
+
+# An infill module that adds a pattern and settings slices through the CLI. Registered only when the build includes and
+# builds the worked example (-DORCA_INFILL_MODULE_DIRS=tests/infill_modules/staggered, ORCA_INFILL_STAGGERED=ON).
+if ("staggered" IN_LIST ORCA_INFILL_MODULE_NAMES AND NOT "STAGGERED" IN_LIST ORCA_INFILL_LEFT_OUT)
+    add_test(NAME cli_infill_module
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_infill_module.sh $<TARGET_FILE:OrcaSlicer>)
+    set_tests_properties(cli_infill_module PROPERTIES
+        LABELS "CLI;RequiresApp"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 900)
+endif ()

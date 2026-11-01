@@ -1,0 +1,14 @@
+// Generated from the module.cmake files by orca_add_infill_modules() (src/libslic3r/Fill/Modules/InfillModules.cmake).
+#include "libslic3r/Fill/InfillPatternRegistry.hpp"
+
+namespace Slic3r {
+
+@ORCA_INFILL_MODULE_DECLARATIONS@
+namespace detail {
+
+const InfillModuleEntry infill_module_entries[] = {
+@ORCA_INFILL_MODULE_ENTRIES@};
+const size_t infill_module_entry_count = std::size(infill_module_entries);
+
+} // namespace detail
+} // namespace Slic3r

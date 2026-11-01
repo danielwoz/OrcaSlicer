@@ -9,31 +9,6 @@ endif()
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/libslic3r_version.h.in ${CMAKE_CURRENT_BINARY_DIR}/libslic3r_version.h @ONLY)
 
-# Orca: infill patterns a build can leave out. A left-out pattern stays a known value: configurations naming
-# it load, validate and save unchanged, and slice with the fallback of its row in Fill/InfillPatternRegistry.cpp.
-option(ORCA_INFILL_OPTIONAL_DEFAULT "Initial value of the ORCA_INFILL_<NAME> options" ON)
-set(ORCA_OPTIONAL_INFILL_PATTERNS
-    ZIGZAG CROSSZAG LOCKEDZAG LINE TRIHEXAGON QUARTERCUBIC SUPPORTCUBIC
-    LATERALHONEYCOMB LATERALLATTICE TPMSD TPMSFK HILBERTCURVE OCTAGRAMSPIRAL)
-set(ORCA_INFILL_PATTERN_DEFINES "")
-set(ORCA_INFILL_LEFT_OUT "")
-foreach (_pattern IN LISTS ORCA_OPTIONAL_INFILL_PATTERNS)
-    option(ORCA_INFILL_${_pattern} "Build the ${_pattern} infill pattern" ${ORCA_INFILL_OPTIONAL_DEFAULT})
-    if (ORCA_INFILL_${_pattern})
-        string(APPEND ORCA_INFILL_PATTERN_DEFINES "#define ORCA_INFILL_${_pattern} 1\n")
-    else ()
-        string(APPEND ORCA_INFILL_PATTERN_DEFINES "#define ORCA_INFILL_${_pattern} 0\n")
-        list(APPEND ORCA_INFILL_LEFT_OUT ${_pattern})
-    endif ()
-endforeach ()
-if (ORCA_INFILL_LEFT_OUT)
-    message(STATUS "Infill patterns left out of this build: ${ORCA_INFILL_LEFT_OUT}")
-endif ()
-# The CLI tests read the list (tests/cli/CMakeLists.txt).
-set(ORCA_INFILL_LEFT_OUT "${ORCA_INFILL_LEFT_OUT}" CACHE INTERNAL "")
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/libslic3r_infill_patterns.h.in
-               ${CMAKE_CURRENT_BINARY_DIR}/libslic3r_infill_patterns.h @ONLY)
-
 if (MINGW)
     add_compile_options(-Wa,-mbig-obj)
 endif ()
@@ -179,44 +154,16 @@ set(lisbslic3r_sources
     Feature/Interlocking/VoxelUtils.cpp
     Feature/Interlocking/VoxelUtils.hpp
     FileParserError.hpp
-    Fill/Fill3DHoneycomb.cpp
-    Fill/Fill3DHoneycomb.hpp
-    Fill/FillAdaptive.cpp
-    Fill/FillAdaptive.hpp
     Fill/FillBase.cpp
     Fill/FillBase.hpp
     Fill/InfillPatternRegistry.cpp
     Fill/InfillPatternRegistry.hpp
-    Fill/FillConcentric.cpp
-    Fill/FillConcentric.hpp
-    Fill/FillSpiralInset.cpp
-    Fill/FillSpiralInset.hpp
-    Fill/FillConcentricInternal.cpp
-    Fill/FillConcentricInternal.hpp
     Fill/FillCornerSmoothing.cpp
     Fill/FillCornerSmoothing.hpp
     Fill/Fill.cpp
-    Fill/FillCrossHatch.cpp
-    Fill/FillCrossHatch.hpp
-    Fill/FillGyroid.cpp
-    Fill/FillGyroid.hpp
-    Fill/FillHoneycomb.cpp
-    Fill/FillHoneycomb.hpp
     Fill/Fill.hpp
-    Fill/FillLightning.cpp
-    Fill/FillLightning.hpp
-    Fill/FillLine.cpp
-    Fill/FillLine.hpp
-    Fill/FillPlanePath.cpp
-    Fill/FillPlanePath.hpp
-    Fill/FillRectilinear.cpp
-    Fill/FillRectilinear.hpp
     Fill/AdaptiveInfillField.cpp
     Fill/AdaptiveInfillField.hpp
-    Fill/FillTpmsD.cpp
-    Fill/FillTpmsD.hpp
-    Fill/FillTpmsFK.cpp
-    Fill/FillTpmsFK.hpp
     Fill/Lightning/DistanceField.cpp
     Fill/Lightning/DistanceField.hpp
     Fill/Lightning/Generator.cpp
@@ -636,19 +583,14 @@ if (APPLE)
         )
 endif ()
 
-# Sources used by a single optional infill pattern; their headers stay, the registry names the classes.
-if (NOT ORCA_INFILL_LINE)
-    list(REMOVE_ITEM lisbslic3r_sources Fill/FillLine.cpp)
-endif ()
-if (NOT ORCA_INFILL_TPMSD)
-    list(REMOVE_ITEM lisbslic3r_sources Fill/FillTpmsD.cpp)
-endif ()
-if (NOT ORCA_INFILL_TPMSFK)
-    list(REMOVE_ITEM lisbslic3r_sources Fill/FillTpmsFK.cpp)
-endif ()
+# Orca: infill pattern modules, see Fill/Modules/InfillModules.cmake. Built-in modules name their sources in Fill/.
+set(ORCA_FILL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Fill)
+include(Fill/Modules/InfillModules.cmake)
+orca_add_infill_modules(lisbslic3r_sources infill_module_other_sources)
 
 add_library(libslic3r STATIC ${lisbslic3r_sources}
     "${CMAKE_CURRENT_BINARY_DIR}/libslic3r_version.h"
+    ${infill_module_other_sources}
     ${OpenVDBUtils_SOURCES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${lisbslic3r_sources})
 

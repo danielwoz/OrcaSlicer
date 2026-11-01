@@ -1,197 +1,123 @@
 #include "InfillPatternRegistry.hpp"
 
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <set>
 
-#include "libslic3r_infill_patterns.h"      // generated: ORCA_INFILL_<NAME> 0/1
 #include "../Exception.hpp"
-#include "Fill3DHoneycomb.hpp"
-#include "FillAdaptive.hpp"
-#include "FillConcentric.hpp"
-#include "FillConcentricInternal.hpp"
-#include "FillCrossHatch.hpp"
-#include "FillGyroid.hpp"
-#include "FillHoneycomb.hpp"
-#include "FillLightning.hpp"
-#include "FillLine.hpp"
-#include "FillPlanePath.hpp"
-#include "FillRectilinear.hpp"
-#include "FillSpiralInset.hpp"
-#include "FillTpmsD.hpp"
-#include "FillTpmsFK.hpp"
-
-// Marks the labels for translation; they are translated where they are shown.
-#define L(s) (s)
 
 namespace Slic3r {
+namespace detail {
+
+std::string build_infill_pattern_table(const InfillModuleEntry *entries, size_t count, InfillPatternTable &table)
+{
+    table = InfillPatternTable();
+    table.rows.resize(size_t(ipCount));
+    table.row_module.assign(size_t(ipCount), nullptr);
+    std::vector<std::pair<InfillPatternDescriptor, const InfillModule*>> appended;
+    for (size_t i = 0; i < count; ++ i) {
+        const InfillModule &module = *entries[i].module;
+        const std::string   name   = module.name;
+        table.modules.emplace_back(&module);
+        for (size_t j = 0; j < module.pattern_count; ++ j) {
+            InfillPatternDescriptor row = module.patterns[j];
+            row.optional = ! entries[i].core;
+            if (! entries[i].built)
+                // The module's sources are not part of this build.
+                row.factory = nullptr;
+            else if (row.factory == nullptr)
+                return "a pattern of the module " + name + " has no factory";
+            if (entries[i].core != (row.fallback == ipCount))
+                return "a pattern of the module " + name + (entries[i].core ? " is always built but names a fallback" : " may be left out but names no fallback");
+            if (row.appended()) {
+                if (row.internal())
+                    return "a pattern of the module " + name + " has neither an enum value nor a token";
+                appended.emplace_back(row, &module);
+            } else if (const InfillModule *other = table.row_module[size_t(row.id)]; other != nullptr)
+                return "the modules " + std::string(other->name) + " and " + name + " both describe InfillPattern " + std::to_string(int(row.id));
+            else {
+                table.rows[size_t(row.id)]       = row;
+                table.row_module[size_t(row.id)] = &module;
+            }
+        }
+        for (size_t j = 0; j < module.region_option_count; ++ j)
+            table.options.emplace_back(&module.region_options[j], &module);
+    }
+    for (size_t id = 0; id < size_t(ipCount); ++ id)
+        if (table.row_module[id] == nullptr)
+            return "no module describes InfillPattern " + std::to_string(id);
+    // Appended patterns follow the enum values in token order, whatever order the modules are listed in.
+    std::sort(appended.begin(), appended.end(), [](const auto &a, const auto &b) { return std::strcmp(a.first.key, b.first.key) < 0; });
+    for (auto &[row, module] : appended) {
+        row.id = InfillPattern(table.rows.size());
+        table.rows.emplace_back(row);
+        table.row_module.emplace_back(module);
+    }
+    for (InfillPatternDescriptor &row : table.rows) {
+        const std::string name = row.internal() ? "InfillPattern " + std::to_string(int(row.id)) : std::string(row.key);
+        if (! row.optional)
+            row.fallback = row.id;
+        else if (unsigned(row.fallback) >= unsigned(ipCount) || table.rows[size_t(row.fallback)].optional ||
+                 (row.slots & ~table.rows[size_t(row.fallback)].slots) != 0)
+            return "the fallback of " + name + " must be an enum value of an always built module offered in all of its slots";
+        if (row.menu_after != nullptr) {
+            // The enum values come first, so their tokens are already known here.
+            const auto anchor = table.by_key.find(row.menu_after);
+            if (anchor == table.by_key.end() || int(anchor->second) >= int(ipCount))
+                return "menu_after of " + name + " must name a pattern with an enum value";
+        }
+        if (! row.internal() && ! table.by_key.emplace(row.key, row.id).second)
+            return "the token " + name + " is used twice";
+        table.all_available = table.all_available && row.available();
+    }
+    std::set<std::string> option_keys;
+    for (const auto &[option, module] : table.options)
+        if (! option_keys.insert(option->key).second)
+            return std::string("the option ") + option->key + " is added twice";
+    return {};
+}
+
+std::vector<const InfillPatternDescriptor*> infill_slot_patterns(const InfillPatternTable &table, InfillPatternSlot slot)
+{
+    std::vector<const InfillPatternDescriptor*> out;
+    // The enum values in their order, then the appended patterns without a place, in token order.
+    for (const InfillPatternDescriptor &pattern : table.rows)
+        if ((pattern.slots & slot) && pattern.menu_after == nullptr)
+            out.emplace_back(&pattern);
+    // Each pattern with a place goes right after its anchor; going backwards keeps several of them in token order.
+    for (auto it = table.rows.rbegin(); it != table.rows.rend(); ++ it)
+        if ((it->slots & slot) && it->menu_after != nullptr) {
+            auto anchor = std::find_if(out.begin(), out.end(), [&it](const InfillPatternDescriptor *p) { return std::strcmp(p->key, it->menu_after) == 0; });
+            out.insert(anchor == out.end() ? out.end() : anchor + 1, &*it);
+        }
+    return out;
+}
+
+} // namespace detail
+
 namespace {
 
-template<class T> Fill* make_fill(const InfillPatternDescriptor &) { return new T(); }
-
-// nullptr when the build leaves the pattern out. The discarded branch is never instantiated, so the class
-// only needs to be declared and its implementation file may be left out of the build.
-template<bool Built, class T> constexpr InfillFactory optional_fill()
+const detail::InfillPatternTable& table()
 {
-    if constexpr (Built)
-        return &make_fill<T>;
-    else
-        return nullptr;
+    // Built on first use, which is the initialisation of s_keys_map_InfillPattern in PrintConfig.cpp. It reads only
+    // the module objects and the generated list, which are constant-initialised.
+    static const detail::InfillPatternTable s_table = [] {
+        detail::InfillPatternTable t;
+        if (const std::string error = detail::build_infill_pattern_table(detail::infill_module_entries, detail::infill_module_entry_count, t);
+            ! error.empty()) {
+            // The modules of this build contradict each other; no configuration could be read reliably.
+            std::fprintf(stderr, "OrcaSlicer infill pattern modules: %s\n", error.c_str());
+            std::abort();
+        }
+        return t;
+    }();
+    return s_table;
 }
-
-constexpr const char *zigzag_options[]            = { "symmetric_infill_y_axis", nullptr };
-constexpr const char *crosszag_options[]          = { "infill_shift_step", "symmetric_infill_y_axis", nullptr };
-constexpr const char *lockedzag_options[]         = { "infill_shift_step", "symmetric_infill_y_axis", "skeleton_infill_density",
-                                                      "skin_infill_density", "infill_lock_depth", "skin_infill_depth",
-                                                      "skin_infill_line_width", "skeleton_infill_line_width", nullptr };
-constexpr const char *lightning_options[]         = { "lightning_overhang_angle", "lightning_prune_angle",
-                                                      "lightning_straightening_angle", nullptr };
-constexpr const char *honeycomb_3d_options[]      = { "infill_complete_top", nullptr };
-constexpr const char *lateral_honeycomb_options[] = { "infill_overhang_angle", nullptr };
-constexpr const char *lateral_lattice_options[]   = { "lateral_lattice_angle_1", "lateral_lattice_angle_2", nullptr };
-constexpr const char *gyroid_options[]            = { "gyroid_optimized", nullptr };
-
-// Indexed by InfillPattern. The ordinals decide in which order fills are trimmed against each other and printed,
-// and the slot lists keep this order, so rows are never reordered.
-constexpr std::array<InfillPatternDescriptor, size_t(ipCount)> s_builtins {{
-    // id, key, label, slots,
-    //     flags,
-    //     void area factor, combine clearance factor, optional, fallback, options, factory
-    { ipMonotonic, "monotonic", L("Monotonic"), ipsSurface,
-      ipfSeparable | ipfLineBasedSolid | ipfSmallAreaFlowComp,
-      1., 1.5f, false, ipMonotonic, nullptr, &make_fill<FillMonotonic> },
-    { ipMonotonicLine, "monotonicline", L("Monotonic line"), ipsSurface,
-      ipfSeparable | ipfLineBasedSolid | ipfSmallAreaFlowComp,
-      1., 0.5f, false, ipMonotonicLine, nullptr, &make_fill<FillMonotonicLines> },
-    { ipRectilinear, "rectilinear", L("Rectilinear"), ipsSparse | ipsSurface | ipsIroning,
-      ipfSeparable | ipfMultiline | ipfLineBasedSolid | ipfRotateTemplateSafe | ipfSmallAreaFlowComp,
-      1., 1.5f, false, ipRectilinear, nullptr, &make_fill<FillRectilinear> },
-    { ipAlignedRectilinear, "alignedrectilinear", L("Aligned Rectilinear"), ipsSparse | ipsSurface,
-      ipfSeparable | ipfMultiline | ipfLineBasedSolid | ipfSmallAreaFlowComp,
-      1., 0.5f, false, ipAlignedRectilinear, nullptr, &make_fill<FillAlignedRectilinear> },
-    { ipZigZag, "zigzag", L("Zig Zag"), ipsSparse,
-      ipfSeparable | ipfRotateTemplateSafe,
-      1., 0.5f, true, ipRectilinear, zigzag_options, optional_fill<ORCA_INFILL_ZIGZAG != 0, FillZigZag>() },
-    { ipCrossZag, "crosszag", L("Cross Zag"), ipsSparse,
-      ipfSeparable | ipfRotateTemplateSafe,
-      1., 0.5f, true, ipRectilinear, crosszag_options, optional_fill<ORCA_INFILL_CROSSZAG != 0, FillCrossZag>() },
-    { ipLockedZag, "lockedzag", L("Locked Zag"), ipsSparse,
-      ipfSeparable | ipfRotateTemplateSafe,
-      1., 0.5f, true, ipRectilinear, lockedzag_options, optional_fill<ORCA_INFILL_LOCKEDZAG != 0, FillLockedZag>() },
-    { ipLine, "line", L("Line"), ipsSparse,
-      ipfSeparable | ipfNoAnchorMax | ipfRotateTemplateSafe,
-      1., 1.5f, true, ipRectilinear, nullptr, optional_fill<ORCA_INFILL_LINE != 0, FillLine>() },
-    { ipGrid, "grid", L("Grid"), ipsSparse,
-      ipfSeparable | ipfMultiline | ipfSmoothableMultiline | ipfNoReverse,
-      4., 1.5f, false, ipGrid, nullptr, &make_fill<FillGrid> },
-    { ipTriangles, "triangles", L("Triangles"), ipsSparse,
-      ipfSeparable | ipfMultiline | ipfSmoothableMultiline,
-      4.5, 0.5f, false, ipTriangles, nullptr, &make_fill<FillTriangles> },
-    { ipStars, "tri-hexagon", L("Tri-hexagon"), ipsSparse,
-      ipfSeparable | ipfMultiline | ipfSmoothableMultiline,
-      4.5, 0.5f, true, ipTriangles, nullptr, optional_fill<ORCA_INFILL_TRIHEXAGON != 0, FillStars>() },
-    { ipCubic, "cubic", L("Cubic"), ipsSparse,
-      ipfSeparable | ipfMultiline | ipfSmoothableMultiline,
-      4.5, 0.5f, false, ipCubic, nullptr, &make_fill<FillCubic> },
-    { ipAdaptiveCubic, "adaptivecubic", L("Adaptive Cubic"), ipsSparse,
-      ipfOctree | ipfMultiline,
-      4.5, 0.5f, false, ipAdaptiveCubic, nullptr, &make_fill<FillAdaptive::Filler> },
-    { ipQuarterCubic, "quartercubic", L("Quarter Cubic"), ipsSparse,
-      ipfSeparable | ipfMultiline,
-      1., 0.5f, true, ipCubic, nullptr, optional_fill<ORCA_INFILL_QUARTERCUBIC != 0, FillQuarterCubic>() },
-    { ipSupportCubic, "supportcubic", L("Support Cubic"), ipsSparse,
-      ipfOctree | ipfMultiline,
-      4.5, 0.5f, true, ipAdaptiveCubic, nullptr, optional_fill<ORCA_INFILL_SUPPORTCUBIC != 0, FillAdaptive::Filler>() },
-    { ipLightning, "lightning", L("Lightning"), ipsSparse,
-      ipfMultiline | ipfSmoothable,
-      4., 0.5f, false, ipLightning, lightning_options, &make_fill<FillLightning::Filler> },
-    { ipHoneycomb, "honeycomb", L("Honeycomb"), ipsSparse,
-      ipfSeparable | ipfMultiline | ipfSmoothable,
-      4., 1.5f, false, ipHoneycomb, nullptr, &make_fill<FillHoneycomb> },
-    { ip3DHoneycomb, "3dhoneycomb", L("3D Honeycomb"), ipsSparse,
-      ipfSeparable | ipfMultiline | ipfSmoothable,
-      1., 0.5f, false, ip3DHoneycomb, honeycomb_3d_options, &make_fill<Fill3DHoneycomb> },
-    { ipLateralHoneycomb, "lateral-honeycomb", L("Lateral Honeycomb"), ipsSparse,
-      ipfSeparable | ipfMultiline,
-      1., 1.5f, true, ipHoneycomb, lateral_honeycomb_options,
-      optional_fill<ORCA_INFILL_LATERALHONEYCOMB != 0, FillLateralHoneycomb>() },
-    { ipLateralLattice, "lateral-lattice", L("Lateral Lattice"), ipsSparse,
-      ipfSeparable | ipfMultiline,
-      4., 1.5f, true, ipGrid, lateral_lattice_options,
-      optional_fill<ORCA_INFILL_LATERALLATTICE != 0, FillLateralLattice>() },
-    { ipCrossHatch, "crosshatch", L("Cross Hatch"), ipsSparse,
-      ipfSeparable | ipfMultiline | ipfSmoothable,
-      1., 0.5f, false, ipCrossHatch, nullptr, &make_fill<FillCrossHatch> },
-    { ipTpmsD, "tpmsd", L("TPMS-D"), ipsSparse,
-      ipfSeparable | ipfMultiline | ipfAdaptiveDensity,
-      1., 0.5f, true, ipGyroid, nullptr, optional_fill<ORCA_INFILL_TPMSD != 0, FillTpmsD>() },
-    { ipTpmsFK, "tpmsfk", L("TPMS-FK"), ipsSparse,
-      ipfSeparable | ipfMultiline | ipfAdaptiveDensity,
-      1., 0.5f, true, ipGyroid, nullptr, optional_fill<ORCA_INFILL_TPMSFK != 0, FillTpmsFK>() },
-    { ipGyroid, "gyroid", L("Gyroid"), ipsSparse,
-      ipfSeparable | ipfMultiline | ipfAdaptiveDensity,
-      1., 0.5f, false, ipGyroid, gyroid_options, &make_fill<FillGyroid> },
-    { ipConcentric, "concentric", L("Concentric"), ipsSparse | ipsSurface | ipsIroning,
-      ipfMultiline | ipfSmoothable | ipfNoAnchors | ipfFillOrder | ipfArachne,
-      1., 0.5f, false, ipConcentric, nullptr, &make_fill<FillConcentric> },
-    { ipSpiralInset, "spiralinset", L("Spiral Inset"), ipsSurface,
-      ipfNoAnchors | ipfFillOrder | ipfArachne,
-      1., 0.5f, false, ipSpiralInset, nullptr, &make_fill<FillSpiralInset> },
-    { ipHilbertCurve, "hilbertcurve", L("Hilbert Curve"), ipsSparse | ipsSurface,
-      ipfSeparable | ipfMultiline | ipfSmoothable | ipfNoSurfaceRetract | ipfCurvedBridgeAnchors,
-      1., 0.5f, true, ipRectilinear, nullptr, optional_fill<ORCA_INFILL_HILBERTCURVE != 0, FillHilbertCurve>() },
-    { ipArchimedeanChords, "archimedeanchords", L("Archimedean Chords"), ipsSparse | ipsSurface,
-      ipfSeparable | ipfMultiline | ipfFillOrder | ipfCenteredSurface,
-      1., 0.5f, false, ipArchimedeanChords, nullptr, &make_fill<FillArchimedeanChords> },
-    { ipOctagramSpiral, "octagramspiral", L("Octagram Spiral"), ipsSparse | ipsSurface,
-      ipfSeparable | ipfMultiline | ipfSmoothable | ipfFillOrder | ipfCenteredSurface | ipfCurvedBridgeAnchors,
-      1., 0.5f, true, ipArchimedeanChords, nullptr, optional_fill<ORCA_INFILL_OCTAGRAMSPIRAL != 0, FillOctagramSpiral>() },
-    // Used by the slicer only: support base, and narrow internal solid areas.
-    { ipSupportBase, nullptr, nullptr, 0, 0,
-      1., 0.5f, false, ipSupportBase, nullptr, &make_fill<FillSupportBase> },
-    { ipConcentricInternal, nullptr, nullptr, 0, ipfArachne,
-      1., 0.5f, false, ipConcentricInternal, nullptr, &make_fill<FillConcentricInternal> },
-}};
 
 // The descriptor of a value that names no pattern: void area factor 1, combine clearance factor 0.5.
-constexpr InfillPatternDescriptor s_none { ipCount, nullptr, nullptr, 0, 0, 1., 0.5f, false, ipCount, nullptr, nullptr };
-
-constexpr bool has_dot(const char *s)
-{
-    for (; s != nullptr && *s != 0; ++ s)
-        if (*s == '.')
-            return true;
-    return false;
-}
-
-constexpr bool builtins_are_consistent()
-{
-    for (size_t i = 0; i < s_builtins.size(); ++ i) {
-        const InfillPatternDescriptor &p = s_builtins[i];
-        // Row i describes value i; only the slicer's own patterns have no token, label or slot; tokens of built-in
-        // patterns contain no '.', which keeps them apart from the tokens of plugin patterns.
-        if (size_t(p.id) != i || (p.key == nullptr) != (p.label == nullptr) || (p.key == nullptr) != (p.slots == 0) || has_dot(p.key))
-            return false;
-        if (! p.optional) {
-            if (p.factory == nullptr || p.fallback != p.id)
-                return false;
-        } else {
-            if (size_t(p.fallback) >= s_builtins.size())
-                return false;
-            const InfillPatternDescriptor &fallback = s_builtins[size_t(p.fallback)];
-            if (fallback.optional || (p.slots & ~fallback.slots) != 0)
-                return false;
-        }
-    }
-    return true;
-}
-static_assert(builtins_are_consistent(), "infill pattern table: ids, tokens, factories and fallbacks");
-
-constexpr bool builtins_all_available()
-{
-    for (const InfillPatternDescriptor &p : s_builtins)
-        if (! p.available())
-            return false;
-    return true;
-}
+constexpr InfillPatternDescriptor s_none { ipCount, nullptr, nullptr, 0, 0, 1., 0.5f, ipCount, nullptr, nullptr };
 
 constexpr std::array<std::pair<const char*, InfillPatternSlot>, 6> s_options {{
     { "sparse_infill_pattern", ipsSparse }, { "top_surface_pattern", ipsSurface }, { "bottom_surface_pattern", ipsSurface },
@@ -208,24 +134,26 @@ bool InfillPatternDescriptor::has_option(const char *opt_key) const
 }
 
 const std::array<std::pair<const char*, InfillPatternSlot>, 6>& InfillPatternRegistry::options() { return s_options; }
-const std::array<InfillPatternDescriptor, size_t(ipCount)>& InfillPatternRegistry::builtins() { return s_builtins; }
+const std::vector<InfillPatternDescriptor>& InfillPatternRegistry::patterns() { return table().rows; }
+InfillPatternRange InfillPatternRegistry::builtins() { return { table().rows.data(), size_t(ipCount) }; }
 
 const InfillPatternDescriptor* InfillPatternRegistry::find(InfillPattern id)
 {
-    return unsigned(id) < unsigned(ipCount) ? &s_builtins[size_t(id)] : nullptr;
+    const std::vector<InfillPatternDescriptor> &rows = table().rows;
+    return unsigned(id) < rows.size() ? &rows[size_t(id)] : nullptr;
 }
 
 const InfillPatternDescriptor* InfillPatternRegistry::find(const std::string &key)
 {
-    const t_config_enum_values &keys = ConfigOptionEnum<InfillPattern>::get_enum_values();
-    const auto it = keys.find(key);
-    return it == keys.end() ? nullptr : find(InfillPattern(it->second));
+    const std::map<std::string, InfillPattern> &by_key = table().by_key;
+    const auto it = by_key.find(key);
+    return it == by_key.end() ? nullptr : find(it->second);
 }
 
 t_config_enum_values InfillPatternRegistry::keys_map()
 {
     t_config_enum_values keys;
-    for (const InfillPatternDescriptor &pattern : s_builtins)
+    for (const InfillPatternDescriptor &pattern : table().rows)
         if (! pattern.internal())
             keys.emplace(pattern.key, int(pattern.id));
     return keys;
@@ -235,11 +163,10 @@ void InfillPatternRegistry::define_enum_values(ConfigOptionDef &def, InfillPatte
 {
     def.enum_values.clear();
     def.enum_labels.clear();
-    for (const InfillPatternDescriptor &pattern : s_builtins)
-        if (pattern.slots & slot) {
-            def.enum_values.emplace_back(pattern.key);
-            def.enum_labels.emplace_back(pattern.label);
-        }
+    for (const InfillPatternDescriptor *pattern : detail::infill_slot_patterns(table(), slot)) {
+        def.enum_values.emplace_back(pattern->key);
+        def.enum_labels.emplace_back(pattern->label);
+    }
 }
 
 Fill* InfillPatternRegistry::create(InfillPattern id)
@@ -250,7 +177,7 @@ Fill* InfillPatternRegistry::create(InfillPattern id)
     return pattern.factory(pattern);
 }
 
-bool InfillPatternRegistry::all_available() { return builtins_all_available(); }
+bool InfillPatternRegistry::all_available() { return table().all_available; }
 
 void InfillPatternRegistry::resolve_unavailable(PrintRegionConfig &config)
 {
@@ -270,6 +197,45 @@ std::vector<std::pair<std::string, const InfillPatternDescriptor*>> InfillPatter
             if (const InfillPatternDescriptor *pattern = find(InfillPattern(opt->getInt())); pattern != nullptr && ! pattern->available())
                 out.emplace_back(opt_key, pattern);
     return out;
+}
+
+const std::vector<const InfillModule*>& InfillPatternRegistry::modules() { return table().modules; }
+
+const InfillModule* InfillPatternRegistry::module_of(InfillPattern id)
+{
+    const std::vector<const InfillModule*> &row_module = table().row_module;
+    return unsigned(id) < row_module.size() ? row_module[size_t(id)] : nullptr;
+}
+
+const std::vector<std::pair<const InfillRegionOption*, const InfillModule*>>& InfillPatternRegistry::region_options() { return table().options; }
+
+const InfillRegionOption* InfillPatternRegistry::region_option(const std::string &opt_key)
+{
+    for (const auto &[option, module] : table().options)
+        if (opt_key == option->key)
+            return option;
+    return nullptr;
+}
+
+void InfillPatternRegistry::define_region_options(const InfillOptionAdder &add)
+{
+    for (const InfillModule *module : table().modules)
+        if (module->define_region_options != nullptr)
+            module->define_region_options(add);
+}
+
+void InfillPatternRegistry::module_params(InfillPattern id, const PrintRegionConfig &config, std::string &out)
+{
+    out.clear();
+    const InfillPatternDescriptor *pattern = find(id);
+    if (pattern == nullptr)
+        return;
+    for (const char *const *key = pattern->options; key != nullptr && *key != nullptr; ++ key)
+        if (const ConfigOption *option = config.option(*key);
+            option != nullptr && (pattern->appended() || region_option(*key) != nullptr)) {
+            out += option->serialize();
+            out += '\n';
+        }
 }
 
 const InfillPatternDescriptor& infill_pattern(InfillPattern pattern)

@@ -30,6 +30,7 @@
 #include <boost/preprocessor/stringize.hpp>
 #include <boost/preprocessor/tuple/elem.hpp>
 #include <boost/preprocessor/tuple/to_seq.hpp>
+#include "libslic3r_infill_module_options.h"
 #include <set>
 #include <unordered_map>
 #include <string>
@@ -811,6 +812,7 @@ public:
 private:
     void init_common_params();
     void init_fff_params();
+    void init_infill_module_params();
     void init_extruder_option_keys();
     void init_sla_params();
 
@@ -1596,6 +1598,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool, zaa_dont_alternate_fill_direction))
     ((ConfigOptionFloat, zaa_min_z))
     ((ConfigOptionFloat, zaa_minimize_perimeter_height))
+    // Orca: options added by infill modules (REGION_OPTIONS in their module.cmake); none by default.
+    ORCA_INFILL_MODULE_REGION_OPTIONS
     )
 
 PRINT_CONFIG_CLASS_DEFINE(

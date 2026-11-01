@@ -17,8 +17,8 @@ LEFT_OUT="${3:-}"
 
 MODEL="$(cd "$(dirname "$0")/../data" && pwd)/20mm_cube.obj"
 
-# CMake name, token, fallback token and slots of each pattern a build may leave out
-# (Fill/InfillPatternRegistry.cpp).
+# CMake name, token, fallback token and slots of each built-in pattern a build may leave out
+# (src/libslic3r/Fill/Modules/<name>/).
 PATTERNS="
 ZIGZAG           zigzag            rectilinear       sparse
 CROSSZAG         crosszag          rectilinear       sparse
@@ -130,11 +130,14 @@ compare() {
         || fail "$opt=$token: config blocks differ by: $differences"
 }
 
+compared=0
 IFS=';' read -r -a left_out <<< "$LEFT_OUT"
 for name in "${left_out[@]}"; do
     row="$(awk -v name="$name" '$1 == name' <<< "$PATTERNS")"
-    [ -n "$row" ] || { fail "$name: not an optional infill pattern"; continue; }
+    # A left-out module of a pattern without an enum value is checked by its own tests.
+    [ -n "$row" ] || { echo "SKIP: $name is not a built-in optional infill pattern"; continue; }
     read -r _ token fallback slots <<< "$row"
+    compared=$((compared + 1))
     case ",$slots," in *,sparse,*)
         compare sparse_infill_pattern "$token" "$fallback" ;;
     esac
@@ -152,4 +155,5 @@ if [ "$fails" -ne 0 ]; then
     done
     exit 1
 fi
+[ "$compared" -gt 0 ] || { echo "SKIP: this build includes every built-in optional infill pattern"; exit 77; }
 echo "PASS"

@@ -1356,6 +1356,20 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     
     toggle_line("infill_overhang_angle", sparse_pattern.has_option("infill_overhang_angle"), -1, _L("Select the Lateral Honeycomb sparse infill pattern to use this setting."));
 
+    // Orca: the options of infill modules are shown while a selected pattern owns them.
+    for (const auto &[option, module] : InfillPatternRegistry::region_options()) {
+        const char *key   = option->key;
+        auto        owns  = [config, key](const char *pattern_option) {
+            return infill_pattern(config->opt_enum<InfillPattern>(pattern_option)).has_option(key);
+        };
+        const auto *end   = module->patterns + module->pattern_count;
+        const auto *owner = std::find_if(module->patterns, end, [key](const InfillPatternDescriptor &p) { return p.label != nullptr && p.has_option(key); });
+        toggle_line(key,
+                    (have_infill && owns("sparse_infill_pattern")) || owns("top_surface_pattern") || owns("bottom_surface_pattern") ||
+                        owns("internal_solid_infill_pattern"),
+                    -1, format_wxstr(_L("Select the %1% infill pattern to use this setting."), owner != end ? _(owner->label) : wxString::FromUTF8(module->name)));
+    }
+
     std::string printer_type = wxGetApp().preset_bundle->printers.get_edited_preset().get_printer_type(wxGetApp().preset_bundle);
     toggle_line("enable_wrapping_detection", DevPrinterConfigUtil::support_wrapping_detection(printer_type), -1, _L("The selected printer does not support wrapping detection."));
 }

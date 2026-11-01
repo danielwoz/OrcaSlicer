@@ -1,0 +1,1 @@
+orca_add_infill_module(NAME lateralhoneycomb MODULE LateralHoneycombModule.cpp CORE OFF)

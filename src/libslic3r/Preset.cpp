@@ -35,6 +35,7 @@
 #include "ParallelResolve.hpp"
 #include "Semver.hpp"
 #include "PrintConfig.hpp"
+#include "Fill/InfillPatternRegistry.hpp"
 #include "libslic3r_version.h"
 #include "I18N.hpp"
 
@@ -1733,7 +1734,17 @@ static std::vector<std::string> s_Preset_sla_printer_options {
     "inherits"
 };
 
-const std::vector<std::string>& Preset::print_options()          { return s_Preset_print_options; }
+const std::vector<std::string>& Preset::print_options()
+{
+    // Orca: the options infill modules add belong to print presets.
+    static const std::vector<std::string> options = [] {
+        std::vector<std::string> keys = s_Preset_print_options;
+        for (const auto &[option, module] : InfillPatternRegistry::region_options())
+            keys.emplace_back(option->key);
+        return keys;
+    }();
+    return options;
+}
 const std::vector<std::string>& Preset::filament_options()       { return s_Preset_filament_options; }
 const std::vector<std::string>& Preset::machine_limits_options() { return s_Preset_machine_limits_options; }
 // The following nozzle options of a printer profile will be adjusted to match the size
