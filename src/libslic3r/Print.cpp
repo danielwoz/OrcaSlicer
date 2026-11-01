@@ -2045,6 +2045,23 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         }
     }
 
+    // A used filament marked non-printable in every available extruder (its "filament_printable"
+    // bitmask has no bit set for any physical extruder) can never be assigned to a nozzle; reject
+    // it here rather than failing inside tool ordering. A mixed slot prints with its components,
+    // so those are checked instead of the slot itself.
+    if (is_BBL_printer() && nozzles > 0 && !m_config.filament_printable.values.empty()) {
+        const unsigned int extruder_mask = (nozzles >= 32) ? ~0u : ((1u << nozzles) - 1u);
+        for (unsigned int filament_id : expand_mixed_filaments(extruders, m_config.filament_is_mixed.values, m_config.filament_mixed_components.values)) {
+            if ((static_cast<unsigned int>(m_config.filament_printable.get_at(filament_id)) & extruder_mask) != 0)
+                continue;
+            StringObjectException err;
+            // TRN %1% is the filament number as shown in the filament list, starting from 1.
+            err.string  = Slic3r::format(L("Filament %1% cannot be placed in any extruder with the current \"filament_printable\" setting."), filament_id + 1);
+            err.opt_key = "filament_printable";
+            return err;
+        }
+    }
+
     // IDEX/IQEX: block multi-color in non-primary parallel modes when the active
     // configuration can't physically support it (no within-gantry toolchange path
     // or MMU lane sharing). See imex_multicolor_block_reason() for the full rule.
