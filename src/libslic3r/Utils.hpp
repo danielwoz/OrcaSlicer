@@ -129,6 +129,10 @@ void set_resources_dir(const std::string &path);
 // Return a full path to the resources directory.
 const std::string& resources_dir();
 
+// False when a build for the proprietary Bambu network plugin runs without the genuine Bambu host,
+// see utils.cpp; the network plugin is not loaded then.
+bool is_bambu_host_mode();
+
 //BBS: add temp dir
 void set_temporary_dir(const std::string &path);
 const std::string& temporary_dir();

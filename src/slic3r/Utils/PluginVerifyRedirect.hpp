@@ -11,8 +11,9 @@ namespace Slic3r {
 // BambuStudio.dll instead, satisfying the gate so control commands get signed.
 //
 // Installed only in MSVC x64 builds with ORCA_PLUGIN_VERIFY_REDIRECT; a no-op
-// otherwise (other platforms, ARM64, or the option off). The genuine DLL path
-// comes from env BAMBU_BRIDGE_GENUINE_DLL or defaults to the standard install
+// otherwise (other platforms, ARM64, or the option off). The genuine DLL is
+// BambuStudioOriginal.dll next to our BambuStudio.dll when present, else the
+// one named by env BAMBU_BRIDGE_GENUINE_DLL or found at the standard install
 // path. Nothing is hooked if no genuine file is found.
 //
 // MUST be called before the network plugin is loaded.

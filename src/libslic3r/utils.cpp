@@ -305,6 +305,26 @@ const std::string& resources_dir()
     return g_resources_dir;
 }
 
+// The proprietary Bambu network plugin (ORCA_PLUGIN_VERIFY_REDIRECT builds on Windows) only runs
+// under the genuine Bambu-signed host, bambu-studio.exe, which the launcher re-launches into when
+// Bambu Studio is installed ("Bambu mode"). Launched as orca-slicer.exe without it, the app runs as
+// plain OrcaSlicer. Every other build, the open-source plugin included, is always in Bambu mode.
+bool is_bambu_host_mode()
+{
+#if defined(WIN32) && defined(ORCA_PLUGIN_VERIFY_REDIRECT)
+    static const bool host_mode = [] {
+        wchar_t exe[MAX_PATH] = { 0 };
+        ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        const wchar_t *suffix  = L"bambu-studio.exe";
+        const size_t   exe_len = wcslen(exe), suf_len = wcslen(suffix);
+        return exe_len >= suf_len && _wcsicmp(exe + exe_len - suf_len, suffix) == 0;
+    }();
+    return host_mode;
+#else
+    return true;
+#endif
+}
+
 //BBS: add temporary dir
 static std::string g_temporary_dir;
 void set_temporary_dir(const std::string &dir)
