@@ -9,6 +9,7 @@
 #include "Plater.hpp"
 #include "Widgets/Button.hpp"
 #include "Widgets/Label.hpp"
+#include "Widgets/TabCtrl.hpp"
 #include "Printer/PrinterFileSystem.h"
 #include "MsgDialog.hpp"
 #include "Widgets/ProgressDialog.hpp"
@@ -171,6 +172,22 @@ MediaFilePanel::MediaFilePanel(wxWindow * parent)
 
     sizer->Add(top_sizer, 0, wxEXPAND);
 
+    // External / Internal storage selector. Shown only for printers that report
+    // internal model storage (fun2[17]) or internal timelapse; otherwise the
+    // media panel browses external (SD card) storage as before.
+    wxBoxSizer *storage_sizer = new wxBoxSizer(wxHORIZONTAL);
+    m_storage_tab = new ::TabCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, 0);
+    m_storage_tab->SetBackgroundColor(wxColour("#EEEEEE"));
+    m_storage_tab->SetBorderColor(wxColour("#EEEEEE"));
+    m_storage_tab->SetFont(Label::Body_14);
+    m_storage_tab->SetMinSize({-1, 36 * em_unit(this) / 10});
+    m_storage_tab->AppendItem(_L("External"));
+    m_storage_tab->AppendItem(_L("Internal"));
+    m_storage_tab->SelectItem(0);
+    m_storage_tab->Hide();
+    storage_sizer->Add(m_storage_tab, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 48);
+    sizer->Add(storage_sizer, 0, wxEXPAND);
+
     m_image_grid = new ImageGrid(this);
     m_image_grid->Bind(EVT_ITEM_ACTION, [this](wxCommandEvent &e) { doAction(size_t(e.GetExtraLong()), e.GetInt()); });
     m_image_grid->SetStatus(m_bmp_failed, _L("No printers."));
@@ -192,6 +209,10 @@ MediaFilePanel::MediaFilePanel(wxWindow * parent)
     m_button_all->Bind(wxEVT_COMMAND_BUTTON_CLICKED, time_button_clicked);
     m_button_all->SetValue(true);
 
+    m_storage_tab->Bind(wxEVT_TAB_SEL_CHANGED, [this](wxCommandEvent &e) {
+        SwitchStorage(e.GetInt() == 0);
+    });
+
     // File type
     auto type_button_clicked = [this](wxEvent &e) {
         Button *buttons[]{m_button_timelapse, m_button_video, m_button_model};
@@ -204,6 +225,7 @@ MediaFilePanel::MediaFilePanel(wxWindow * parent)
         buttons[m_last_type]->SetValue(!buttons[m_last_type]->GetValue());
         if (type == PrinterFileSystem::F_MODEL)
             m_image_grid->SetGroupMode(PrinterFileSystem::G_NONE);
+        updateStorageTabVisibility();
     };
     m_button_timelapse->Bind(wxEVT_COMMAND_BUTTON_CLICKED, type_button_clicked);
     m_button_video->Bind(wxEVT_COMMAND_BUTTON_CLICKED, type_button_clicked);
@@ -273,6 +295,15 @@ void MediaFilePanel::UpdateByObj(MachineObject* obj)
         m_remote_proto = obj->get_file_remote();
         m_model_download_support = obj->file_model_download;
 
+        bool support_internal_storage = obj->is_support_model_internal_storage;
+        bool support_internal_timelapse = obj->is_support_internal_timelapse;
+        if (m_support_internal_storage != support_internal_storage ||
+            m_support_internal_timelapse != support_internal_timelapse) {
+            m_support_internal_storage = support_internal_storage;
+            m_support_internal_timelapse = support_internal_timelapse;
+            updateStorageTabVisibility();
+        }
+
         if (m_sdcard_exist != (obj->GetStorage()->get_sdcard_state() == DevStorage::HAS_SDCARD_NORMAL)) {
             m_sdcard_exist = obj->GetStorage()->get_sdcard_state() == DevStorage::HAS_SDCARD_NORMAL;
             sdcard_state_changed = true;
@@ -286,6 +317,12 @@ void MediaFilePanel::UpdateByObj(MachineObject* obj)
         m_local_proto = 0;
         m_remote_proto = 0;
         m_model_download_support = false;
+
+        if (m_support_internal_storage || m_support_internal_timelapse) {
+            m_support_internal_storage = false;
+            m_support_internal_timelapse = false;
+            updateStorageTabVisibility();
+        }
 
         if (m_sdcard_exist) {
             m_sdcard_exist = false; // reset sdcard state when no object
@@ -419,15 +456,22 @@ void MediaFilePanel::SwitchStorage(bool external)
     if (m_external == external)
         return;
     m_external = external;
-    m_type_panel->Show(external);
-    if (!external) {
-        Button *buttons[]{m_button_timelapse, m_button_video, m_button_model};
-        auto button = buttons[PrinterFileSystem::F_MODEL];
-        wxCommandEvent event(wxEVT_COMMAND_BUTTON_CLICKED, button->GetId());
-        event.SetEventObject(button);
-        wxPostEvent(button, event);
-    }
+    m_storage_tab->SelectItem(external ? 0 : 1);
     m_image_grid->SetFileType(m_last_type, m_external ? "" : "internal");
+}
+
+void MediaFilePanel::updateStorageTabVisibility()
+{
+    bool show_tab = false;
+    if (m_last_type == PrinterFileSystem::F_MODEL)
+        show_tab = m_support_internal_storage;
+    else if (m_last_type == PrinterFileSystem::F_TIMELAPSE)
+        show_tab = m_support_internal_timelapse;
+
+    m_storage_tab->Show(show_tab);
+    if (!show_tab && !m_external)
+        SwitchStorage(true);
+    Layout();
 }
 
 void MediaFilePanel::Rescale()
@@ -438,6 +482,8 @@ void MediaFilePanel::Rescale()
 
     auto top_sizer = GetSizer()->GetItem((size_t) 0)->GetSizer();
     top_sizer->SetMinSize({-1, 75 * em_unit(this) / 10});
+    m_storage_tab->Rescale();
+    m_storage_tab->SetMinSize({-1, 36 * em_unit(this) / 10});
     m_button_year->Rescale();
     m_button_month->Rescale();
     m_button_all->Rescale();
@@ -669,8 +715,10 @@ void MediaFilePanel::doAction(size_t index, int action)
                     auto             wfile = boost::filesystem::path(file.local_path).wstring();
                     SHELLEXECUTEINFO info{sizeof(info), 0, NULL, NULL, wfile.c_str(), L"", SW_HIDE};
                     ::ShellExecuteEx(&info);
-#else
+#elif __APPLE__
                     wxShell("open " + file.local_path);
+#else
+                    desktop_xdg_open(file.local_path);
 #endif
                 } else {
                     fs->DownloadCancel(index);

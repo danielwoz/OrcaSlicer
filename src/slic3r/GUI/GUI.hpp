@@ -87,6 +87,10 @@ extern void about();
 extern void desktop_open_datadir_folder();
 // Ask the destop to open one folder
 extern void desktop_open_any_folder(const std::string& path);
+#if !defined(_WIN32) && !defined(__APPLE__)
+// Ask the desktop to open a file or folder with xdg-open, outside the AppImage environment when run from one.
+extern void desktop_xdg_open(const std::string& path);
+#endif
 // Ask the desktop to open a file from the project's auxiliary directory, after a confirmation
 // unless its type is known to be plain content. Returns false if the file was not opened.
 extern bool desktop_open_project_attachment(wxWindow *parent, const boost::filesystem::path &path);

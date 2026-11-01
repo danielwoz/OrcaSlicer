@@ -5487,6 +5487,7 @@ void MachineObject::parse_new_info(json print)
         is_support_print_with_emmc = get_flag_bits_no_border(fun2, 0) == 1;
         is_support_pa_mode = (get_flag_bits_no_border(fun2, 3) == 1);
         is_support_remote_dry = (get_flag_bits_no_border(fun2, 5) == 1);
+        is_support_model_internal_storage = (get_flag_bits_no_border(fun2, 17) == 1);
         is_support_check_track_switch_match_slice_printer = get_flag_bits_no_border(fun2, 19) == 1;
         is_support_filament_manual_multi_color = (get_flag_bits_no_border(fun2, 23) == 1);
 

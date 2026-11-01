@@ -589,37 +589,7 @@ void desktop_open_datadir_folder()
 		const char *argv[] = { "open", path.data(), nullptr };
 		::wxExecute(argv, wxEXEC_ASYNC, nullptr);
 #else
-		const char *argv[] = { "xdg-open", path.data(), nullptr };
-
-		// Check if we're running in an AppImage container, if so, we need to remove AppImage's env vars,
-		// because they may mess up the environment expected by the file manager.
-		// Mostly this is about LD_LIBRARY_PATH, but we remove a few more too for good measure.
-		if (wxGetEnv("APPIMAGE", nullptr)) {
-			// We're running from AppImage
-			wxEnvVariableHashMap env_vars;
-			wxGetEnvMap(&env_vars);
-
-			env_vars.erase("APPIMAGE");
-			env_vars.erase("APPDIR");
-			env_vars.erase("LD_LIBRARY_PATH");
-			env_vars.erase("LD_PRELOAD");
-			env_vars.erase("UNION_PRELOAD");
-
-			wxExecuteEnv exec_env;
-			exec_env.env = std::move(env_vars);
-
-			wxString owd;
-			if (wxGetEnv("OWD", &owd)) {
-				// This is the original work directory from which the AppImage image was run,
-				// set it as CWD for the child process:
-				exec_env.cwd = std::move(owd);
-			}
-
-			::wxExecute(argv, wxEXEC_ASYNC, nullptr, &exec_env);
-		} else {
-			// Looks like we're NOT running from AppImage, we'll make no changes to the environment.
-			::wxExecute(argv, wxEXEC_ASYNC, nullptr, nullptr);
-		}
+		desktop_xdg_open(path);
 #endif
 }
 
@@ -640,7 +610,14 @@ void desktop_open_any_folder( const std::string& path )
     if (!fs::is_directory(p)) {
         new_path = p.parent_path().string();
     }
-    const char* argv[] = {"xdg-open", new_path.data(), nullptr};
+    desktop_xdg_open(new_path);
+#endif
+}
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+void desktop_xdg_open(const std::string& path)
+{
+    const char* argv[] = {"xdg-open", path.data(), nullptr};
 
     // Check if we're running in an AppImage container, if so, we need to remove AppImage's env vars,
     // because they may mess up the environment expected by the file manager.
@@ -671,8 +648,8 @@ void desktop_open_any_folder( const std::string& path )
         // Looks like we're NOT running from AppImage, we'll make no changes to the environment.
         ::wxExecute(argv, wxEXEC_ASYNC, nullptr, nullptr);
     }
-#endif
 }
+#endif
 
 
 bool desktop_open_project_attachment(wxWindow *parent, const boost::filesystem::path &path)
