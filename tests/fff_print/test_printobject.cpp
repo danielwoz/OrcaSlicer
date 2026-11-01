@@ -15,6 +15,7 @@
 #include "libslic3r/AABBTreeLines.hpp"
 
 #include "test_helpers.hpp"
+#include "test_utils.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -217,6 +218,7 @@ TEST_CASE("Internal bridge angles follow the lower infill layer and model rotati
     const int multiline = GENERATE(1, 2, 3);
     CAPTURE(multiline);
     const double rotation = GENERATE(23., -123.);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
     const std::vector<double> cycle{10., 30., 70.};
     auto config = internal_bridge_config(pattern, multiline);
     config.set_deserialize_strict({{"sparse_infill_rotate_template", "10,30,70"},
@@ -272,7 +274,9 @@ TEST_CASE("Turning infill does not replace the anchors of another region", "[Pri
         return result;
     };
     const auto baseline = right_bridges("rectilinear");
-    const auto actual = right_bridges(GENERATE("hilbertcurve", "octagramspiral"));
+    const std::string pattern = GENERATE("hilbertcurve", "octagramspiral");
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
+    const auto actual = right_bridges(pattern);
     REQUIRE(actual.size() == baseline.size());
     double total_area = 0.;
     for (const auto &[layer, expected] : baseline) {
@@ -290,6 +294,7 @@ TEST_CASE("Rounded internal bridges end on printed support", "[PrintObject][Inte
     const std::string pattern = GENERATE("hilbertcurve", "octagramspiral");
     const bool separated = GENERATE(false, true);
     CAPTURE(pattern, separated);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
     auto config = internal_bridge_config(pattern, 1);
     config.set_deserialize_strict({{"infill_wall_overlap", "0%"}, {"separated_infills", separated}});
     TriangleMesh mesh = internal_bridge_step();
@@ -346,6 +351,7 @@ TEST_CASE("Enabling separated infill recomputes body origins", "[PrintObject][In
 {
     const std::string pattern = GENERATE("hilbertcurve", "octagramspiral", "archimedeanchords");
     CAPTURE(pattern);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
     auto footprint = [&](bool reslice) {
         auto config = internal_bridge_config(pattern, 2);
         config.set_deserialize_strict({{"separated_infills", !reslice}});
@@ -387,6 +393,7 @@ TEST_CASE("Surface centering survives changes to separated infill settings", "[P
     const std::string density = GENERATE("80%", "100%");
     const bool change_center = initial_center != final_center;
     CAPTURE(pattern, initial_center, final_center, separated, top_order, bottom_order, density);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
 
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"top_surface_pattern", pattern},

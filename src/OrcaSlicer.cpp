@@ -7041,8 +7041,14 @@ int CLI::run(int argc, char **argv)
                             }
                         }
                         else if (!warnings.empty()) {
-                            for (const auto& w : warnings)
+                            for (const auto& w : warnings) {
                                 BOOST_LOG_TRIVIAL(warning) << "got warnings: "<< w.string << std::endl;
+                                if (w.type == STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE) {
+                                    boost::nowide::cerr << "warning: " << w.string << std::endl;
+                                    cli_record_warning(sliced_info, "infill_pattern_unavailable",
+                                                       nlohmann::json{{"plate_id", index + 1}, {"key", w.opt_key}, {"text", w.string}});
+                                }
+                            }
                         }
 
                         if (print->empty()) {

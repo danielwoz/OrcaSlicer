@@ -61,3 +61,13 @@ set_tests_properties(cli_malformed_input PROPERTIES
     LABELS "CLI;RequiresApp"
     SKIP_RETURN_CODE 77
     TIMEOUT 900)
+
+# Infill patterns left out of the build (ORCA_INFILL_<NAME>=OFF, see src/libslic3r/CMakeLists.txt) slice
+# as their fallbacks. Skipped when the build includes every pattern.
+add_test(NAME cli_infill_unavailable
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_infill_unavailable.sh $<TARGET_FILE:OrcaSlicer> ${ORCA_CLI_TEST_PYTHON}
+        "${ORCA_INFILL_LEFT_OUT}")
+set_tests_properties(cli_infill_unavailable PROPERTIES
+    LABELS "CLI;RequiresApp"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 900)

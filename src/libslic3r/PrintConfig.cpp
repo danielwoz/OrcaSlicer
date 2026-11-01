@@ -14,6 +14,7 @@
 #include "format.hpp"
 
 #include "GCode/Thumbnails.hpp"
+#include "Fill/InfillPatternRegistry.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -307,37 +308,7 @@ static t_config_enum_values s_keys_map_TopSurfaceExpansionDirection {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(TopSurfaceExpansionDirection)
 
-static t_config_enum_values s_keys_map_InfillPattern {
-    { "monotonic", ipMonotonic },
-    { "monotonicline", ipMonotonicLine },
-    { "rectilinear", ipRectilinear },
-    { "alignedrectilinear", ipAlignedRectilinear },
-    { "zigzag", ipZigZag },
-    { "crosszag", ipCrossZag },
-    { "lockedzag", ipLockedZag },
-    { "line", ipLine },
-    { "grid", ipGrid },
-    { "triangles", ipTriangles },
-    { "tri-hexagon", ipStars },
-    { "cubic", ipCubic },
-    { "adaptivecubic", ipAdaptiveCubic },
-    { "quartercubic", ipQuarterCubic },
-    { "supportcubic", ipSupportCubic },
-    { "lightning", ipLightning },
-    { "honeycomb", ipHoneycomb },
-    { "3dhoneycomb", ip3DHoneycomb },
-    { "lateral-honeycomb", ipLateralHoneycomb },
-    { "lateral-lattice", ipLateralLattice },
-    { "crosshatch", ipCrossHatch },
-    { "tpmsd", ipTpmsD },
-    { "tpmsfk", ipTpmsFK },
-    { "gyroid", ipGyroid },
-    { "concentric", ipConcentric },
-    { "spiralinset", ipSpiralInset },
-    { "hilbertcurve", ipHilbertCurve },
-    { "archimedeanchords", ipArchimedeanChords },
-    { "octagramspiral", ipOctagramSpiral }
-};
+static t_config_enum_values s_keys_map_InfillPattern = InfillPatternRegistry::keys_map();
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(InfillPattern)
 
 static t_config_enum_values s_keys_map_IroningType {
@@ -2551,24 +2522,7 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip = L("This is the line pattern for top surface infill.");
     def->enum_keys_map = &ConfigOptionEnum<InfillPattern>::get_enum_values();
-    def->enum_values.push_back("monotonic");
-    def->enum_values.push_back("monotonicline");
-    def->enum_values.push_back("rectilinear");
-    def->enum_values.push_back("alignedrectilinear");
-    def->enum_values.push_back("concentric");
-    def->enum_values.push_back("spiralinset");
-    def->enum_values.push_back("hilbertcurve");
-    def->enum_values.push_back("archimedeanchords");
-    def->enum_values.push_back("octagramspiral");
-    def->enum_labels.push_back(L("Monotonic"));
-    def->enum_labels.push_back(L("Monotonic line"));
-    def->enum_labels.push_back(L("Rectilinear"));
-    def->enum_labels.push_back(L("Aligned Rectilinear"));
-    def->enum_labels.push_back(L("Concentric"));
-    def->enum_labels.push_back(L("Spiral Inset"));
-    def->enum_labels.push_back(L("Hilbert Curve"));
-    def->enum_labels.push_back(L("Archimedean Chords"));
-    def->enum_labels.push_back(L("Octagram Spiral"));
+    InfillPatternRegistry::define_enum_values(*def, ipsSurface);
     def->set_default_value(new ConfigOptionEnum<InfillPattern>(ipMonotonicLine));
 
     def = this->add("top_surface_density", coPercent);
@@ -3810,58 +3764,7 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip = L("This is the line pattern for internal sparse infill.");
     def->enum_keys_map = &ConfigOptionEnum<InfillPattern>::get_enum_values();
-    def->enum_values.push_back("rectilinear");
-    def->enum_values.push_back("alignedrectilinear");
-    def->enum_values.push_back("zigzag");
-    def->enum_values.push_back("crosszag");
-    def->enum_values.push_back("lockedzag");
-    def->enum_values.push_back("line");
-    def->enum_values.push_back("grid");
-    def->enum_values.push_back("triangles");
-    def->enum_values.push_back("tri-hexagon");
-    def->enum_values.push_back("cubic");
-    def->enum_values.push_back("adaptivecubic");
-    def->enum_values.push_back("quartercubic");
-    def->enum_values.push_back("supportcubic");
-    def->enum_values.push_back("lightning");
-    def->enum_values.push_back("honeycomb");
-    def->enum_values.push_back("3dhoneycomb");
-    def->enum_values.push_back("lateral-honeycomb");
-    def->enum_values.push_back("lateral-lattice");
-    def->enum_values.push_back("crosshatch");
-    def->enum_values.push_back("tpmsd");
-    def->enum_values.push_back("tpmsfk");
-    def->enum_values.push_back("gyroid");
-    def->enum_values.push_back("concentric");
-    def->enum_values.push_back("hilbertcurve");
-    def->enum_values.push_back("archimedeanchords");
-    def->enum_values.push_back("octagramspiral");
-    def->enum_labels.push_back(L("Rectilinear"));
-    def->enum_labels.push_back(L("Aligned Rectilinear"));
-    def->enum_labels.push_back(L("Zig Zag"));
-    def->enum_labels.push_back(L("Cross Zag"));
-    def->enum_labels.push_back(L("Locked Zag"));
-    def->enum_labels.push_back(L("Line"));
-    def->enum_labels.push_back(L("Grid"));
-    def->enum_labels.push_back(L("Triangles"));
-    def->enum_labels.push_back(L("Tri-hexagon"));
-    def->enum_labels.push_back(L("Cubic"));
-    def->enum_labels.push_back(L("Adaptive Cubic"));
-    def->enum_labels.push_back(L("Quarter Cubic"));
-    def->enum_labels.push_back(L("Support Cubic"));
-    def->enum_labels.push_back(L("Lightning"));
-    def->enum_labels.push_back(L("Honeycomb"));
-    def->enum_labels.push_back(L("3D Honeycomb"));
-    def->enum_labels.push_back(L("Lateral Honeycomb"));
-    def->enum_labels.push_back(L("Lateral Lattice"));
-    def->enum_labels.push_back(L("Cross Hatch"));
-    def->enum_labels.push_back(L("TPMS-D"));
-    def->enum_labels.push_back(L("TPMS-FK"));
-    def->enum_labels.push_back(L("Gyroid"));
-    def->enum_labels.push_back(L("Concentric"));
-    def->enum_labels.push_back(L("Hilbert Curve"));
-    def->enum_labels.push_back(L("Archimedean Chords"));
-    def->enum_labels.push_back(L("Octagram Spiral"));
+    InfillPatternRegistry::define_enum_values(*def, ipsSparse);
     def->set_default_value(new ConfigOptionEnum<InfillPattern>(ipCrossHatch));
 
     def = this->add("sparse_infill_smooth_factor", coPercent);
@@ -5181,10 +5084,7 @@ void PrintConfigDef::init_fff_params()
     def->tooltip       = L("The pattern that will be used when ironing.");
     def->category      = L("Quality");
     def->enum_keys_map = &ConfigOptionEnum<InfillPattern>::get_enum_values();
-    def->enum_values.push_back("rectilinear");
-    def->enum_values.push_back("concentric");
-    def->enum_labels.push_back(L("Rectilinear"));
-    def->enum_labels.push_back(L("Concentric"));
+    InfillPatternRegistry::define_enum_values(*def, ipsIroning);
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<InfillPattern>(ipRectilinear));
     
@@ -7985,10 +7885,7 @@ void PrintConfigDef::init_fff_params()
     def->tooltip       = L("The pattern that will be used when ironing.");
     def->category      = L("Support");
     def->enum_keys_map = &ConfigOptionEnum<InfillPattern>::get_enum_values();
-    def->enum_values.push_back("rectilinear");
-    def->enum_values.push_back("concentric");
-    def->enum_labels.push_back(L("Rectilinear"));
-    def->enum_labels.push_back(L("Concentric"));
+    InfillPatternRegistry::define_enum_values(*def, ipsIroning);
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<InfillPattern>(ipRectilinear));
     

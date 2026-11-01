@@ -24,6 +24,8 @@
 #include <numeric>
 #include <sstream>
 #include <string>
+#include <typeindex>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -38,6 +40,20 @@
 #include "libslic3r/Fill/FillAdaptive.hpp"
 #include "libslic3r/Fill/FillGyroid.hpp"
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
+#include "libslic3r/Fill/Fill3DHoneycomb.hpp"
+#include "libslic3r/Fill/FillConcentric.hpp"
+#include "libslic3r/Fill/FillConcentricInternal.hpp"
+#include "libslic3r/Fill/FillCrossHatch.hpp"
+#include "libslic3r/Fill/FillHoneycomb.hpp"
+#include "libslic3r/Fill/FillLightning.hpp"
+#include "libslic3r/Fill/FillLine.hpp"
+#include "libslic3r/Fill/FillPlanePath.hpp"
+#include "libslic3r/Fill/FillRectilinear.hpp"
+#include "libslic3r/Fill/FillSpiralInset.hpp"
+#include "libslic3r/Fill/FillTpmsD.hpp"
+#include "libslic3r/Fill/FillTpmsFK.hpp"
+#include "libslic3r/Fill/InfillPatternRegistry.hpp"
+#include "libslic3r_infill_patterns.h"
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/IntersectionPoints.hpp"
@@ -48,6 +64,7 @@
 #include "libslic3r/libslic3r.h"
 
 #include "test_helpers.hpp"
+#include "test_utils.hpp"
 
 using namespace Slic3r;
 
@@ -1107,8 +1124,9 @@ TEST_CASE("Honeycomb infill rounds its cell corners with the smooth factor", "[F
     REQUIRE(sharpest_turn_cosine(smooth) > 0.9);
 }
 
-// Point count, number of turns sharper than 25 degrees and length of the sparse infill of a print.
-// A rounded corner is a run of much gentler turns, so smoothing shows up as fewer sharp ones.
+// Point count, number of turns sharper than 25 degrees and length of the sparse infill of a print, or of the
+// infill whose role is accepted by role_filter. A rounded corner is a run of much gentler turns, so smoothing
+// shows up as fewer sharp ones.
 struct SparseInfillShape {
     size_t point_count { 0 };
     size_t sharp_turns { 0 };
@@ -1119,12 +1137,12 @@ struct SparseInfillShape {
     uint64_t sequence { 14695981039346656037ull };
 };
 
-static SparseInfillShape sparse_infill_shape(const Print &print)
+static SparseInfillShape sparse_infill_shape(const Print &print, bool (*role_filter)(ExtrusionRole) = sparse_role)
 {
     SparseInfillShape shape;
 
-    auto account = [&shape](const ExtrusionPath &path) {
-        if (!sparse_role(path.role()))
+    auto account = [&shape, role_filter](const ExtrusionPath &path) {
+        if (!role_filter(path.role()))
             return;
         const Points3 &pts = path.polyline.points;
         ++shape.path_count;
@@ -1287,6 +1305,7 @@ TEST_CASE("Multiline infill of an object matches the infill of a larger object w
     // reaches, and a strip with small cells, whose extents change with every layer orientation.
     const auto [half, density] = GENERATE(table<Vec2d, float>({ { Vec2d(20., 20.), 0.15f }, { Vec2d(60., 4.), 0.35f } }));
     CAPTURE(pattern, multiline, half.x(), half.y(), density);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
 
     // Off the origin; the same center gives both objects the same pattern.
     auto rectangle = [](const Vec2d &half) {
@@ -1474,6 +1493,7 @@ TEST_CASE("Multiline adaptive cubic infill keeps its lines apart without closing
     const std::string pattern   = GENERATE("adaptivecubic", "supportcubic");
     const int         multiline = GENERATE(2, 3);
     CAPTURE(pattern, multiline);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
 
     // A sphere refines the octree all around, so the finer lines end on the coarser ones at every layer.
     TriangleMesh sphere = Slic3r::Test::mesh(Slic3r::Test::TestMesh::sphere_50mm);
@@ -1760,6 +1780,7 @@ TEST_CASE("Sparse plane-path anchors match the printed infill", "[Fill][Internal
     const bool rotated = GENERATE(false, true);
     const bool separated = GENERATE(false, true);
     CAPTURE(pattern, smoothing, multiline, rotated, separated);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
 
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"sparse_infill_pattern", pattern},
@@ -1916,6 +1937,7 @@ TEST_CASE("Separated infill centers the sparse infill of each body on itself", "
     const std::string pattern = GENERATE("line", "zigzag", "crosszag", "honeycomb", "3dhoneycomb", "crosshatch", "tpmsd", "tpmsfk", "gyroid");
     const bool separated = GENERATE(false, true);
     CAPTURE(pattern, separated);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
     auto config = DynamicPrintConfig::full_print_config();
     // Orca: The Zig Zag patterns mirror each body about its own center.
     config.set_deserialize_strict({{"sparse_infill_pattern", pattern},
@@ -1985,6 +2007,7 @@ TEST_CASE("Separated infill fills each body like the body sliced alone", "[Fill]
     // Orca: Hilbert Curve and the Zig Zag links follow the extent of the box, not only its center.
     const std::string pattern = GENERATE("hilbertcurve", "zigzag", "crosszag", "gyroid");
     CAPTURE(pattern);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"sparse_infill_pattern", pattern},
                                    {"sparse_infill_density", "20%"},
@@ -2003,6 +2026,7 @@ TEST_CASE("Adaptive infill fills each body like the body sliced alone", "[Fill][
     // Orca: Octree infill centers each body whether or not separated infills are enabled.
     const bool separated = GENERATE(false, true);
     CAPTURE(pattern, separated);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"sparse_infill_pattern", pattern},
                                    {"sparse_infill_density", "40%"},
@@ -2019,6 +2043,7 @@ TEST_CASE("Adaptive infill of a modifier leaves the density of the other regions
 {
     const std::string pattern = GENERATE("adaptivecubic", "supportcubic");
     CAPTURE(pattern);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
     auto config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({{"sparse_infill_pattern", pattern},
                                    {"sparse_infill_density", "15%"},
@@ -2077,6 +2102,7 @@ TEST_CASE("Adaptive TPMS infill thins out from the surface to the interior densi
     const std::string mode     = std::get<1>(row);
     const double      max_core = std::get<2>(row);
     CAPTURE(pattern, mode);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
     // A 60 mm cube in 0.4 mm layers, centered on the origin in XY. Its center is 30 mm from every face.
     auto slice = [&pattern](const std::string &adaptive, Print &print) {
         Slic3r::Test::init_and_process_print({Slic3r::Test::cube(60)}, print,
@@ -2106,6 +2132,7 @@ TEST_CASE("Adaptive TPMS infill thins out from the surface to the interior densi
 
 TEST_CASE("Adaptive TPMS infill of a tall object is sparsest at its middle height", "[Fill]")
 {
+    SKIP_UNLESS_INFILL_PATTERN_BUILT("tpmsd");
     // A 30 x 30 x 90 mm box in 0.4 mm layers: its center is 45 mm high, the middle of its core, not a column.
     Print print;
     Slic3r::Test::init_and_process_print({make_cube(30., 30., 90.)}, print,
@@ -2161,6 +2188,7 @@ TEST_CASE("2D adaptive TPMS infill does not change along its axis", "[Fill]")
 
 TEST_CASE("Adaptive TPMS shells and blend keep the whole deep core of a tall object sparse", "[Fill]")
 {
+    SKIP_UNLESS_INFILL_PATTERN_BUILT("tpmsd");
     // Distance warp grades it partly along the height, like Lobes, as its warp is centered on the middle.
     const std::string mode = GENERATE("stepped_shells", "smooth_blend");
     CAPTURE(mode);
@@ -2225,6 +2253,7 @@ TEST_CASE("Adaptive TPMS infill is sparse at the center of both of two united sp
 
 TEST_CASE("Adaptive TPMS gradients keep the surface density deeper in the order quadratic, linear, exponential", "[Fill]")
 {
+    SKIP_UNLESS_INFILL_PATTERN_BUILT("tpmsd");
     // With a denser surface, t^2 <= t and the geometric interpolation is below the linear one at every depth.
     auto length_for = [](const std::string &gradient) {
         Print print;
@@ -2251,6 +2280,7 @@ TEST_CASE("Adaptive TPMS settings leave the infill unchanged when they do not ap
     const auto [pattern, adaptive] = GENERATE(
         table<std::string, std::string>({{"tpmsd", "disabled"}, {"tpmsfk", "disabled"}, {"gyroid", "disabled"}, {"grid", "lobes"}, {"grid", "stepped_shells"}, {"grid", "smooth_blend"}, {"grid", "distance_warp"}, {"grid", "normal_z"}}));
     CAPTURE(pattern, adaptive);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
     Print reference, tuned;
     Slic3r::Test::init_and_process_print({Slic3r::Test::cube(20)}, reference,
                                         {{"sparse_infill_pattern", pattern}, {"sparse_infill_density", "20%"}, {"layer_height", 0.2}});
@@ -2287,6 +2317,7 @@ TEST_CASE("Adaptive TPMS infill of a region matches the infill of a larger regio
 {
     const InfillPattern pattern = GENERATE(ipGyroid, ipTpmsD, ipTpmsFK);
     CAPTURE(pattern);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
     // An 80 x 80 x 40 mm box around both regions, which share its radial field.
     const ExPolygons box{ExPolygon(Points{Point::new_scale(60., 20.), Point::new_scale(140., 20.), Point::new_scale(140., 100.),
                                           Point::new_scale(60., 100.)})};
@@ -2346,6 +2377,7 @@ TEST_CASE("Adaptive TPMS anchors match the printed infill", "[Fill][InternalBrid
 {
     const std::string pattern = GENERATE("tpmsd", "tpmsfk", "gyroid");
     CAPTURE(pattern);
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(pattern);
     Print print;
     Slic3r::Test::init_and_process_print({Slic3r::Test::cube(30)}, print,
                                         {{"sparse_infill_pattern", pattern},
@@ -2504,4 +2536,156 @@ TEST_CASE("Monotonic line top surfaces print their gap fill next to their lines 
     }
     REQUIRE(gap_fills > 0);
     CHECK(gap_fills_before_a_line > 0);
+}
+
+TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]")
+{
+    const std::map<InfillPattern, std::type_index> classes{
+        {ipMonotonic, typeid(FillMonotonic)},
+        {ipMonotonicLine, typeid(FillMonotonicLines)},
+        {ipRectilinear, typeid(FillRectilinear)},
+        {ipAlignedRectilinear, typeid(FillAlignedRectilinear)},
+        {ipZigZag, typeid(FillZigZag)},
+        {ipCrossZag, typeid(FillCrossZag)},
+        {ipLockedZag, typeid(FillLockedZag)},
+        // The type information of these classes is emitted with their first virtual function, in a file a build may
+        // leave out.
+#if ORCA_INFILL_LINE
+        {ipLine, typeid(FillLine)},
+#endif
+        {ipGrid, typeid(FillGrid)},
+        {ipTriangles, typeid(FillTriangles)},
+        {ipStars, typeid(FillStars)},
+        {ipCubic, typeid(FillCubic)},
+        {ipAdaptiveCubic, typeid(FillAdaptive::Filler)},
+        {ipQuarterCubic, typeid(FillQuarterCubic)},
+        {ipSupportCubic, typeid(FillAdaptive::Filler)},
+        {ipLightning, typeid(FillLightning::Filler)},
+        {ipHoneycomb, typeid(FillHoneycomb)},
+        {ip3DHoneycomb, typeid(Fill3DHoneycomb)},
+        {ipLateralHoneycomb, typeid(FillLateralHoneycomb)},
+        {ipLateralLattice, typeid(FillLateralLattice)},
+        {ipCrossHatch, typeid(FillCrossHatch)},
+#if ORCA_INFILL_TPMSD
+        {ipTpmsD, typeid(FillTpmsD)},
+#endif
+#if ORCA_INFILL_TPMSFK
+        {ipTpmsFK, typeid(FillTpmsFK)},
+#endif
+        {ipGyroid, typeid(FillGyroid)},
+        {ipConcentric, typeid(FillConcentric)},
+        {ipSpiralInset, typeid(FillSpiralInset)},
+        {ipHilbertCurve, typeid(FillHilbertCurve)},
+        {ipArchimedeanChords, typeid(FillArchimedeanChords)},
+        {ipOctagramSpiral, typeid(FillOctagramSpiral)},
+        {ipSupportBase, typeid(FillSupportBase)},
+        {ipConcentricInternal, typeid(FillConcentricInternal)}};
+
+    auto filler_class = [](Fill *created) {
+        const std::unique_ptr<Fill> filler(created);
+        REQUIRE(filler != nullptr);
+        const Fill &fill = *filler;
+        return std::type_index(typeid(fill));
+    };
+    for (const InfillPatternDescriptor &pattern : InfillPatternRegistry::builtins()) {
+        CAPTURE(int(pattern.id));
+        const std::type_index created = filler_class(Fill::new_from_type(pattern.id));
+        if (pattern.available()) {
+            const auto it = classes.find(pattern.id);
+            REQUIRE(it != classes.end());
+            CHECK(created == it->second);
+        }
+        if (! pattern.internal()) {
+            CAPTURE(pattern.key);
+            CHECK(filler_class(Fill::new_from_type(std::string(pattern.key))) == created);
+        }
+    }
+    CHECK(Fill::new_from_type(std::string("no-such-pattern")) == nullptr);
+    CHECK_THROWS_AS(Fill::new_from_type(ipCount), Slic3r::InvalidArgument);
+}
+
+TEST_CASE("Infill patterns this build leaves out slice like their fallbacks", "[Fill][InfillRegistry]")
+{
+    // Runs only in a build that leaves patterns out (ORCA_INFILL_<NAME>=OFF).
+    for (const InfillPatternDescriptor &pattern : InfillPatternRegistry::builtins()) {
+        if (pattern.available())
+            continue;
+        const InfillPatternDescriptor &fallback = *InfillPatternRegistry::find(pattern.fallback);
+        CAPTURE(pattern.key, fallback.key);
+        {
+            const std::unique_ptr<Fill> filler(Fill::new_from_type(pattern.id));
+            const std::unique_ptr<Fill> fallback_filler(Fill::new_from_type(fallback.id));
+            const Fill &fill = *filler, &fallback_fill = *fallback_filler;
+            CHECK(std::type_index(typeid(fill)) == std::type_index(typeid(fallback_fill)));
+        }
+        for (const auto &[opt_key, slot] : InfillPatternRegistry::options()) {
+            if ((pattern.slots & slot) == 0)
+                continue;
+            CAPTURE(opt_key);
+            REQUIRE(slot != ipsIroning);
+            // Slices with the token; returns the options the unavailable-pattern warnings name.
+            auto slice = [opt_key = opt_key](const char *token, Print &print) {
+                Model model;
+                Slic3r::Test::init_print({Slic3r::Test::cube(20)}, print, model,
+                                         {{opt_key, token}, {"layer_height", 0.2}, {"layer_change_gcode", "G92 E0"}});
+                std::vector<StringObjectException> warnings;
+                CHECK(print.validate(&warnings).string == "");
+                print.process();
+                std::vector<std::string> unavailable;
+                for (const StringObjectException &warning : warnings)
+                    if (warning.type == STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE)
+                        unavailable.emplace_back(warning.opt_key);
+                return unavailable;
+            };
+            Print sliced, reference;
+            const std::vector<std::string> warned     = slice(pattern.key, sliced);
+            const std::vector<std::string> not_warned = slice(fallback.key, reference);
+            CHECK(warned == std::vector<std::string>{opt_key});
+            CHECK(not_warned.empty());
+
+            const auto role_filter = slot == ipsSparse ? sparse_role : solid_role;
+            const SparseInfillShape shape    = sparse_infill_shape(sliced, role_filter);
+            const SparseInfillShape expected = sparse_infill_shape(reference, role_filter);
+            REQUIRE(expected.path_count > 0);
+            CHECK(shape.path_count == expected.path_count);
+            CHECK(shape.point_count == expected.point_count);
+            CHECK(shape.sequence == expected.sequence);
+        }
+    }
+}
+
+TEST_CASE("An object's unavailable infill pattern is reported once for all its instances", "[Fill][InfillRegistry]")
+{
+    // Runs only in a build that leaves a sparse infill pattern out.
+    const auto &builtins    = InfillPatternRegistry::builtins();
+    const auto  unavailable = std::find_if(builtins.begin(), builtins.end(), [](const InfillPatternDescriptor &pattern) {
+        return ! pattern.available() && (pattern.slots & ipsSparse) != 0;
+    });
+    if (unavailable == builtins.end())
+        return;
+    CAPTURE(unavailable->key);
+
+    // Differently rotated instances of one object slice as separate PrintObjects.
+    Model        model;
+    ModelObject *object = model.add_object();
+    object->add_volume(Slic3r::Test::cube(20));
+    object->add_instance()->set_offset({50., 50., 0.});
+    ModelInstance *rotated = object->add_instance();
+    rotated->set_offset({100., 50., 0.});
+    rotated->set_rotation(Z, PI / 4.);
+    object->config.set_key_value("sparse_infill_pattern", new ConfigOptionEnum<InfillPattern>(unavailable->id));
+    object->ensure_on_bed();
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"layer_change_gcode", "G92 E0"}});
+    Print print;
+    print.auto_assign_extruders(object);
+    print.apply(model, config);
+    REQUIRE(print.objects().size() == 2);
+
+    std::vector<StringObjectException> warnings;
+    CHECK(print.validate(&warnings).string == "");
+    CHECK(std::count_if(warnings.begin(), warnings.end(), [](const StringObjectException &warning) {
+              return warning.type == STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE;
+          }) == 1);
 }

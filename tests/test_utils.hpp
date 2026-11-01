@@ -8,6 +8,7 @@
 #include <libslic3r/Format/OBJ.hpp>
 #include <libslic3r/SVG.hpp>
 #include <libslic3r/Utils.hpp>
+#include "libslic3r/Fill/InfillPatternRegistry.hpp"
 
 #include <boost/filesystem.hpp>
 #include <boost/nowide/cstdlib.hpp>
@@ -27,6 +28,14 @@
 #else
 #define PATH_SEPARATOR R"(/)"
 #endif
+
+inline bool infill_pattern_built(Slic3r::InfillPattern p)
+{ const Slic3r::InfillPatternDescriptor *d = Slic3r::InfillPatternRegistry::find(p); return d != nullptr && d->available(); }
+inline bool infill_pattern_built(const std::string &key)
+{ const Slic3r::InfillPatternDescriptor *d = Slic3r::InfillPatternRegistry::find(key); return d != nullptr && d->available(); }
+// Skips the running test when this build leaves the infill pattern out (ORCA_INFILL_<NAME>=OFF).
+#define SKIP_UNLESS_INFILL_PATTERN_BUILT(PATTERN) \
+    do { if (! infill_pattern_built(PATTERN)) SKIP("infill pattern " << (PATTERN) << " is left out of this build"); } while (false)
 
 inline Slic3r::TriangleMesh load_model(const std::string &obj_filename)
 {

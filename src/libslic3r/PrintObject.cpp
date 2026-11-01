@@ -34,6 +34,7 @@
 #include "Fill/Fill.hpp"
 #include "Fill/FillLightning.hpp"
 #include "Fill/AdaptiveInfillField.hpp"
+#include "Fill/InfillPatternRegistry.hpp"
 #include "format.hpp"
 #include "AABBTreeIndirect.hpp"
 #include "AABBTreeLines.hpp"
@@ -3863,8 +3864,7 @@ void PrintObject::bridge_over_infill()
                 };
                 for (const CandidateSurface &candidate : surfaces_by_layer[lidx]) {
                     const auto &region_config = candidate.region->region().config();
-                    const bool turning_pattern = region_config.sparse_infill_pattern == ipHilbertCurve ||
-                                                 region_config.sparse_infill_pattern == ipOctagramSpiral;
+                    const bool turning_pattern = sliced_infill_pattern(region_config.sparse_infill_pattern.value).has(ipfCurvedBridgeAnchors);
                     const Flow &flow              = candidate.region->bridging_flow(frSolidInfill, true);
                     const Polygons expanded_polys = expand(candidate.new_polys, flow.scaled_spacing());
                     // deep_infill_area and internal_unsupported_area cover the whole layer; only their part under
@@ -4437,6 +4437,8 @@ PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &defau
         config.sparse_infill_density.value = std::min(config.sparse_infill_density.value, 100.);
     if (config.fuzzy_skin.value != FuzzySkinType::None && (config.fuzzy_skin_point_distance.value < 0.01 || config.fuzzy_skin_thickness.value < 0.001))
         config.fuzzy_skin.value = FuzzySkinType::None;
+    // Orca: slicing uses the fallback of an infill pattern this build leaves out.
+    InfillPatternRegistry::resolve_unavailable(config);
     return config;
 }
 
@@ -5049,13 +5051,7 @@ void PrintObject::combine_infill()
                 0.5f * layerms.back()->flow(frPerimeter).scaled_width() +
              // Because fill areas for rectilinear and honeycomb are grown
              // later to overlap perimeters, we need to counteract that too.
-                ((infill_pattern == ipRectilinear   ||
-                  infill_pattern == ipMonotonic     ||
-                  infill_pattern == ipGrid          ||
-                  infill_pattern == ipLateralLattice     ||
-                  infill_pattern == ipLine          ||
-                  infill_pattern == ipHoneycomb     ||
-                  infill_pattern == ipLateralHoneycomb) ? 1.5f : 0.5f) *
+                sliced_infill_pattern(infill_pattern).combine_clearance_factor *
                     layerms.back()->flow(frSolidInfill).scaled_width();
             for (ExPolygon &expoly : intersection)
                 polygons_append(intersection_with_clearance, offset(expoly, clearance_offset));

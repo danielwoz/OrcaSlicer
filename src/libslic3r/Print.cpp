@@ -83,6 +83,7 @@
 #include "Model.hpp"
 #include "format.hpp"
 #include "LocalesUtils.hpp"
+#include "Fill/InfillPatternRegistry.hpp"
 #include <float.h>
 
 #include <algorithm>
@@ -2020,6 +2021,35 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 
     if (extruders.empty())
         return { L("No extrusions under current settings.") };
+
+    // Orca: an infill pattern this build leaves out is printed with its fallback; report where one is selected.
+    if (! InfillPatternRegistry::all_available()) {
+        auto warn_unavailable = [&add_warning](const ConfigBase &config, const ObjectBase *object) {
+            for (const auto &[opt_key, pattern] : InfillPatternRegistry::unavailable_in(config)) {
+                StringObjectException w;
+                w.string  = Slic3r::format(_u8L("The %1% infill pattern is not included in this build; %2% is used instead."),
+                                           _u8L(pattern->label), _u8L(InfillPatternRegistry::find(pattern->fallback)->label));
+                w.opt_key = opt_key;
+                w.object  = object;
+                w.type    = STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE;
+                add_warning(std::move(w));
+            }
+        };
+        warn_unavailable(m_default_region_config, nullptr);
+        warn_unavailable(m_default_object_config, nullptr);
+        // A ModelObject has a PrintObject per distinct instance rotation, or per instance on a belt printer; report it once.
+        std::set<const ModelObject*> reported;
+        for (const PrintObject *object : m_objects) {
+            if (! reported.insert(object->model_object()).second)
+                continue;
+            const ModelObject &model_object = *object->model_object();
+            warn_unavailable(model_object.config.get(), object);
+            for (const ModelVolume *volume : model_object.volumes)
+                warn_unavailable(volume->config.get(), object);
+            for (const auto &range : model_object.layer_config_ranges)
+                warn_unavailable(range.second.get(), object);
+        }
+    }
 
     // A flow ratio of 0 would extrude nothing, and a nil one would write NaN extrusion lengths.
     {

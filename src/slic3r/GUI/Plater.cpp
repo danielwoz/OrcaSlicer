@@ -4,6 +4,7 @@
 #include "CalibUtils.hpp"
 #include "Flashforge.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/Fill/InfillPatternRegistry.hpp"
 #include "libslic3r_version.h"
 
 #include <boost/assert/source_location.hpp>
@@ -9281,9 +9282,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         const auto* pattern_opt = config_loaded.option<ConfigOptionEnum<InfillPattern>>("sparse_infill_pattern");
                         const auto _sparse_infill_pattern =
                             pattern_opt != nullptr ? pattern_opt->value : FullPrintConfig::defaults().sparse_infill_pattern.value;
-                        bool is_safe_to_rotate = _sparse_infill_pattern == ipRectilinear || _sparse_infill_pattern == ipLine ||
-                                                 _sparse_infill_pattern == ipZigZag || _sparse_infill_pattern == ipCrossZag ||
-                                                 _sparse_infill_pattern == ipLockedZag;
+                        bool is_safe_to_rotate = infill_pattern(_sparse_infill_pattern).has(ipfRotateTemplateSafe);
                         if (!is_safe_to_rotate) {
                             wxString msg_text = _(
                                 L("This project was created with an OrcaSlicer 2.3.1-alpha and uses "
