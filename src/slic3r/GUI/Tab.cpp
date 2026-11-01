@@ -5,6 +5,7 @@
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
+#include "libslic3r/Fill/InfillPlugins.hpp"
 #include "libslic3r/BeltTransform.hpp"
 #include "libslic3r/FilamentMixer.hpp"
 #include "libslic3r/Utils.hpp"
@@ -3183,6 +3184,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("sparse_infill_density", "strength_settings_infill#sparse-infill-density");
         optgroup->append_single_option_line("fill_multiline", "strength_settings_infill#fill-multiline");
         optgroup->append_single_option_line("sparse_infill_pattern", "strength_settings_infill#sparse-infill-pattern");
+        optgroup->append_single_option_line("infill_plugin_params");
         optgroup->append_single_option_line("adaptive_infill_mode", "strength_settings_patterns#adaptive-density");
         optgroup->append_single_option_line("adaptive_infill_interior_density", "strength_settings_patterns#interior-density");
         optgroup->append_single_option_line("adaptive_infill_gradient", "strength_settings_patterns#adaptive-gradient");
@@ -3578,6 +3580,18 @@ void TabPrint::toggle_options()
     }
 
     m_config_manipulation.toggle_print_fff_options(m_config, int(intptr_t(m_extruder_switch->GetClientData())), m_type < Preset::TYPE_COUNT);
+
+    // Orca: the tooltip of the infill plugin parameters lists the parameters of the plugin patterns in use.
+    if (Field *field = get_field("infill_plugin_params"); field != nullptr && field->getWindow() != nullptr) {
+        std::set<InfillPattern> patterns;
+        for (const char *opt_key : { "sparse_infill_pattern", "top_surface_pattern", "bottom_surface_pattern", "internal_solid_infill_pattern" })
+            if (const InfillPattern p = m_config->opt_enum<InfillPattern>(opt_key); infill_pattern(p).plugin())
+                patterns.insert(p);
+        wxString help = _(print_config_def.get("infill_plugin_params")->tooltip);
+        for (InfillPattern p : patterns)
+            help += "\n\n" + from_u8(infill_plugin_param_help(p));
+        field->getWindow()->SetToolTip(help);
+    }
 
     if (m_type == Preset::TYPE_PLATE) {
         const auto &printer_config = m_preset_bundle->printers.get_edited_preset().config;

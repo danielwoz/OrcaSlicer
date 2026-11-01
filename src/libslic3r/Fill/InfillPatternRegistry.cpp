@@ -1,6 +1,10 @@
 #include "InfillPatternRegistry.hpp"
 
+#include <algorithm>
+#include <cassert>
 #include <cstring>
+#include <deque>
+#include <numeric>
 
 #include "libslic3r_infill_patterns.h"      // generated: ORCA_INFILL_<NAME> 0/1
 #include "../Exception.hpp"
@@ -197,6 +201,45 @@ constexpr std::array<std::pair<const char*, InfillPatternSlot>, 6> s_options {{
     { "sparse_infill_pattern", ipsSparse }, { "top_surface_pattern", ipsSurface }, { "bottom_surface_pattern", ipsSurface },
     { "internal_solid_infill_pattern", ipsSurface }, { "ironing_pattern", ipsIroning }, { "support_ironing_pattern", ipsIroning } }};
 
+// Appended to on the main thread before seal(), read concurrently afterwards; a deque keeps the addresses stable.
+std::deque<InfillPatternDescriptor>& runtime_patterns() { static std::deque<InfillPatternDescriptor> patterns; return patterns; }
+// Rank by token of each runtime pattern, indexed like runtime_patterns().
+std::vector<unsigned>& runtime_ranks() { static std::vector<unsigned> ranks; return ranks; }
+bool s_sealed = false;
+
+// Runtime patterns sorted by token.
+std::vector<const InfillPatternDescriptor*> runtime_patterns_by_token()
+{
+    const std::deque<InfillPatternDescriptor> &runtime = runtime_patterns();
+    std::vector<const InfillPatternDescriptor*> out(runtime.size());
+    for (size_t i = 0; i < runtime.size(); ++ i)
+        out[runtime_ranks()[i]] = &runtime[i];
+    return out;
+}
+
+// ^[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+$ and at most 64 characters.
+bool valid_runtime_key(const char *key)
+{
+    if (key == nullptr)
+        return false;
+    const size_t length = std::strlen(key);
+    if (length == 0 || length > 64)
+        return false;
+    bool dot = false, segment_start = true;
+    for (const char *c = key; *c != 0; ++ c) {
+        const bool alnum = (*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9');
+        if (*c == '.') {
+            if (segment_start)
+                return false;
+            dot = segment_start = true;
+        } else if (alnum || (! segment_start && (*c == '_' || *c == '-')))
+            segment_start = false;
+        else
+            return false;
+    }
+    return dot && ! segment_start;
+}
+
 } // namespace
 
 bool InfillPatternDescriptor::has_option(const char *opt_key) const
@@ -212,7 +255,10 @@ const std::array<InfillPatternDescriptor, size_t(ipCount)>& InfillPatternRegistr
 
 const InfillPatternDescriptor* InfillPatternRegistry::find(InfillPattern id)
 {
-    return unsigned(id) < unsigned(ipCount) ? &s_builtins[size_t(id)] : nullptr;
+    if (unsigned(id) < unsigned(ipCount))
+        return &s_builtins[size_t(id)];
+    const std::deque<InfillPatternDescriptor> &runtime = runtime_patterns();
+    return int(id) >= int(ipCount) && size_t(int(id) - int(ipCount)) < runtime.size() ? &runtime[size_t(int(id) - int(ipCount))] : nullptr;
 }
 
 const InfillPatternDescriptor* InfillPatternRegistry::find(const std::string &key)
@@ -228,6 +274,8 @@ t_config_enum_values InfillPatternRegistry::keys_map()
     for (const InfillPatternDescriptor &pattern : s_builtins)
         if (! pattern.internal())
             keys.emplace(pattern.key, int(pattern.id));
+    for (const InfillPatternDescriptor &pattern : runtime_patterns())
+        keys.emplace(pattern.key, int(pattern.id));
     return keys;
 }
 
@@ -239,6 +287,11 @@ void InfillPatternRegistry::define_enum_values(ConfigOptionDef &def, InfillPatte
         if (pattern.slots & slot) {
             def.enum_values.emplace_back(pattern.key);
             def.enum_labels.emplace_back(pattern.label);
+        }
+    for (const InfillPatternDescriptor *pattern : runtime_patterns_by_token())
+        if (pattern->slots & slot) {
+            def.enum_values.emplace_back(pattern->key);
+            def.enum_labels.emplace_back(pattern->label);
         }
 }
 
@@ -270,6 +323,49 @@ std::vector<std::pair<std::string, const InfillPatternDescriptor*>> InfillPatter
             if (const InfillPatternDescriptor *pattern = find(InfillPattern(opt->getInt())); pattern != nullptr && ! pattern->available())
                 out.emplace_back(opt_key, pattern);
     return out;
+}
+
+const InfillPatternDescriptor* InfillPatternRegistry::register_runtime(InfillPatternDescriptor pattern, std::string &error)
+{
+    assert(! s_sealed);
+    if (s_sealed)
+        error = "infill pattern registration is closed";
+    else if (! valid_runtime_key(pattern.key))
+        error = "the token must be two or more parts matching [a-z0-9][a-z0-9_-]* joined by '.', at most 64 characters";
+    else if (find(std::string(pattern.key)) != nullptr)
+        error = "the token is already in use";
+    else if (pattern.label == nullptr || *pattern.label == 0 || pattern.factory == nullptr ||
+             pattern.slots == 0 || (pattern.slots & ~(ipsSparse | ipsSurface)) != 0)
+        error = "invalid pattern description";
+    if (! error.empty())
+        return nullptr;
+    std::deque<InfillPatternDescriptor> &runtime = runtime_patterns();
+    pattern.id       = InfillPattern(int(ipCount) + int(runtime.size()));
+    pattern.fallback = pattern.id;
+    pattern.optional = false;
+    pattern.options  = nullptr;
+    runtime.push_back(pattern);
+    std::vector<size_t> by_token(runtime.size());
+    std::iota(by_token.begin(), by_token.end(), 0);
+    std::sort(by_token.begin(), by_token.end(), [&runtime](size_t a, size_t b) { return std::strcmp(runtime[a].key, runtime[b].key) < 0; });
+    std::vector<unsigned> &ranks = runtime_ranks();
+    ranks.assign(runtime.size(), 0);
+    for (size_t rank = 0; rank < by_token.size(); ++ rank)
+        ranks[by_token[rank]] = unsigned(rank);
+    publish_infill_pattern_values();
+    return &runtime.back();
+}
+
+void InfillPatternRegistry::seal() { s_sealed = true; }
+bool InfillPatternRegistry::sealed() { return s_sealed; }
+bool InfillPatternRegistry::has_runtime_patterns() { return ! runtime_patterns().empty(); }
+
+unsigned InfillPatternRegistry::order(InfillPattern id)
+{
+    const std::vector<unsigned> &ranks = runtime_ranks();
+    if (int(id) >= int(ipCount) && size_t(int(id) - int(ipCount)) < ranks.size())
+        return unsigned(ipCount) + ranks[size_t(int(id) - int(ipCount))];
+    return unsigned(id);
 }
 
 const InfillPatternDescriptor& infill_pattern(InfillPattern pattern)

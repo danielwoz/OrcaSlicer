@@ -8384,6 +8384,9 @@ void GCode::append_full_config(const Print &print, std::string &str)
     };
     std::ostringstream ss;
     for (const std::string& key : cfg.keys()) {
+        // Orca: an empty infill_plugin_params stays out, so prints without infill plugins keep their config block.
+        if (key == "infill_plugin_params" && cfg.opt_string(key).empty())
+            continue;
         if (!is_banned(key) && !cfg.option(key)->is_nil()) {
             if (key == "wipe_tower_x" || key == "wipe_tower_y") {
                 ss << std::fixed << std::setprecision(3) << "; " << key << " = " << dynamic_cast<const ConfigOptionFloats*>(cfg.option(key))->get_at(print.get_plate_index()) << "\n";

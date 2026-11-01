@@ -149,6 +149,10 @@ bool is_adaptive_infill_pattern(InfillPattern pattern);
 bool is_smoothable_infill_pattern(InfillPattern pattern, int multiline = 1);
 // These describe the pattern that is sliced for a value; they are defined by Fill/InfillPatternRegistry.cpp.
 
+// Orca: brings the infill pattern token maps and the pattern option values up to date after
+// InfillPatternRegistry registered a pattern at run time. Called by InfillPatternRegistry only.
+void publish_infill_pattern_values();
+
 enum class IroningType {
     NoIroning,
     TopSurfaces,
@@ -1435,6 +1439,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionString,               sparse_infill_rotate_template))
     ((ConfigOptionPercent,              sparse_infill_density))
     ((ConfigOptionEnum<InfillPattern>,  sparse_infill_pattern))
+    ((ConfigOptionString,               infill_plugin_params))
     ((ConfigOptionPercent,              sparse_infill_smooth_factor))
     ((ConfigOptionFloat,                lateral_lattice_angle_1))
     ((ConfigOptionFloat,                lateral_lattice_angle_2))
@@ -2472,6 +2477,9 @@ public:
     // If the opt_key is no more valid in this version of Slic3r, opt_key is cleared by handle_legacy().
     // handle_legacy() is called internally by set_deserialize().
     void                    handle_legacy(t_config_option_key &opt_key, std::string &value) const override;
+
+    // Orca: copies the values of a pattern option of print_config_def, which infill plugins extend at start-up.
+    static void             refresh_enum_values(const t_config_option_key &opt_key);
 
 private:
     class PrintAndCLIConfigDef : public ConfigDef
