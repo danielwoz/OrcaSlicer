@@ -167,6 +167,15 @@ elseif (UNIX AND NOT WIN32)
         INSTALL_RPATH "$ORIGIN/../libpython/lib")
 endif ()
 
+if (MSVC AND ORCA_PLUGIN_VERIFY_REDIRECT)
+    # The proprietary-plugin layout reuses prebuilt OpenSSL/CURL (built against a
+    # dynamic zlib1.dll) next to OrcaSlicer's static zlib, so the link sees a
+    # duplicate zlib (import vs static objects). zlib's ABI is stable across
+    # 1.2.x; let the linker keep the first definition rather than erroring.
+    # /IGNORE:4006 mutes the spam. Other builds link without these options.
+    target_link_options(OrcaSlicer PRIVATE /FORCE:MULTIPLE /IGNORE:4006)
+endif ()
+
 if (NOT WIN32 AND NOT APPLE)
     # Binary name on unix like systems (Linux, Unix)
     set_target_properties(OrcaSlicer PROPERTIES OUTPUT_NAME "orca-slicer")
