@@ -901,6 +901,9 @@ bool verify_update_print_object_regions(
             cfg.top_surface_filament_id.value = region.extruder_id;
             cfg.bottom_surface_filament_id.value = region.extruder_id;
             cfg.sparse_infill_filament_id.value       = region.extruder_id;
+            // Orca: surface_wall_override_filament is NOT reset here. The painted color sets the
+            // base filament for this region; surface_wall_override_filament still applies on top of
+            // it for the outermost N loops (so painted region + outer-wall accent work).
             if (cfg != region.region->config()) {
                 // Region configuration changed.
                 if (print_region_ref_cnt(*region.region) == 0) {
@@ -1212,6 +1215,8 @@ static PrintObjectRegions* generate_print_object_regions(
                     cfg.top_surface_filament_id.value = painted_extruder_id;
                     cfg.bottom_surface_filament_id.value = painted_extruder_id;
                     cfg.sparse_infill_filament_id.value       = painted_extruder_id;
+                    // Orca: surface_wall_override_filament is NOT reset here. See comment in
+                    // the other painted-region branch above.
                     layer_range.painted_regions.push_back({ painted_extruder_id, parent_region_id, get_create_region(std::move(cfg))});
                 }
         // Sort the regions by parent region::print_object_region_id() and extruder_id to help the slicing algorithm when applying MM segmentation.
@@ -1291,6 +1296,11 @@ void Print::update_shrinkage_compensation(size_t num_extruders, std::vector<int>
         for (int id : { config.outer_wall_filament_id.value, config.inner_wall_filament_id.value, config.sparse_infill_filament_id.value,
                         config.internal_solid_filament_id.value, config.top_surface_filament_id.value, config.bottom_surface_filament_id.value }) {
             const unsigned int i = (unsigned int)std::max(0, id - 1);
+            extruders.emplace_back(i >= num_extruders ? 0 : i);
+        }
+        // Orca: the surface / outer wall override filament prints outer walls and/or top and bottom surfaces.
+        if (const int ov = config.surface_wall_override_filament.value; ov > 0) {
+            const unsigned int i = (unsigned int)(ov - 1);
             extruders.emplace_back(i >= num_extruders ? 0 : i);
         }
     };

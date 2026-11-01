@@ -46,6 +46,7 @@ add_executable(${_TEST_NAME}_tests
     test_filament_mixer.cpp
     test_fill_plane_path.cpp
     test_adaptive_infill_field.cpp
+    test_label_ids_encoding.cpp
     test_geometry.cpp
     test_kdtree.cpp
     test_lightning.cpp

@@ -6,6 +6,7 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "libslic3r/GCode/GCodeProcessor.hpp"
+#include "libslic3r/GCode/ToolOrdering.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/TriangleSelector.hpp"
 #include "libslic3r/MultiMaterialSegmentation.hpp"
@@ -516,6 +517,188 @@ TEST_CASE("A layer without inner walls does not switch to the inner wall filamen
         }));
     CHECK(tools_for_feature(gcode, "Inner wall") == std::set<int>{ 1 });
     CHECK(idle_tool_changes(gcode) == 0);
+}
+
+// Two filaments, everything on the first except the surface / outer wall override filament, set to the second.
+static DynamicPrintConfig surface_override_config(const char *target, std::initializer_list<ConfigBase::SetDeserializeItem> extra = {})
+{
+    DynamicPrintConfig config = multifilament_config(2, {
+        { "wall_loops",                            3 },
+        { "outer_wall_filament_id",                1 },
+        { "inner_wall_filament_id",                1 },
+        { "sparse_infill_filament_id",             1 },
+        { "internal_solid_filament_id",            1 },
+        { "top_surface_filament_id",               1 },
+        { "bottom_surface_filament_id",            1 },
+        { "surface_wall_override_filament",        2 },
+        { "surface_wall_override_filament_target", target },
+        { "outer_wall_count",                      1 },
+        { "skirt_loops",                           0 },
+        { "brim_type",                             "no_brim" },
+    });
+    if (extra.size() > 0)
+        config.set_deserialize_strict(extra);
+    return config;
+}
+
+TEST_CASE("The surface override filament prints the outer walls", "[MultiFilament]")
+{
+    const char *wall_generator = GENERATE("classic", "arachne");
+    CAPTURE(wall_generator);
+    const std::string gcode = slice({ cube(20) }, surface_override_config("walls", { { "wall_generator", wall_generator } }));
+    CHECK(tools_for_feature(gcode, "Outer wall")     == std::set<int>{ 1 });
+    CHECK(tools_for_feature(gcode, "Inner wall")     == std::set<int>{ 0 });
+    CHECK(tools_for_feature(gcode, "Top surface")    == std::set<int>{ 0 });
+    CHECK(tools_for_feature(gcode, "Bottom surface") == std::set<int>{ 0 });
+    CHECK(idle_tool_changes(gcode) == 0);
+}
+
+// With three walls and an outer wall count of 2, the first inner wall moves to the override filament too.
+TEST_CASE("The outer wall count sets how many walls the surface override filament prints", "[MultiFilament]")
+{
+    const char *wall_generator = GENERATE("classic", "arachne");
+    CAPTURE(wall_generator);
+    const std::string gcode = slice({ cube(20) },
+        surface_override_config("walls", { { "wall_generator", wall_generator }, { "outer_wall_count", 2 } }));
+    CHECK(tools_for_feature(gcode, "Outer wall") == std::set<int>{ 1 });
+    CHECK(tools_for_feature(gcode, "Inner wall") == std::set<int>{ 0, 1 });
+}
+
+TEST_CASE("The surface override filament prints the top and bottom surfaces when it covers surfaces", "[MultiFilament]")
+{
+    const std::string gcode = slice({ cube(20) }, surface_override_config("surfaces"));
+    CHECK(tools_for_feature(gcode, "Top surface")           == std::set<int>{ 1 });
+    CHECK(tools_for_feature(gcode, "Bottom surface")        == std::set<int>{ 1 });
+    CHECK(tools_for_feature(gcode, "Outer wall")            == std::set<int>{ 0 });
+    CHECK(tools_for_feature(gcode, "Internal solid infill") == std::set<int>{ 0 });
+    CHECK(idle_tool_changes(gcode) == 0);
+}
+
+TEST_CASE("The surface override filament prints walls and surfaces when it covers both", "[MultiFilament]")
+{
+    const std::string gcode = slice({ cube(20) }, surface_override_config("both"));
+    CHECK(tools_for_feature(gcode, "Outer wall")     == std::set<int>{ 1 });
+    CHECK(tools_for_feature(gcode, "Inner wall")     == std::set<int>{ 0 });
+    CHECK(tools_for_feature(gcode, "Top surface")    == std::set<int>{ 1 });
+    CHECK(tools_for_feature(gcode, "Bottom surface") == std::set<int>{ 1 });
+}
+
+TEST_CASE("The surface override filament prints surfaces of an object without walls", "[MultiFilament]")
+{
+    const std::string gcode = slice({ cube(20) }, surface_override_config("surfaces", { { "wall_loops", 0 } }));
+    CHECK(tools_for_feature(gcode, "Top surface")    == std::set<int>{ 1 });
+    CHECK(tools_for_feature(gcode, "Bottom surface") == std::set<int>{ 1 });
+    CHECK(idle_tool_changes(gcode) == 0);
+}
+
+TEST_CASE("Ironing follows the surface override filament onto the surfaces it covers", "[MultiFilament]")
+{
+    const auto [target, ironing_tool] = GENERATE(table<const char *, int>({ { "both", 1 }, { "walls", 0 } }));
+    CAPTURE(target);
+    const std::string gcode = slice({ cube(20) }, surface_override_config(target, { { "ironing_type", "top" } }));
+    CHECK(tools_for_feature(gcode, "Ironing") == std::set<int>{ ironing_tool });
+}
+
+TEST_CASE("A disabled surface override filament prints nothing", "[MultiFilament]")
+{
+    const std::string gcode = slice({ cube(20) }, surface_override_config("both", { { "surface_wall_override_filament", 0 } }));
+    CHECK(tools_for_role(gcode, "perimeter") == std::set<int>{ 0 });
+    CHECK(tools_for_role(gcode, "infill")    == std::set<int>{ 0 });
+}
+
+// The override set to a mixed slot (3, blending filaments 1 and 2 layer by layer) prints with its physical filaments.
+TEST_CASE("A mixed surface override filament prints with its component filaments", "[MultiFilament][MixedFilament]")
+{
+    DynamicPrintConfig config = multifilament_config(3, {
+        { "filament_is_mixed",                     "0,0,1" },
+        { "filament_mixed_components",             ";;1,2" },
+        { "filament_mixed_sublayer_ratios",        ";;0.5,0.5" },
+        { "filament_mixed_gradient",               "0,0,0" },
+        { "filament_mixed_gradient_range",         ";;" },
+        { "filament_mixed_gradient_curve",         ";;" },
+        { "filament_mixed_gradient_per_part",      "0,0,0" },
+        { "enable_mixed_color_sublayer",           "0" },
+        { "wall_loops",                            3 },
+        { "outer_wall_filament_id",                1 },
+        { "inner_wall_filament_id",                1 },
+        { "sparse_infill_filament_id",             1 },
+        { "internal_solid_filament_id",            1 },
+        { "top_surface_filament_id",               1 },
+        { "bottom_surface_filament_id",            1 },
+        { "surface_wall_override_filament",        3 },
+        { "surface_wall_override_filament_target", "walls" },
+        { "skirt_loops",                           0 },
+        { "brim_type",                             "no_brim" },
+    });
+    const std::string gcode = slice({ cube(20) }, config);
+    CHECK(tools_for_feature(gcode, "Outer wall") == std::set<int>{ 0, 1 });
+    CHECK(tools_for_feature(gcode, "Inner wall") == std::set<int>{ 0 });
+}
+
+// The override walls carry their filament through tool ordering on single and multi nozzle printers, Bambu or not.
+TEST_CASE("Tool ordering schedules the surface override filament with the walls that carry it", "[MultiFilament]")
+{
+    const auto [nozzles, is_bbl] = GENERATE(table<int, bool>({ { 1, false }, { 1, true }, { 2, false }, { 2, true } }));
+    CAPTURE(nozzles, is_bbl);
+    DynamicPrintConfig config = surface_override_config("walls", { { "wall_loops", 2 }, { "enable_prime_tower", 0 } });
+    if (nozzles == 2) {
+        config.set_deserialize_strict({
+            { "nozzle_diameter",                "0.4,0.4" },
+            { "printer_extruder_id",            "1,2" },
+            { "printer_extruder_variant",       "Direct Drive Standard,Direct Drive Standard" },
+            { "extruder_printable_height",      "0,0" },
+            { "single_extruder_multi_material", 0 },
+            { "filament_map_mode",              "Manual" },
+            { "filament_map",                   "1,2" },
+        });
+        size_flush_to_nozzles(config);
+    }
+    Print print;
+    Model model;
+    print.is_BBL_printer() = is_bbl;
+    init_print({ cube(20) }, print, model, config);
+    print.process();
+
+    int layers_with_both = 0;
+    for (const LayerTools &lt : print.tool_ordering())
+        layers_with_both += std::count(lt.extruders.begin(), lt.extruders.end(), 0u) > 0 &&
+                            std::count(lt.extruders.begin(), lt.extruders.end(), 1u) > 0;
+    CHECK(layers_with_both >= 5);
+
+    int outer_walls = 0, other_walls = 0;
+    for (const Layer *layer : print.objects().front()->layers())
+        for (const LayerRegion *region : layer->regions())
+            for (const ExtrusionEntity *island : region->perimeters.entities)
+                for (const ExtrusionEntity *wall : static_cast<const ExtrusionEntityCollection *>(island)->entities)
+                    (wall->extruder_override == 2 ? outer_walls : other_walls) += 1;
+    CHECK(outer_walls > 0);
+    CHECK(other_walls > 0);
+}
+
+// Filament 1 shrinks to 90 %, the override filament 2 not at all. The two disagree, so the shrinkage compensation is
+// switched off for the whole object and validate() warns about it.
+TEST_CASE("The surface override filament counts for the filament shrinkage compensation", "[MultiFilament]")
+{
+    const char *target = GENERATE("walls", "surfaces", "both");
+    CAPTURE(target);
+    Print print;
+    init_and_process_print({ cube(20) }, print, surface_override_config(target, {
+        { "filament_shrink",         "90%,100%" },
+        { "xy_contour_compensation", 0. },
+        { "layer_change_gcode",      "G92 E0\n" }, // validate() relative-E reset
+    }));
+
+    CHECK_FALSE(print.has_same_shrinkage_compensations());
+    CHECK(print.shrinkage_compensation() == Vec3d::Ones());
+    const PrintObject &object = *print.objects().front();
+    const BoundingBox extents = get_extents(object.get_layer(int(object.layer_count() / 2))->lslices);
+    CHECK_THAT(unscale<double>(extents.size().x()), Catch::Matchers::WithinAbs(20., 0.01));
+
+    std::vector<StringObjectException> warnings;
+    CHECK(print.validate(&warnings).string.empty());
+    CHECK(std::any_of(warnings.begin(), warnings.end(), [](const StringObjectException &w) {
+        return w.string.find("Filament shrinkage will not be used") != std::string::npos;
+    }));
 }
 
 // FanMover's guard against splitting a G1 inside custom gcode keys off the ";_FAN_MOVER_SKIP_START/END"

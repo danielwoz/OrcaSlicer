@@ -90,6 +90,13 @@ void PrintRegion::collect_object_printing_extruders(const PrintConfig &print_con
                 if (region_config.wall_loops.value > 1)
 			emplace_extruder(region_config.inner_wall_filament_id);
     }
+    // Orca: the surface / outer wall override filament prints the outer walls and/or the top and bottom surfaces.
+    if (const int wall_override = region_config.surface_wall_override_filament.value; wall_override > 0) {
+        const SurfaceWallOverrideFilamentTarget target = region_config.surface_wall_override_filament_target.value;
+        if ((target != SurfaceWallOverrideFilamentTarget::Surfaces && region_config.wall_loops.value > 0) ||
+            (target != SurfaceWallOverrideFilamentTarget::Walls && (region_config.top_shell_layers.value > 0 || region_config.bottom_shell_layers.value > 0)))
+            emplace_extruder(wall_override);
+    }
     if (region_config.sparse_infill_density.value > 0)
     	emplace_extruder(region_config.sparse_infill_filament_id);
     if (region_config.sparse_infill_density.value > 0 || region_config.top_shell_layers.value > 0 || region_config.bottom_shell_layers.value > 0)

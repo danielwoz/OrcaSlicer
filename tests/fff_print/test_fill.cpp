@@ -772,6 +772,31 @@ TEST_CASE("A region with ironing turned off is never ironed", "[Fill]")
     REQUIRE(Layer::choose_ironing_extruder(cfg, spiral_mode, /*is_topmost_layer=*/true) == -1);
 }
 
+TEST_CASE("Ironing uses the surface override filament when it covers surfaces", "[Fill]")
+{
+    const IroningType type = GENERATE(IroningType::TopSurfaces, IroningType::AllSolid, IroningType::TopmostOnly);
+    const SurfaceWallOverrideFilamentTarget target = GENERATE(SurfaceWallOverrideFilamentTarget::Surfaces,
+                                                              SurfaceWallOverrideFilamentTarget::Both);
+    CAPTURE(type, target);
+    PrintRegionConfig cfg = ironing_config(type, /*top_surface_filament_id=*/1);
+    cfg.surface_wall_override_filament.value        = 3;
+    cfg.surface_wall_override_filament_target.value = target;
+    REQUIRE(Layer::choose_ironing_extruder(cfg, /*spiral_mode=*/false, /*is_topmost_layer=*/true) == 3);
+}
+
+TEST_CASE("Ironing keeps the top surface filament when the surface override covers walls only or is unset", "[Fill]")
+{
+    const auto [override_filament, target] = GENERATE(table<int, SurfaceWallOverrideFilamentTarget>({
+        { 2, SurfaceWallOverrideFilamentTarget::Walls },
+        { 0, SurfaceWallOverrideFilamentTarget::Both },
+    }));
+    CAPTURE(override_filament, target);
+    PrintRegionConfig cfg = ironing_config(IroningType::TopSurfaces, /*top_surface_filament_id=*/1);
+    cfg.surface_wall_override_filament.value        = override_filament;
+    cfg.surface_wall_override_filament_target.value = target;
+    REQUIRE(Layer::choose_ironing_extruder(cfg, /*spiral_mode=*/false, /*is_topmost_layer=*/false) == 1);
+}
+
 // Ironing path count and total length in mm, over the whole object.
 static std::pair<size_t, double> ironing_extent(const Print &print)
 {

@@ -126,6 +126,24 @@ static bool detect_steep_overhang(const PrintRegionConfig *config,
     return false;
 }
 
+// Orca: 1 based surface / outer wall override filament of the wall at inset_idx (0 = outer wall), or -1 when the
+// wall keeps its regular filament: the override covers the outer_wall_count outermost walls unless it applies to
+// surfaces only, and it has no effect when it is the outer wall filament.
+static int8_t wall_override_filament(const PrintRegionConfig &config, int inset_idx)
+{
+    const int ov = config.surface_wall_override_filament.value;
+    return ov > 0 && ov != config.outer_wall_filament_id.value &&
+           config.surface_wall_override_filament_target.value != SurfaceWallOverrideFilamentTarget::Surfaces &&
+           inset_idx < config.outer_wall_count.value ? int8_t(ov) : int8_t(-1);
+}
+
+static void set_wall_override_filament(ExtrusionEntity &wall, ExtrusionPaths &paths, int8_t ov)
+{
+    wall.extruder_override = ov;
+    for (ExtrusionPath &path : paths)
+        path.extruder_override = ov;
+}
+
 static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perimeter_generator, const PerimeterGeneratorLoops &loops, ThickPolylines &thin_walls,
     bool &steep_overhang_contour, bool &steep_overhang_hole)
 {
@@ -306,6 +324,7 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
                 eloop->make_clockwise();
 
             eloop->inset_idx = loop.depth;
+            set_wall_override_filament(*eloop, eloop->paths, wall_override_filament(*perimeter_generator.config, loop.depth));
             if (loop.is_contour) {
                 out.append(std::move(children.entities));
                 out.entities.emplace_back(eloop);
@@ -564,6 +583,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
             if (extrusion->is_closed) {
                 ExtrusionLoop extrusion_loop(std::move(paths), pg_extrusion.is_contour ? elrDefault : elrHole);
                 extrusion_loop.inset_idx = extrusion->inset_idx;
+                set_wall_override_filament(extrusion_loop, extrusion_loop.paths, wall_override_filament(*perimeter_generator.config, extrusion->inset_idx));
                 if ((perimeter_generator.config->wall_direction == WallDirection::CounterClockwise) ==
                     (pg_extrusion.is_contour || pg_extrusions.size() == 2))
                     extrusion_loop.make_counter_clockwise();
@@ -593,6 +613,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
                 }
                 ExtrusionMultiPath multi_path;
                 multi_path.inset_idx = extrusion->inset_idx;
+                set_wall_override_filament(multi_path, paths, wall_override_filament(*perimeter_generator.config, extrusion->inset_idx));
                 multi_path.paths.emplace_back(std::move(paths.front()));
 
                 for (auto it_path = std::next(paths.begin()); it_path != paths.end(); ++it_path) {

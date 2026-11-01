@@ -212,6 +212,15 @@ enum class IroningType {
 // and zero stops the fillers from making progress.
 constexpr double IRONING_SPACING_MIN = 0.05;
 
+// Where surface_wall_override_filament is applied. Walls = outer N perimeter loops only;
+// Surfaces = top/bottom external solid surfaces only; Both = walls + surfaces.
+enum class SurfaceWallOverrideFilamentTarget {
+    Walls,
+    Surfaces,
+    Both,
+    Count,
+};
+
 //BBS
 enum class WallInfillOrder {
     InnerOuterInfill,
@@ -804,6 +813,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(NoiseType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(InfillPattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(IroningType)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SurfaceWallOverrideFilamentTarget)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SlicingMode)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(BeltRotationAxis)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(RemapAxis)
@@ -1549,6 +1559,15 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool, unsupported_wall_last))
     ((ConfigOptionInt, outer_wall_filament_id))
     ((ConfigOptionInt, inner_wall_filament_id))
+    // Filament for the outermost N perimeter loops (counted from outside in).
+    // 0 = disabled (use the regular wall filament for all loops).
+    ((ConfigOptionInt, surface_wall_override_filament))
+    // Number of outermost perimeter loops that use surface_wall_override_filament.
+    ((ConfigOptionInt, outer_wall_count))
+    // Where surface_wall_override_filament is applied: outer wall loops only (Walls), top/
+    // bottom external solid surfaces only (Surfaces), or both (Both). Only meaningful when
+    // surface_wall_override_filament > 0.
+    ((ConfigOptionEnum<SurfaceWallOverrideFilamentTarget>, surface_wall_override_filament_target))
     ((ConfigOptionFloatOrPercent, inner_wall_line_width))
     ((ConfigOptionFloatsNullable, inner_wall_speed))
     // Total number of perimeters.

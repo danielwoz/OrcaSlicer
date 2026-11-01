@@ -213,7 +213,8 @@ public:
                                                                            FillLightning::Generator* lightning_generator) const;
     void 					make_ironing();
     // Returns the filament id (1-based) the region is ironed with, or -1 when the
-    // region is not ironed.
+    // region is not ironed. The surface / outer wall override filament takes the
+    // place of the top surface filament when it covers surfaces.
     static int              choose_ironing_extruder(const PrintRegionConfig &cfg,
                                                     bool spiral_mode,
                                                     bool is_topmost_layer);

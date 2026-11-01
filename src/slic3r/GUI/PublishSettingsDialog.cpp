@@ -400,6 +400,7 @@ std::set<size_t> project_used_filament_slots(const PresetBundle& bundle, const D
     const int glb_internal_solid = print_cfg.opt_int("internal_solid_filament_id");
     const int glb_top_surface    = print_cfg.opt_int("top_surface_filament_id");
     const int glb_bottom_surface = print_cfg.opt_int("bottom_surface_filament_id");
+    const int glb_surface_override = print_cfg.opt_int("surface_wall_override_filament");
     const bool glb_support_on    = print_cfg.opt_bool("enable_support") || print_cfg.opt_int("raft_layers") > 0;
 
     for (ModelObject* mo : model.objects) {
@@ -459,6 +460,10 @@ std::set<size_t> project_used_filament_slots(const PresetBundle& bundle, const D
         if (obj_bottom == 0)
             obj_bottom = obj_internal_solid;
         add_1based(obj_bottom != 0 ? obj_bottom : glb_bottom_surface);
+
+        // Orca: the surface / outer wall override filament; an object setting it to 0 turns it off.
+        const ConfigOption* surface_override_opt = mo->config.option("surface_wall_override_filament");
+        add_1based(surface_override_opt != nullptr ? surface_override_opt->getInt() : glb_surface_override);
     }
 
     for (const auto& plate_entry : model.plates_custom_gcodes)

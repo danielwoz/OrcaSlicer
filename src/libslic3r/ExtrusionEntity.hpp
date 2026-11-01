@@ -158,9 +158,19 @@ public:
     
     // Orca: Wall index set by the perimeter generators, 0 for the outer wall, -1 if unset
     int inset_idx = -1;
+    // Orca: 1 based surface / outer wall override filament this extrusion is printed with, -1 if none.
+    // Set on the outermost walls by the perimeter generators and on top / bottom surfaces and ironing by the fills.
+    int8_t extruder_override = -1;
 
     static std::string role_to_string(ExtrusionRole role);
     static ExtrusionRole string_to_role(const std::string_view role);
+
+protected:
+    // For the copy constructors and assignments of derived classes that do not chain to the base.
+    void copy_entity_fields(const ExtrusionEntity &rhs) {
+        inset_idx = rhs.inset_idx;
+        extruder_override = rhs.extruder_override;
+    }
 };
 
 // Orca: Overhang paths share one role on every wall, so the inset index tells inner walls apart where set.
@@ -202,7 +212,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    {}
+    { copy_entity_fields(rhs); }
     ExtrusionPath(ExtrusionPath &&rhs)
         : polyline(std::move(rhs.polyline))
         , overhang_degree(rhs.overhang_degree)
@@ -215,7 +225,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    {}
+    { copy_entity_fields(rhs); }
     ExtrusionPath(const Polyline3 &polyline, const ExtrusionPath &rhs)
         : polyline(polyline)
         , overhang_degree(rhs.overhang_degree)
@@ -228,7 +238,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    {}
+    { copy_entity_fields(rhs); }
     ExtrusionPath(Polyline3 &&polyline, const ExtrusionPath &rhs)
         : polyline(std::move(polyline))
         , overhang_degree(rhs.overhang_degree)
@@ -241,7 +251,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    {}
+    { copy_entity_fields(rhs); }
 
     ExtrusionPath& operator=(const ExtrusionPath& rhs) {
         m_can_reverse = rhs.m_can_reverse;
@@ -255,6 +265,7 @@ public:
         this->overhang_degree = rhs.overhang_degree;
         this->curve_degree = rhs.curve_degree;
         this->polyline = rhs.polyline;
+        copy_entity_fields(rhs);
         return *this;
     }
     ExtrusionPath& operator=(ExtrusionPath&& rhs) {
@@ -269,6 +280,7 @@ public:
         this->overhang_degree = rhs.overhang_degree;
         this->curve_degree = rhs.curve_degree;
         this->polyline = std::move(rhs.polyline);
+        copy_entity_fields(rhs);
         return *this;
     }
 
@@ -408,16 +420,16 @@ public:
 
     ExtrusionMultiPath &operator=(const ExtrusionMultiPath &rhs)
     {
-        this->paths     = rhs.paths;
-        m_can_reverse   = rhs.m_can_reverse;
-        this->inset_idx = rhs.inset_idx;
+        this->paths   = rhs.paths;
+        m_can_reverse = rhs.m_can_reverse;
+        copy_entity_fields(rhs);
         return *this;
     }
     ExtrusionMultiPath &operator=(ExtrusionMultiPath &&rhs)
     {
-        this->paths     = std::move(rhs.paths);
-        m_can_reverse   = rhs.m_can_reverse;
-        this->inset_idx = rhs.inset_idx;
+        this->paths   = std::move(rhs.paths);
+        m_can_reverse = rhs.m_can_reverse;
+        copy_entity_fields(rhs);
         return *this;
     }
 

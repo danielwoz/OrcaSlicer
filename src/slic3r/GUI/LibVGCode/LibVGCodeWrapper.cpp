@@ -776,9 +776,20 @@ static void convert_object_to_vertices(const Slic3r::PrintObject& object, const 
                 const Slic3r::PrintRegionConfig& cfg = layerm->region().config();
                 if (has_perimeters) {
                     const size_t extruder_id = static_cast<size_t>(std::max(cfg.outer_wall_filament_id.value - 1, 0));
-                    convert_to_vertices(layerm->perimeters, layer_z, layer_id, extruder_id,
-                        object_helper.color_id(layer_z, extruder_id), EGCodeExtrusionRole::ExternalPerimeter,
-                        copy, data.vertices);
+                    // Orca: walls carrying the surface / outer wall override filament are shown in it.
+                    if (cfg.surface_wall_override_filament.value > 0 &&
+                        cfg.surface_wall_override_filament_target.value != Slic3r::SurfaceWallOverrideFilamentTarget::Surfaces) {
+                        for (const Slic3r::ExtrusionEntity* island : layerm->perimeters.entities)
+                            for (const Slic3r::ExtrusionEntity* wall : static_cast<const Slic3r::ExtrusionEntityCollection*>(island)->entities) {
+                                const size_t wall_extruder_id = wall->extruder_override > 0 ? static_cast<size_t>(wall->extruder_override - 1) : extruder_id;
+                                convert_to_vertices(*wall, layer_z, layer_id, wall_extruder_id,
+                                    object_helper.color_id(layer_z, wall_extruder_id), EGCodeExtrusionRole::ExternalPerimeter,
+                                    copy, data.vertices);
+                            }
+                    } else
+                        convert_to_vertices(layerm->perimeters, layer_z, layer_id, extruder_id,
+                            object_helper.color_id(layer_z, extruder_id), EGCodeExtrusionRole::ExternalPerimeter,
+                            copy, data.vertices);
                 }
                 if (has_infill) {
                     for (const Slic3r::ExtrusionEntity* ee : layerm->fills) {

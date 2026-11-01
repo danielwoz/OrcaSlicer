@@ -820,6 +820,12 @@ protected:
     std::unordered_map<const PrintInstance*, std::string> m_instance_names;
     const std::string& instance_name(const PrintInstance &instance);
     std::string _encode_label_ids_to_base64(std::vector<size_t> ids);
+public:
+    // Encodes ids as a base64 bitset over known_ids, which must be sorted.
+    // Returns an empty string for an empty id set.
+    static std::string encode_label_ids_to_base64(const std::vector<size_t> &ids,
+                                                  const std::vector<size_t> &known_ids);
+protected:
     // ORCA: Add support for role based fan speed control
     std::array<bool, ExtrusionRole::erCount> m_is_role_based_fan_on;
     std::array<int, ExtrusionRole::erCount>  m_role_based_fan_marker_layer;
