@@ -7529,6 +7529,17 @@ int CLI::run(int argc, char **argv)
             }
         }
 
+        // ORCA_CLI_SKIP_GL_THUMBNAILS=1 exports without rendering thumbnails: the thumbnails the
+        // project already carries are kept, the missing ones stay empty. Without a display or GPU,
+        // creating the offscreen OpenGL context below can block instead of failing.
+        const char* skip_gl_thumbnails = ::getenv("ORCA_CLI_SKIP_GL_THUMBNAILS");
+        if (skip_gl_thumbnails && skip_gl_thumbnails[0] != '\0' && skip_gl_thumbnails[0] != '0'
+            && (need_regenerate_thumbnail || need_regenerate_no_light_thumbnail || need_regenerate_top_thumbnail)) {
+            BOOST_LOG_TRIVIAL(warning) << "ORCA_CLI_SKIP_GL_THUMBNAILS is set; skip thumbnail generating";
+            need_regenerate_thumbnail = need_regenerate_no_light_thumbnail = need_regenerate_top_thumbnail = false;
+            need_create_thumbnail_group = need_create_no_light_group = need_create_top_group = false;
+        }
+
         if (need_regenerate_thumbnail || need_regenerate_no_light_thumbnail || need_regenerate_top_thumbnail) {
             std::vector<std::string> colors;
             if (filament_color) {

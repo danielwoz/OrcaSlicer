@@ -420,6 +420,10 @@ int wmain(int argc, wchar_t **argv)
 #ifdef SLIC3R_GUI
     // Here one may push some additional parameters based on the wrapper type.
     bool force_mesa = false;
+    // Headless CLI runs set ORCA_CLI_SKIP_GL_THUMBNAILS (see CLI::run). The OpenGL version probe
+    // below creates a window and a WGL context, which can block forever without a display or GPU.
+    const wchar_t *skip_gl_env = _wgetenv(L"ORCA_CLI_SKIP_GL_THUMBNAILS");
+    const bool skip_gl_probe = skip_gl_env && skip_gl_env[0] != L'\0' && skip_gl_env[0] != L'0';
 #endif /* SLIC3R_GUI */
     bool stage_only = false;                 // internal: elevated genuine-host staging pass
     for (int i = 1; i < argc; ++ i) {
@@ -444,7 +448,7 @@ int wmain(int argc, wchar_t **argv)
             // Forced from the command line.
             force_mesa ||
             // Try to load the default OpenGL driver and test its context version.
-            ! opengl_version_check.load_opengl_dll() || ! opengl_version_check.is_version_greater_or_equal_to(2, 0);
+            (! skip_gl_probe && (! opengl_version_check.load_opengl_dll() || ! opengl_version_check.is_version_greater_or_equal_to(2, 0)));
 #endif /* SLIC3R_GUI */
 
     wchar_t path_to_exe[MAX_PATH + 1] = { 0 };
