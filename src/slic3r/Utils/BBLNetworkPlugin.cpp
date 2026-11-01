@@ -546,6 +546,59 @@ std::vector<std::string> BBLNetworkPlugin::scan_plugin_versions()
     return discovered_versions;
 }
 
+#ifdef ORCA_OSS_NETWORK_PLUGIN
+std::string BBLNetworkPlugin::install_bundled_library(const std::string& bundled_dir, const std::string& version)
+{
+    namespace fs = boost::filesystem;
+
+    const fs::path src_dir(bundled_dir);
+    const fs::path src = src_dir / fs::path(get_versioned_library_path(version)).filename();
+    if (!fs::exists(src)) {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": bundled network plug-in not found at " << src;
+        return {};
+    }
+
+    // Copies a bundled file unless the installed copy has the same size and modification time.
+    auto install = [](const fs::path& from, const fs::path& to) {
+        boost::system::error_code ec;
+        if (fs::exists(to, ec) && fs::file_size(from, ec) == fs::file_size(to, ec) &&
+            fs::last_write_time(from, ec) == fs::last_write_time(to, ec))
+            return true;
+        fs::copy_file(from, to, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            BOOST_LOG_TRIVIAL(error) << "install_bundled_library: copying " << from << " to " << to << " failed: " << ec.message();
+            return false;
+        }
+        fs::last_write_time(to, fs::last_write_time(from, ec), ec);
+        BOOST_LOG_TRIVIAL(info) << "install_bundled_library: installed " << to;
+        return true;
+    };
+
+    // A custom name, which the loader loads as it is and migrate_network_plugin_config() leaves alone, so the
+    // bundled build neither replaces nor removes the other builds of its series, such as a downloaded one.
+    const std::string stored = version + "-oss";
+    const fs::path    dst(get_versioned_library_path(stored));
+    boost::system::error_code ec;
+    fs::create_directories(dst.parent_path(), ec);
+    if (!install(src, dst))
+        return {};
+
+    // BambuSource (camera and file browser) and live555 keep fixed names next to the library.
+#if defined(_MSC_VER) || defined(_WIN32)
+    const std::string companions[] = {std::string(BAMBU_SOURCE_LIBRARY) + ".dll", "live555.dll"};
+#elif defined(__WXMAC__)
+    const std::string companions[] = {"lib" + std::string(BAMBU_SOURCE_LIBRARY) + ".dylib", "liblive555.dylib"};
+#else
+    const std::string companions[] = {"lib" + std::string(BAMBU_SOURCE_LIBRARY) + ".so", "liblive555.so"};
+#endif
+    for (const auto& name : companions)
+        if (fs::exists(src_dir / name))
+            install(src_dir / name, dst.parent_path() / name);
+
+    return stored;
+}
+#endif
+
 // ============================================================================
 // Error Handling
 // ============================================================================

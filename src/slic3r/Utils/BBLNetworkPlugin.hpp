@@ -284,6 +284,14 @@ public:
     static bool legacy_library_exists();
     static void remove_legacy_library();
     static std::vector<std::string> scan_plugin_versions();
+#ifdef ORCA_OSS_NETWORK_PLUGIN
+    // Installs a plug-in shipped with the app (bundled_dir holds it under its full versioned file
+    // name, plus BambuSource/live555) into the plugins folder, under its version with an "-oss"
+    // suffix. That custom name is loaded as it is and is never folded into, or removed with, the
+    // other builds of its series. Files already up to date are not copied again. Returns the
+    // version to store, or an empty string when the bundled library is missing or cannot be copied.
+    static std::string install_bundled_library(const std::string& bundled_dir, const std::string& version);
+#endif
 
     // ========================================================================
     // Error Handling

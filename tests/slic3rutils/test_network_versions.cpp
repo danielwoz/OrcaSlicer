@@ -3,11 +3,13 @@
 
 #include <boost/filesystem.hpp>
 #include <boost/nowide/fstream.hpp>
+#include <algorithm>
 #include <vector>
 #include "libslic3r/AppConfig.hpp"
 #include <cstddef>
 
 #include <catch2/catch_test_macros.hpp>
+#include "slic3r/Utils/BBLNetworkPlugin.hpp"
 #include "slic3r/Utils/bambu_networking.hpp"
 
 #include "plugin_test_utils.hpp"
@@ -247,3 +249,80 @@ TEST_CASE_METHOD(PluginFolderFixture, "Legacy series never adopts discovered bui
         }
     }
 }
+
+#ifdef ORCA_OSS_NETWORK_PLUGIN
+TEST_CASE("The bundled open-source plug-in is a whitelisted Current-ABI build", "[NetworkVersions]")
+{
+    const std::string bundled = ORCA_OSS_NETWORK_PLUGIN_VERSION;
+    const std::string series  = network_plugin_series(bundled);
+
+    // The load gate accepts the build it reports and the series it is stored as, and both are
+    // called through the layout this build declares directly.
+    REQUIRE(is_series_managed_version(bundled));
+    REQUIRE(is_supported_network_version(bundled));
+    REQUIRE(is_supported_network_version(series));
+    CHECK(network_plugin_abi(bundled) == NetworkAbi::Current);
+    CHECK(network_plugin_abi(series) == NetworkAbi::Current);
+
+    // check_networking_version() and the update prompt compare the first 8 characters with the
+    // latest series; the bundled plug-in is that series, so it is never offered a download.
+    CHECK(series == get_latest_network_version());
+}
+
+TEST_CASE_METHOD(PluginFolderFixture, "The bundled plug-in is installed under its own name, next to the other builds of its series", "[NetworkVersions]")
+{
+    const std::string bundled = ORCA_OSS_NETWORK_PLUGIN_VERSION;
+    const std::string series  = network_plugin_series(bundled);
+    const std::string stored  = bundled + "-oss";
+
+    // Staged as CI stages it: under the plug-in's full versioned file name.
+    ScopedTemporaryDir bundle("orca-netver-bundle");
+    {
+        boost::nowide::ofstream f((bundle.path() / (PLUGIN_PREFIX + bundled + PLUGIN_EXT)).string());
+        f << "bundled";
+    }
+    // A downloaded build of the same series, already migrated to the series file, and another build of that series.
+    add_plugin(series);
+    add_plugin(series + ".57");
+
+    REQUIRE(BBLNetworkPlugin::install_bundled_library(bundle.string(), bundled) == stored);
+
+    const fs::path installed = data.dir / "plugins" / (PLUGIN_PREFIX + stored + PLUGIN_EXT);
+    auto installed_content = [&] {
+        boost::nowide::ifstream f(installed.string());
+        std::string s;
+        std::getline(f, s);
+        return s;
+    };
+    REQUIRE(installed_content() == "bundled");
+
+    // The other builds of the series are left alone, and the custom name is not one the series migration folds in.
+    auto scanned = BBLNetworkPlugin::scan_plugin_versions();
+    std::sort(scanned.begin(), scanned.end());
+    CHECK(scanned == std::vector<std::string>{series, series + ".57", stored});
+    CHECK_FALSE(is_series_managed_version(stored));
+    CHECK(is_supported_network_version(stored));
+    CHECK(network_plugin_abi(stored) == NetworkAbi::Current);
+
+    // The loader resolves the stored name to that file.
+    CHECK(fs::path(BBLNetworkPlugin::resolve_library_path(stored)) == installed);
+    CHECK(BBLNetworkPlugin::versioned_library_exists(stored));
+
+    // It is listed as its own row next to the series row.
+    auto versions = get_all_available_versions("");
+    CHECK(count_version(versions, stored) == 1);
+    CHECK(count_version(versions, series) == 1);
+
+    // A changed installed copy is replaced on the next start.
+    {
+        boost::nowide::ofstream f(installed.string());
+        f << "stale copy";
+    }
+    REQUIRE(BBLNetworkPlugin::install_bundled_library(bundle.string(), bundled) == stored);
+    CHECK(installed_content() == "bundled");
+
+    // Without a bundled library nothing is installed.
+    ScopedTemporaryDir empty("orca-netver-empty");
+    CHECK(BBLNetworkPlugin::install_bundled_library(empty.string(), bundled).empty());
+}
+#endif

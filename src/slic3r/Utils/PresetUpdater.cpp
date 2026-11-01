@@ -1362,7 +1362,13 @@ void PresetUpdater::sync(std::string http_url, std::string language, std::string
 				return;
 			// Vendor profile updates are triggered by check_vendor_update()
 			// after the startup printer preset has been restored.
+#ifndef ORCA_OSS_NETWORK_PLUGIN
             this->p->sync_plugins(http_url, plugin_version);
+#else
+            // The bundled open-source network plugin is provisioned locally at startup (see
+            // GUI_App::ensure_oss_network_plugin()), so the proprietary one is never downloaded.
+            BOOST_LOG_TRIVIAL(info) << "[Orca Updater] sync_plugins skipped: using bundled OSS network plugin";
+#endif
             this->p->sync_printer_config(http_url);
             // Orca (PR #130): the filament library is always installed, so refresh it
             // from the updater on every startup sync rather than deferring to check_vendor_update().

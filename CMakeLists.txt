@@ -331,6 +331,8 @@ option(ORCA_MIMALLOC "Use mimalloc as the process-wide allocator (shared overrid
 # The GPU path is used when a ray-query capable Vulkan device is found (ORCA_SEAM_GPU=0 turns it off). It
 # casts 16x16 rays per sample instead of the CPU's 5x5, so seams differ from a build without it.
 option(SLIC3R_VULKAN "Raycast the seam visibility on the GPU with Vulkan ray queries" OFF)
+# Takes effect only when the plugin is staged in resources/plugins/ (see cmake/modules/OrcaOSSNetworkPlugin.cmake).
+option(ORCA_OSS_NETWORK_PLUGIN "Bundle the open-source network plugin (bambu_network_oss) when it is staged, and load it instead of downloading the proprietary network plugin" ON)
 
 if (FLATPAK)
     set(SLIC3R_FHS ON CACHE BOOL "" FORCE)
@@ -523,6 +525,11 @@ endif ()
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/modules/)
 message(STATUS "PROJECT_SOURCE_DIR: ${PROJECT_SOURCE_DIR}")
 message(STATUS "CMAKE_MODULE_PATH: ${CMAKE_MODULE_PATH}")
+
+# Version and staging check of the bundled open-source network plugin; defines ORCA_OSS_NETWORK_PLUGIN when it is staged.
+if (ORCA_OSS_NETWORK_PLUGIN)
+    include(OrcaOSSNetworkPlugin)
+endif()
 
 enable_testing ()
 

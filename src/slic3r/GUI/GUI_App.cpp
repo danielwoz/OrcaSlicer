@@ -1106,9 +1106,13 @@ void GUI_App::post_init()
     hms_query = new HMSQuery();
 
     m_show_gcode_window = app_config->get_bool("show_gcode_window");
+#ifndef ORCA_OSS_NETWORK_PLUGIN
+    // A build that bundles the OSS plugin has no download path (the proprietary
+    // download is compiled out), so a download dialog is a dead end. Skip it.
     if (m_networking_need_update) {
         show_network_plugin_download_dialog(false);
     }
+#endif
 
     // Start preset sync after project opened, otherwise we could have preset change during project opening which could cause crash 
     if (app_config->get("sync_user_preset") == "true") {
@@ -3601,6 +3605,12 @@ bool GUI_App::on_init_inner()
 
 
 
+#ifdef ORCA_OSS_NETWORK_PLUGIN
+    // Provision the bundled open-source network plugin and point the config at it BEFORE the
+    // configured version is read below and on_init_network() loads it.
+    ensure_oss_network_plugin();
+#endif
+
     // Orca: select network plugin version based on configured version string
     std::string configured_version = app_config->get_network_plugin_version();
     BOOST_LOG_TRIVIAL(info) << "Network plugin mode: "
@@ -4035,6 +4045,60 @@ bool GUI_App::install_network_plugin_from_ota(bool& had_cache)
     }
     return true;
 }
+
+#ifdef ORCA_OSS_NETWORK_PLUGIN
+// Provision the bundled open-source network plugin: install it from the app's resources into the
+// user's plugins dir (if missing/stale) and point app_config at it, so on_init_network() loads it
+// with no proprietary download.
+void GUI_App::ensure_oss_network_plugin()
+{
+    // Version of the bundled plugin. Defined by OrcaOSSNetworkPlugin.cmake so the staged filename,
+    // the CI --with-version build flag and this string stay in lockstep. Its AA.BB.CC series must be
+    // a NetworkAbi::Current entry of AVAILABLE_NETWORK_VERSIONS; the .99 build marks the
+    // open-source plugin. It is installed under its version with an "-oss" suffix, a custom name
+    // that is also the stored identity.
+    const std::string version = BBLNetworkPlugin::install_bundled_library((fs::path(resources_dir()) / "plugins").string(),
+                                                                          ORCA_OSS_NETWORK_PLUGIN_VERSION);
+    if (version.empty()) {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": bundled OSS network plugin not installed, leaving network config untouched";
+        return;
+    }
+
+    // Seed the plugin's obn.conf so the bundled build is cloud-capable out of the box yet still
+    // prints on a LAN without a Bambu login. The plugin's own defaults block the cloud, route
+    // prints cloud-only and report a client name the cloud rejects for print records; write our
+    // defaults once and never overwrite a config the user has edited. The plugin reads this from
+    // its config dir, which is the OrcaSlicer data dir.
+    {
+        fs::path conf = fs::path(data_dir()) / "obn.conf";
+        if (!fs::exists(conf)) {
+            boost::nowide::ofstream f(conf.string().c_str(), std::ios::binary);
+            if (f) {
+                f << "# OrcaSlicer bundled open-source network plugin settings.\n"
+                     "# Written once when the bundled plugin is provisioned; edit freely.\n"
+                     "block_cloud = 0\n"
+                     "client_name = BambuStudio\n"
+                     "cloud_print = try_lan_first\n"
+                     "import_studio_session = 1\n"
+                     "app_cert_source = auto\n";
+            }
+        }
+    }
+
+    // Point the network config at the bundled plugin the first time it is provisioned, and again when a newer bundled
+    // build replaces the one the config still points at. A later choice of the user, the plugin switched off or another
+    // version selected, is kept.
+    const std::string provisioned = app_config->get("oss_network_plugin_version");
+    if (provisioned != version) {
+        if (provisioned.empty())
+            app_config->set_bool("installed_networking", true);
+        if (provisioned.empty() || app_config->get_network_plugin_version() == provisioned)
+            app_config->set_network_plugin_version(version);
+        app_config->set("oss_network_plugin_version", version);
+        app_config->save();
+    }
+}
+#endif // ORCA_OSS_NETWORK_PLUGIN
 
 bool GUI_App::on_init_network(bool try_backup)
 {
