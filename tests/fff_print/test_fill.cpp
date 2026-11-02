@@ -22,6 +22,7 @@
 #include <memory>
 #include <math.h>
 #include <numeric>
+#include <set>
 #include <sstream>
 #include <string>
 #include <typeindex>
@@ -50,6 +51,7 @@
 #include "libslic3r/Fill/FillPlanePath.hpp"
 #include "libslic3r/Fill/FillRectilinear.hpp"
 #include "libslic3r/Fill/FillSpiralInset.hpp"
+#include "libslic3r/Fill/FillStaggered.hpp"
 #include "libslic3r/Fill/FillTpmsD.hpp"
 #include "libslic3r/Fill/FillTpmsFK.hpp"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
@@ -2579,7 +2581,11 @@ TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]
         {ipArchimedeanChords, typeid(FillArchimedeanChords)},
         {ipOctagramSpiral, typeid(FillOctagramSpiral)},
         {ipSupportBase, typeid(FillSupportBase)},
-        {ipConcentricInternal, typeid(FillConcentricInternal)}};
+        {ipConcentricInternal, typeid(FillConcentricInternal)},
+#if ORCA_INFILL_STAGGERED
+        {ipStaggered, typeid(FillStaggered)},
+#endif
+    };
 
     auto filler_class = [](Fill *created) {
         const std::unique_ptr<Fill> filler(created);
@@ -2688,4 +2694,146 @@ TEST_CASE("An object's unavailable infill pattern is reported once for all its i
     CHECK(std::count_if(warnings.begin(), warnings.end(), [](const StringObjectException &warning) {
               return warning.type == STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE;
           }) == 1);
+}
+
+TEST_CASE("Staggered Lines are configured through their token and settings", "[Fill][Staggered]")
+{
+    DynamicPrintConfig dynamic = DynamicPrintConfig::full_print_config();
+    dynamic.set_deserialize_strict("sparse_infill_pattern", "staggered");
+    CHECK(dynamic.opt_serialize("sparse_infill_pattern") == "staggered");
+    CHECK(dynamic.validate().empty());
+    FullPrintConfig full;
+    full.set_deserialize_strict("sparse_infill_pattern", "staggered");
+    CHECK(full.sparse_infill_pattern.value == ipStaggered);
+
+    const DynamicPrintConfig defaults = DynamicPrintConfig::full_print_config();
+    CHECK(defaults.opt_serialize("staggered_spacing_scale") == "1");
+    CHECK(defaults.opt_serialize("staggered_cross") == "0");
+}
+
+TEST_CASE("Staggered Lines keep their direction and move by half their distance on every other layer", "[Fill][Staggered]")
+{
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(ipStaggered);
+
+    auto slice = [](std::initializer_list<ConfigBase::SetDeserializeItem> extra, Print &print) {
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_deserialize_strict({{"sparse_infill_pattern", "staggered"}, {"sparse_infill_density", "20%"}, {"layer_height", 0.2}});
+        config.set_deserialize_strict(extra);
+        Slic3r::Test::init_and_process_print({Slic3r::Test::cube(20)}, print, config);
+        return sparse_infill_shape(print);
+    };
+    Print print, scaled, crossed;
+    const SparseInfillShape shape = slice({}, print);
+    REQUIRE(shape.path_count > 0);
+
+    std::set<int> angles;
+    for (int angle : angles_per_layer(print, sparse_role))
+        if (angle >= 0)
+            angles.insert(angle);
+    CHECK(angles.size() == 1);
+
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(object.layer_count() > 12);
+    const Polylines layer10 = layer_paths(*object.get_layer(10), erInternalInfill);
+    const Polylines layer11 = layer_paths(*object.get_layer(11), erInternalInfill);
+    const Polylines layer12 = layer_paths(*object.get_layer(12), erInternalInfill);
+    REQUIRE_FALSE(layer10.empty());
+    CHECK(layer10 == layer12);
+    CHECK_FALSE(layer10 == layer11);
+
+    // Twice the line distance halves the infill; cross lines change it.
+    const double ratio = slice({{"staggered_spacing_scale", "2"}}, scaled).length / shape.length;
+    CHECK(ratio > 0.4);
+    CHECK(ratio < 0.6);
+    CHECK(slice({{"staggered_cross", "1"}}, crossed).sequence != shape.sequence);
+}
+
+TEST_CASE("Regions whose Staggered Lines settings differ are filled apart", "[Fill][Staggered]")
+{
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(ipStaggered);
+
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"sparse_infill_pattern", "staggered"}, {"sparse_infill_density", "20%"}});
+    // A modifier over the right half of the cube with twice the line distance.
+    TriangleMesh modifier = make_cube(10, 30, 30);
+    modifier.translate(10, -5, -5);
+    DynamicPrintConfig wide;
+    wide.set_deserialize_strict({{"staggered_spacing_scale", "2"}});
+    Print print;
+    slice_parts(print, config, {Slic3r::Test::cube(20)}, {{modifier, wide}});
+
+    // Regions 2 mm inside the walls and the modifier, away from the links along them, in the coordinates of the
+    // layers, whose origin is the center of the cube.
+    auto rect = [](double x0, double y0, double x1, double y1) {
+        return Polygons{Polygon({Point::new_scale(x0, y0), Point::new_scale(x1, y0), Point::new_scale(x1, y1), Point::new_scale(x0, y1)})};
+    };
+    const double outside = sparse_infill_length(print, 0., 20., rect(-8, -8, -2, 8));
+    const double inside  = sparse_infill_length(print, 0., 20., rect(2, -8, 8, 8));
+    REQUIRE(outside > 0.);
+    CHECK(inside / outside > 0.4);
+    CHECK(inside / outside < 0.6);
+}
+
+TEST_CASE("Staggered Lines anchors match the printed infill above a raft", "[Fill][Staggered][InternalBridge]")
+{
+    SKIP_UNLESS_INFILL_PATTERN_BUILT(ipStaggered);
+
+    // An odd number of raft layers and a scale the default would not give: anchors on the wrong stagger or without
+    // the region's settings miss the printed lines.
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"sparse_infill_pattern", "staggered"},
+                                   {"sparse_infill_density", "15%"},
+                                   {"staggered_spacing_scale", "1.5"},
+                                   {"raft_layers", 3},
+                                   {"top_shell_layers", 0},
+                                   {"bottom_shell_layers", 0},
+                                   {"top_shell_thickness", 0},
+                                   {"bottom_shell_thickness", 0},
+                                   {"layer_height", 0.2},
+                                   {"initial_layer_print_height", 0.2},
+                                   {"resolution", 0.012}});
+    Print print;
+    Model model;
+    Slic3r::Test::init_print({make_cube(30, 24, 2)}, print, model, config, nullptr, false);
+    print.process();
+
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(object.get_layer(0)->id() == 3);
+    for (const int index : {4, 5}) {
+        CAPTURE(index);
+        const Layer &layer = *object.get_layer(index);
+        const Polylines printed = layer_paths(layer, erInternalInfill);
+        REQUIRE_FALSE(printed.empty());
+        const AABBTreeLines::LinesDistancer<Line> printed_tree(to_lines(printed));
+        // Perimeter connections are left out: anchoring and extrusion may trim those differently.
+        const Polylines anchors = intersection_pl(layer.generate_sparse_infill_polylines_for_anchoring(nullptr, nullptr),
+                                                  shrink(to_polygons(layer.lslices), scale_(3.)));
+        REQUIRE_FALSE(anchors.empty());
+        double max_distance = 0.;
+        for (const Polyline &path : anchors)
+            for (const Point &point : path.equally_spaced_points(scale_(0.25)))
+                max_distance = std::max(max_distance, printed_tree.distance_from_lines<false>(point));
+        CHECK(unscale<double>(max_distance) <= config.opt_float("resolution"));
+    }
+}
+
+TEST_CASE("Changing a Staggered Lines setting prepares the infill again", "[Fill][Staggered]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"sparse_infill_pattern", "staggered"}, {"sparse_infill_density", "20%"}});
+    Print print;
+    Model model;
+    Slic3r::Test::init_print({Slic3r::Test::cube(20)}, print, model, config);
+    print.process();
+    REQUIRE(print.objects().front()->is_step_done(posPrepareInfill));
+
+    for (const auto &[key, value] : {std::pair<const char *, const char *>{"staggered_spacing_scale", "2"}, {"staggered_cross", "1"}}) {
+        CAPTURE(key);
+        print.process();
+        config.set_deserialize_strict(key, value);
+        print.apply(model, config);
+        REQUIRE(print.objects().size() == 1);
+        CHECK(print.objects().front()->is_step_done(posPerimeters));
+        CHECK_FALSE(print.objects().front()->is_step_done(posPrepareInfill));
+    }
 }

@@ -134,6 +134,8 @@ enum InfillPattern : int {
     ipCrossHatch, ipTpmsD, ipTpmsFK, ipGyroid,
     ipConcentric, ipSpiralInset, ipHilbertCurve, ipArchimedeanChords, ipOctagramSpiral,
     ipSupportBase, ipConcentricInternal,
+    // Orca: patterns added later go here, so the ordinals above, which order fills, stay unchanged.
+    ipStaggered,
     ipCount,
 };
 
@@ -1439,6 +1441,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,                lateral_lattice_angle_1))
     ((ConfigOptionFloat,                lateral_lattice_angle_2))
     ((ConfigOptionFloat,                infill_overhang_angle))
+    ((ConfigOptionFloat,                staggered_spacing_scale))
+    ((ConfigOptionBool,                 staggered_cross))
     ((ConfigOptionFloat,                lightning_overhang_angle))
     ((ConfigOptionFloat,                lightning_prune_angle))
     ((ConfigOptionFloat,                lightning_straightening_angle))

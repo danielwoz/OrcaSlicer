@@ -1356,6 +1356,9 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     
     toggle_line("infill_overhang_angle", sparse_pattern.has_option("infill_overhang_angle"), -1, _L("Select the Lateral Honeycomb sparse infill pattern to use this setting."));
 
+    for (auto el : { "staggered_spacing_scale", "staggered_cross" })
+        toggle_line(el, have_infill && sparse_pattern.has_option(el), -1, _L("Select Staggered Lines infill with nonzero sparse infill density to use this setting."));
+
     std::string printer_type = wxGetApp().preset_bundle->printers.get_edited_preset().get_printer_type(wxGetApp().preset_bundle);
     toggle_line("enable_wrapping_detection", DevPrinterConfigUtil::support_wrapping_detection(printer_type), -1, _L("The selected printer does not support wrapping detection."));
 }

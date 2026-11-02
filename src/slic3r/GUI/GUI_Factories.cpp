@@ -162,6 +162,8 @@ std::map<std::string, std::vector<SimpleSettingData>> SettingsFactory::PART_CATE
        {"lightning_overhang_angle", "", 1},
        {"lightning_prune_angle", "", 1},
        {"lightning_straightening_angle", "", 1},
+       {"staggered_spacing_scale", "", 1},
+       {"staggered_cross", "", 1},
        {"infill_anchor", "", 1},
        {"infill_anchor_max", "", 1},
        {"top_surface_pattern", "", 1},

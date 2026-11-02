@@ -4829,6 +4829,22 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(60));
 
+    def           = this->add("staggered_spacing_scale", coFloat);
+    def->label    = L("Line distance scale");
+    def->category = L("Strength");
+    def->tooltip  = L("Distance between the Staggered Lines as a multiple of the distance the sparse infill density gives.");
+    def->min      = 0.5;
+    def->max      = 4.;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1.));
+
+    def           = this->add("staggered_cross", coBool);
+    def->label    = L("Cross lines");
+    def->category = L("Strength");
+    def->tooltip  = L("Also print lines at right angles to the Staggered Lines, at twice their distance.");
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def           = this->add("lightning_overhang_angle", coFloat);
     def->label    = L("Lightning overhang angle");
     def->category = L("Strength");
