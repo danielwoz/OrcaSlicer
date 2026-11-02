@@ -67,8 +67,12 @@ struct InfillPatternDescriptor
     const char *const *options;
     // Creates the filler; nullptr when this build leaves the pattern out.
     InfillFactory      factory;
+    // Data of the factory; set for the patterns registered at run time.
+    const void        *context = nullptr;
 
     constexpr bool available() const { return factory != nullptr; }
+    // Registered at run time by an infill plugin. The descriptor of a value that names no pattern has no factory.
+    constexpr bool plugin() const { return int(id) >= int(ipCount) && factory != nullptr; }
     constexpr bool internal() const { return key == nullptr; }
     constexpr bool has(InfillPatternFlag flag) const { return (flags & flag) != 0; }
     constexpr bool smoothable(int multiline) const { return has(ipfSmoothable) || (multiline > 1 && has(ipfSmoothableMultiline)); }
@@ -86,9 +90,11 @@ public:
     static const InfillPatternDescriptor* find(InfillPattern id);
     // Looks the token up in the map configurations are parsed with; nullptr for an unknown token.
     static const InfillPatternDescriptor* find(const std::string &key);
-    // Token to value map of ConfigOptionEnum<InfillPattern>: every pattern that has a token, built or not.
+    // Token to value map of ConfigOptionEnum<InfillPattern>: every pattern that has a token, built or not, and the
+    // runtime patterns.
     static t_config_enum_values keys_map();
-    // Fills the value and label lists of a pattern option with the patterns offered in slot, in InfillPattern order.
+    // Fills the value and label lists of a pattern option with the patterns offered in slot: the built-in patterns in
+    // InfillPattern order, then the runtime patterns by token.
     static void define_enum_values(ConfigOptionDef &def, InfillPatternSlot slot);
     // Creates the filler slicing uses for id; throws InvalidArgument for a value that names no pattern.
     static Fill* create(InfillPattern id);
@@ -98,6 +104,18 @@ public:
     static void resolve_unavailable(PrintRegionConfig &config);
     // The pattern options of config that name a pattern this build leaves out, with that pattern.
     static std::vector<std::pair<std::string, const InfillPatternDescriptor*>> unavailable_in(const ConfigBase &config);
+
+    // Adds a pattern provided at run time under the next value after the built-in patterns and offers it in the
+    // pattern options of its slots. key and label must stay valid until the process exits. Returns nullptr and sets
+    // error when the token is malformed or taken, or registration is closed.
+    static const InfillPatternDescriptor* register_runtime(InfillPatternDescriptor pattern, std::string &error);
+    // Closes registration. Configurations may be read on other threads afterwards.
+    static void seal();
+    static bool sealed();
+    static bool has_runtime_patterns();
+    // Sort rank of fill groups: the value itself for a built-in pattern, then the runtime patterns by token,
+    // whatever order they were registered in.
+    static unsigned order(InfillPattern id);
 };
 
 // The pattern a value names. A value that names none gets a descriptor without slots, flags or factory.

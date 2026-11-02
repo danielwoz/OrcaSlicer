@@ -92,6 +92,8 @@ add_subdirectory(libnest2d)
 add_subdirectory(libslic3r)
 add_subdirectory(slic3rutils)
 add_subdirectory(fff_print)
+# Loads infill pattern plugins, which extend process-wide option lists; kept apart from the other suites.
+add_subdirectory(infill_plugin)
 add_subdirectory(sla_print)
 add_subdirectory(filament_group)
 

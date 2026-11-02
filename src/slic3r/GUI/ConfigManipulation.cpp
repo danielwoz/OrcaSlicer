@@ -885,6 +885,13 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
 
     toggle_line("infill_complete_top", have_infill && sparse_pattern.has_option("infill_complete_top"), -1, _L("Select 3D Honeycomb infill with nonzero sparse infill density to use this setting."));
 
+    // Orca: parameters of infill plugin patterns; shown while a plugin pattern is in use.
+    auto plugin_pattern = [config](const char *opt_key) { return infill_pattern(config->opt_enum<InfillPattern>(opt_key)).plugin(); };
+    toggle_line("infill_plugin_params",
+                (have_infill && plugin_pattern("sparse_infill_pattern")) || plugin_pattern("top_surface_pattern") ||
+                plugin_pattern("bottom_surface_pattern") || plugin_pattern("internal_solid_infill_pattern"),
+                -1, _L("Select an infill pattern provided by a plugin to use this setting."));
+
     bool has_spiral_vase         = config->opt_bool("spiral_mode");
     const wxString spiral_mode_reason = _L("Enable spiral vase mode to use this setting.");
     toggle_line("spiral_mode_smooth", has_spiral_vase, -1, spiral_mode_reason);

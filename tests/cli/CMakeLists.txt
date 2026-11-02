@@ -71,3 +71,14 @@ set_tests_properties(cli_infill_unavailable PROPERTIES
     LABELS "CLI;RequiresApp"
     SKIP_RETURN_CODE 77
     TIMEOUT 900)
+
+# Infill pattern plugins: the sample plugin of tests/infill_plugin, loaded from the environment or a CLI flag.
+if (TARGET sample_infill_lines)
+    add_test(NAME cli_infill_plugin
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_infill_plugin.sh $<TARGET_FILE:OrcaSlicer> ${ORCA_CLI_TEST_PYTHON}
+            $<TARGET_FILE_DIR:sample_infill_lines>)
+    set_tests_properties(cli_infill_plugin PROPERTIES
+        LABELS "CLI;RequiresApp"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 900)
+endif ()

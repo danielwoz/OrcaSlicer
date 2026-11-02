@@ -3767,6 +3767,17 @@ void PrintConfigDef::init_fff_params()
     InfillPatternRegistry::define_enum_values(*def, ipsSparse);
     def->set_default_value(new ConfigOptionEnum<InfillPattern>(ipCrossHatch));
 
+    def = this->add("infill_plugin_params", coString);
+    def->label = L("Pattern parameters");
+    def->category = L("Strength");
+    def->tooltip = L("Parameters of infill patterns provided by plugins, one per line or separated by \";\", written as "
+                     "<pattern>/<parameter> = <value>.");
+    def->multiline = true;
+    def->full_width = true;
+    def->height = 5;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionString(""));
+
     def = this->add("sparse_infill_smooth_factor", coPercent);
     def->label = L("Sparse infill smooth factor");
     def->category = L("Strength");
@@ -9996,6 +10007,20 @@ void PrintConfigDef::handle_legacy_composite(DynamicPrintConfig &config)
 
 const PrintConfigDef print_config_def;
 
+// Orca: The option definitions are nodes of the map inside print_config_def. They are allocated apart from that const
+// object, so updating them is well defined; the map itself is never changed. Runs on the main thread before any
+// configuration is read on another thread.
+void publish_infill_pattern_values()
+{
+    // Assigned in place: every enum_keys_map pointer to the map stays valid.
+    s_keys_map_InfillPattern   = InfillPatternRegistry::keys_map();
+    s_keys_names_InfillPattern = enum_names_from_keys_map(s_keys_map_InfillPattern);
+    for (const auto &[opt_key, slot] : InfillPatternRegistry::options()) {
+        InfillPatternRegistry::define_enum_values(*const_cast<ConfigOptionDef*>(print_config_def.get(opt_key)), slot);
+        DynamicPrintAndCLIConfig::refresh_enum_values(opt_key);
+    }
+}
+
 //todo
 std::set<std::string> print_options_with_variant = {
     "initial_layer_speed",
@@ -13038,6 +13063,18 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->label = L("Data directory");
     def->tooltip = L("Load and store settings at the given directory. This is useful for maintaining different profiles or including configurations from a network storage.");
 
+    def = this->add("infill_plugin_dir", coStrings);
+    def->label = L("Infill plugin directories");
+    def->tooltip = L("Load the infill pattern plugins found in these directories, before those of ORCA_INFILL_PLUGIN_PATH, "
+                     "the application and the data directory.");
+    def->cli_params = "\"dir1;dir2\"";
+    def->set_default_value(new ConfigOptionStrings());
+
+    def = this->add("no_infill_plugins", coBool);
+    def->label = L("Do not load infill plugins");
+    def->tooltip = L("Do not load any infill pattern plugin. Setting the environment variable ORCA_INFILL_PLUGINS=0 does the same.");
+    def->set_default_value(new ConfigOptionBool(false));
+
 
     def = this->add("outputdir", coString);
     def->label = L("Output directory");
@@ -13156,6 +13193,14 @@ const CLITransformConfigDef  cli_transform_config_def;
 const CLIMiscConfigDef       cli_misc_config_def;
 
 DynamicPrintAndCLIConfig::PrintAndCLIConfigDef DynamicPrintAndCLIConfig::s_def;
+
+void DynamicPrintAndCLIConfig::refresh_enum_values(const t_config_option_key &opt_key)
+{
+    const ConfigOptionDef &source = *print_config_def.get(opt_key);
+    ConfigOptionDef       &target = s_def.options.at(opt_key);
+    target.enum_values = source.enum_values;
+    target.enum_labels = source.enum_labels;
+}
 
 void DynamicPrintAndCLIConfig::handle_legacy(t_config_option_key &opt_key, std::string &value) const
 {

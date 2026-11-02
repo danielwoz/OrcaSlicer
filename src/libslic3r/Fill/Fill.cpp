@@ -39,6 +39,7 @@
 #include "FillTpmsFK.hpp"
 #include "FillConcentric.hpp"
 #include "InfillPatternRegistry.hpp"
+#include "InfillPlugins.hpp"
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/Line.hpp"
@@ -328,6 +329,12 @@ struct SurfaceFillParams
     // Orca: forced print order of surface fill loops/fragments for center-based patterns.
     SurfaceFillOrder fill_order = SurfaceFillOrder::Default;
 
+    // Orca: the canonical parameter values of an infill plugin pattern; empty for built-in patterns.
+    std::string plugin_params;
+
+    // Orca: plugin patterns sort after the built-in ones, by token, whatever their load order.
+    unsigned order() const { return InfillPatternRegistry::order(this->pattern); }
+
 	bool operator<(const SurfaceFillParams &rhs) const {
 #define RETURN_COMPARE_NON_EQUAL(KEY) if (this->KEY < rhs.KEY) return true; if (this->KEY > rhs.KEY) return false;
 #define RETURN_COMPARE_NON_EQUAL_TYPED(TYPE, KEY) if (TYPE(this->KEY) < TYPE(rhs.KEY)) return true; if (TYPE(this->KEY) > TYPE(rhs.KEY)) return false;
@@ -337,7 +344,7 @@ struct SurfaceFillParams
 		if (this->bridge_angle < rhs.bridge_angle) return false;
 
 		RETURN_COMPARE_NON_EQUAL(extruder);
-		RETURN_COMPARE_NON_EQUAL_TYPED(unsigned, pattern);
+		RETURN_COMPARE_NON_EQUAL(order());
 		RETURN_COMPARE_NON_EQUAL(spacing);
 		RETURN_COMPARE_NON_EQUAL(overlap);
 		RETURN_COMPARE_NON_EQUAL(angle);
@@ -368,6 +375,7 @@ struct SurfaceFillParams
         RETURN_COMPARE_NON_EQUAL(center_of_surface_pattern);
         RETURN_COMPARE_NON_EQUAL(separated_infills);
 		RETURN_COMPARE_NON_EQUAL_TYPED(unsigned, fill_order);
+		RETURN_COMPARE_NON_EQUAL(plugin_params);
 
 		return false;
 	}
@@ -401,7 +409,8 @@ struct SurfaceFillParams
                 this->adaptive_infill_interior_density   == rhs.adaptive_infill_interior_density   &&
                 this->adaptive_infill_gradient  == rhs.adaptive_infill_gradient  &&
                 this->smooth_factor           == rhs.smooth_factor           &&
-                this->fill_order              == rhs.fill_order;
+                this->fill_order              == rhs.fill_order              &&
+                this->plugin_params           == rhs.plugin_params;
 	}
 };
 
@@ -1014,6 +1023,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                 }
                 // Orca: apply fill multiline only for sparse infill
                 params.multiline = params.extrusion_role == erInternalInfill ? int(region_config.fill_multiline) : 1;
+                params.plugin_params = infill_plugin_params_section(params.pattern, region_config.infill_plugin_params.value);
 
                 // Orca: Pass through separated_infills only where it can move the pattern.
                 params.separated_infills = region_config.separated_infills && is_separable_infill_pattern(params.pattern) &&
@@ -1243,6 +1253,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                     params.pattern 		 = ipRectilinear;
 	            params.density 		 = 100.f;
 		        params.extrusion_role = erSolidInfill;
+                params.plugin_params.clear();
 		        const PrintRegionConfig &region_config = layerm.region().config();
                 params.angle = calculate_infill_rotation_angle(layer.object(), layer.id(), region_config.solid_infill_direction.value,
                                                                region_config.solid_infill_rotate_template.value);
@@ -1577,7 +1588,9 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
         // Create the filler object.
         std::unique_ptr<Fill> f = std::unique_ptr<Fill>(Fill::new_from_type(surface_fill.params.pattern));
         f->set_bounding_box(bbox);
-        f->layer_id = this->id() - this->object()->get_layer(0)->id(); // We need to subtract raft layers.
+        // Orca: a plugin pattern lays out its anchors on the layer number of its printed infill, which counts raft layers.
+        f->layer_id = sliced_infill_pattern(surface_fill.params.pattern).plugin() ? this->id() :
+                                                                                   this->id() - this->object()->get_layer(0)->id(); // We need to subtract raft layers.
         {
             const auto &rcfg = m_regions[surface_fill.region_id]->region().config();
             f->dont_alternate_fill_direction = rcfg.zaa_enabled && rcfg.zaa_dont_alternate_fill_direction;
@@ -1634,6 +1647,8 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
         // Without the sparse extrusion role, the filler uses each surface's bounds
         // instead of the object's bounds, so bridge anchors shift away from printed infill.
         params.extrusion_role            = surface_fill.params.extrusion_role;
+        // Orca: plugin patterns read their parameters from the region config, as in make_fills().
+        params.config                    = &layerm.region().config();
 
         for (ExPolygon &expoly : surface_fill.expolygons) {
             // Orca: Match the per-body box and octree of make_fills() before generating physical anchors.
