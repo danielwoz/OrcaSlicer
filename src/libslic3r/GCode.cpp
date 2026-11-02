@@ -32,6 +32,7 @@
 #include "I18N.hpp"
 #include "IMEXHelpers.hpp"
 #include "GCode.hpp"
+#include "Module/ModuleRegistry.hpp"
 #include <cstdio>
 #include "Exception.hpp"
 #include "LifecycleEvents.hpp"
@@ -3719,6 +3720,9 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     // Orca: Initialise AdaptivePA processor filter
     m_pa_processor = std::make_unique<AdaptivePAProcessor>(*this);
 
+    // Orca: the G-code hooks of modules, with their option values for this print.
+    m_module_gcode_hooks = module_gcode_hooks(print);
+
     // Update output variables after the extruders were initialized.
     m_placeholder_parser_integration.init(m_writer);
 
@@ -5197,7 +5201,13 @@ void GCode::process_layers(
             check_placeholder_parser_failed();
             print.throw_if_canceled();
             m_extrusion_quality_estimator.set_precomputed_layers(std::move(precomputed.overhang_layers));
-            return this->process_layer(print, layer.second, layer_tools, &layer == &layers_to_print.back(), &print_object_instances_ordering, tool_ordering.get_most_used_extruder(), size_t(-1));
+            LayerResult result = this->process_layer(print, layer.second, layer_tools, &layer == &layers_to_print.back(), &print_object_instances_ordering, tool_ordering.get_most_used_extruder(), size_t(-1));
+            // Orca: modules may insert G-code before and after the layer.
+            if (! m_module_gcode_hooks.empty())
+                apply_module_gcode_hooks(m_module_gcode_hooks, result.gcode, result.setup_end, layer.first,
+                                         precomputed.index == 0 ? -1. : layers_to_print[precomputed.index - 1].first, precomputed.index,
+                                         layers_to_print.size());
+            return result;
         });
     if (m_spiral_vase) {
         float nozzle_diameter  = EXTRUDER_CONFIG(nozzle_diameter);
@@ -5294,7 +5304,15 @@ void GCode::process_layers(
             check_placeholder_parser_failed();
             print.throw_if_canceled();
             m_extrusion_quality_estimator.set_precomputed_layers(std::move(precomputed.overhang_layers));
-            return this->process_layer(print, { std::move(layer) }, tool_ordering.tools_for_layer(layer.print_z()), &layer == &layers_to_print.back(), nullptr, tool_ordering.get_most_used_extruder(), single_object_idx, prime_extruder);
+            // Orca: the heights for the G-code hooks of modules, read before the layer is moved into process_layer().
+            const coordf_t print_z          = layer.print_z();
+            const coordf_t previous_print_z = precomputed.index == 0 ? -1. : layers_to_print[precomputed.index - 1].print_z();
+            LayerResult result = this->process_layer(print, { std::move(layer) }, tool_ordering.tools_for_layer(layer.print_z()), &layer == &layers_to_print.back(), nullptr, tool_ordering.get_most_used_extruder(), single_object_idx, prime_extruder);
+            // Orca: modules may insert G-code before and after the layer.
+            if (! m_module_gcode_hooks.empty())
+                apply_module_gcode_hooks(m_module_gcode_hooks, result.gcode, result.setup_end, print_z, previous_print_z,
+                                         precomputed.index, layers_to_print.size());
+            return result;
         });
     if (m_spiral_vase) {
         float nozzle_diameter  = EXTRUDER_CONFIG(nozzle_diameter);
@@ -6981,6 +6999,7 @@ LayerResult GCode::process_layer(
         // Mark the temperature transition from 1st to 2nd layer to be finished.
         m_second_layer_things_done = true;
     }
+    result.setup_end = gcode.size();
 
     if (single_object_instance_idx == size_t(-1)) {
         // Normal (non-sequential) print.
@@ -8377,15 +8396,20 @@ void GCode::append_full_config(const Print &print, std::string &str)
         "printhost_cafile"sv,
         "printhost_user"sv,
         "printhost_password"sv,
-        "printhost_port"sv
+        "printhost_port"sv,
+        // Orca: derived from module settings, or kept for modules that are not loaded; see ModuleRegistry.
+        "missing_module_options"sv,
+        "module_print_values"sv,
+        "module_region_values"sv
     });
     auto is_banned = [](const std::string &key) {
         return banned_keys.find(key) != banned_keys.end();
     };
     std::ostringstream ss;
     for (const std::string& key : cfg.keys()) {
-        // Orca: an empty infill_plugin_params stays out, so prints without infill plugins keep their config block.
-        if (key == "infill_plugin_params" && cfg.opt_string(key).empty())
+        // Orca: an empty infill_plugin_params and module settings at their defaults stay out, so loading plugins or
+        // modules leaves the config block unchanged until they are used.
+        if ((key == "infill_plugin_params" && cfg.opt_string(key).empty()) || ModuleRegistry::is_default_value(key, *cfg.option(key)))
             continue;
         if (!is_banned(key) && !cfg.option(key)->is_nil()) {
             if (key == "wipe_tower_x" || key == "wipe_tower_y") {

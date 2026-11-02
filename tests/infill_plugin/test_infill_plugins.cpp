@@ -20,6 +20,7 @@
 #include "libslic3r/Fill/FillPlugin.hpp"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
 #include "libslic3r/Fill/InfillPlugins.hpp"
+#include "libslic3r/Module/ModuleLoader.hpp"
 #include "libslic3r/Format/bbs_3mf.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/Model.hpp"
@@ -33,19 +34,19 @@
 using namespace Slic3r;
 using namespace Slic3r::Test;
 
-Slic3r::InfillPluginLoad &sample_plugin_load();
+Slic3r::ModuleLoad &sample_plugin_load();
 
 namespace {
 
 const std::string sample_key = "org.orcaslicer.sample.lines";
 
 // Loads a plugin file once per process, so test cases that share a process see the same outcome.
-const InfillPluginLoad &load_once(const std::string &path)
+const ModuleLoad &load_once(const std::string &path)
 {
-    static std::map<std::string, InfillPluginLoad> loads;
+    static std::map<std::string, ModuleLoad> loads;
     auto it = loads.find(path);
     if (it == loads.end())
-        it = loads.emplace(path, load_infill_plugin(path)).first;
+        it = loads.emplace(path, load_module(path)).first;
     return it->second;
 }
 
@@ -180,7 +181,7 @@ std::vector<std::string> parameter_warnings(const DynamicPrintConfig &config)
 
 TEST_CASE("Infill plugin: the sample is loaded and offered in the pattern options", "[InfillPlugin]")
 {
-    const InfillPluginLoad &load = sample_plugin_load();
+    const ModuleLoad &load = sample_plugin_load();
     INFO(load.error);
     REQUIRE(load.error.empty());
     CHECK(load.plugin == "OrcaSlicer sample infill patterns 1.0.0");
@@ -295,10 +296,15 @@ TEST_CASE("Infill plugin: parameters are read from infill_plugin_params", "[Infi
         CHECK_THAT(messages.front(), Catch::Matchers::ContainsSubstring("\"spacing_scale = 2\" is not written as"));
 
         // The section is canonical, so text that differs only in form does not split fill groups.
-        CHECK(infill_plugin_params_section(pattern, "org.orcaslicer.sample.lines/cross = true\nother.pattern/x=1") ==
-              infill_plugin_params_section(pattern, "org.orcaslicer.sample.lines/cross=1"));
-        CHECK(infill_plugin_params_section(pattern, "") == "spacing_scale=1;cross=0;phase=0");
-        CHECK(infill_plugin_params_section(ipGyroid, "org.orcaslicer.sample.lines/cross=1").empty());
+        auto section = [](InfillPattern p, const std::string &text) {
+            PrintRegionConfig config;
+            config.infill_plugin_params.value = text;
+            return infill_plugin_params_section(p, &config);
+        };
+        CHECK(section(pattern, "org.orcaslicer.sample.lines/cross = true\nother.pattern/x=1") ==
+              section(pattern, "org.orcaslicer.sample.lines/cross=1"));
+        CHECK(section(pattern, "") == "spacing_scale=1;cross=0;phase=0");
+        CHECK(section(ipGyroid, "org.orcaslicer.sample.lines/cross=1").empty());
         CHECK_THAT(infill_plugin_param_help(pattern), Catch::Matchers::ContainsSubstring("org.orcaslicer.sample.lines/spacing_scale = 1"));
     }
 
@@ -387,7 +393,7 @@ TEST_CASE("Infill plugin: multiline copies are drawn by the host", "[InfillPlugi
 
 TEST_CASE("Infill plugin: the host services offset and clip regions with holes", "[InfillPlugin]")
 {
-    const InfillPluginLoad &load = load_once(INFILL_FIXTURE_INSET);
+    const ModuleLoad &load = load_once(INFILL_FIXTURE_INSET);
     INFO(load.error);
     REQUIRE(load.patterns == std::vector<std::string>{ "org.orcaslicer.test.inset" });
     // A 40 mm cube with a 20 mm square hole through it. Counts the sparse infill points, and those closer than 1.5 mm
@@ -423,7 +429,7 @@ TEST_CASE("Infill plugin: the host services offset and clip regions with holes",
 
 TEST_CASE("Infill plugin: surface patterns are told the role of a request", "[InfillPlugin]")
 {
-    const InfillPluginLoad &load = load_once(INFILL_FIXTURE_TOP_ONLY);
+    const ModuleLoad &load = load_once(INFILL_FIXTURE_TOP_ONLY);
     INFO(load.error);
     REQUIRE(load.patterns == std::vector<std::string>{ "org.orcaslicer.test.toponly" });
     CHECK(! (InfillPatternRegistry::find("org.orcaslicer.test.toponly")->slots & ipsSparse));
@@ -469,7 +475,7 @@ TEST_CASE("Infill plugin: anchors follow the printed infill on a raft", "[Infill
 TEST_CASE("Infill plugin: failures of a pattern", "[InfillPlugin]")
 {
     SECTION("a region the pattern cannot fill stays empty") {
-        const InfillPluginLoad &load = load_once(INFILL_FIXTURE_FAILS_ODD_LAYERS);
+        const ModuleLoad &load = load_once(INFILL_FIXTURE_FAILS_ODD_LAYERS);
         INFO(load.error);
         REQUIRE(load.patterns == std::vector<std::string>{ "org.orcaslicer.test.fails" });
         Print print;
@@ -485,7 +491,7 @@ TEST_CASE("Infill plugin: failures of a pattern", "[InfillPlugin]")
         CHECK(even_filled > 0);
     }
     SECTION("an error ends the slice and names the plugin") {
-        const InfillPluginLoad &load = load_once(INFILL_FIXTURE_THROWS);
+        const ModuleLoad &load = load_once(INFILL_FIXTURE_THROWS);
         INFO(load.error);
         REQUIRE(load.patterns == std::vector<std::string>{ "org.orcaslicer.test.throws" });
         Print print;
@@ -504,15 +510,15 @@ TEST_CASE("Infill plugin: failures of a pattern", "[InfillPlugin]")
 
 TEST_CASE("Infill plugin: broken plugins are rejected", "[InfillPlugin]")
 {
-    auto expect_rejected = [](const InfillPluginLoad &load, const char *reason) {
+    auto expect_rejected = [](const ModuleLoad &load, const char *reason) {
         CAPTURE(load.path, load.error);
         CHECK_THAT(load.error, Catch::Matchers::ContainsSubstring(reason));
         CHECK(load.patterns.empty());
-        CHECK(std::any_of(infill_plugin_failures().begin(), infill_plugin_failures().end(),
-                          [&load](const InfillPluginLoad &failure) { return failure.path == load.path; }));
+        CHECK(std::any_of(module_load_failures().begin(), module_load_failures().end(),
+                          [&load](const ModuleLoad &failure) { return failure.path == load.path; }));
     };
     expect_rejected(load_once(INFILL_FIXTURE_WRONG_ABI), "ABI 2");
-    expect_rejected(load_once(INFILL_FIXTURE_NO_ENTRY), "not an infill plugin");
+    expect_rejected(load_once(INFILL_FIXTURE_NO_ENTRY), "not a module or infill plugin");
     expect_rejected(load_once(INFILL_FIXTURE_BAD_KEY), "nodot: the token must be two or more parts");
     expect_rejected(load_once(INFILL_FIXTURE_DUPLICATE_KEY), "already in use");
     expect_rejected(load_once(INFILL_FIXTURE_CONNECT_WITHOUT_CLIP), "ORCA_INFILL_POST_CONNECT needs ORCA_INFILL_POST_CLIP");
@@ -528,10 +534,10 @@ TEST_CASE("Infill plugin: broken plugins are rejected", "[InfillPlugin]")
     const boost::filesystem::path text_file = dir.path() / "x.so";
 #endif
     boost::nowide::ofstream(utf8(text_file)) << "not a library";
-    expect_rejected(load_infill_plugin(utf8(text_file)), "cannot load the library");
+    expect_rejected(load_module(utf8(text_file)), "cannot load the library");
 
     // A file loaded before is skipped quietly.
-    const InfillPluginLoad again = load_infill_plugin(SAMPLE_INFILL_PLUGIN);
+    const ModuleLoad again = load_module(SAMPLE_INFILL_PLUGIN);
     CHECK(again.error.empty());
     CHECK(again.patterns.empty());
 
@@ -540,7 +546,7 @@ TEST_CASE("Infill plugin: broken plugins are rejected", "[InfillPlugin]")
     boost::filesystem::create_directories(copy_dir);
     const boost::filesystem::path copy = copy_dir / from_utf8(SAMPLE_INFILL_PLUGIN).filename();
     boost::filesystem::copy_file(from_utf8(SAMPLE_INFILL_PLUGIN), copy);
-    const InfillPluginLoad copied = load_infill_plugin(utf8(copy));
+    const ModuleLoad copied = load_module(utf8(copy));
     CHECK(copied.plugin == "OrcaSlicer sample infill patterns 1.0.0");
     expect_rejected(copied, "already in use");
 
@@ -550,14 +556,14 @@ TEST_CASE("Infill plugin: broken plugins are rejected", "[InfillPlugin]")
     boost::system::error_code ec;
     boost::filesystem::create_hard_link(copy, alias, ec);
     if (! ec) {
-        const InfillPluginLoad aliased = load_infill_plugin(utf8(alias));
+        const ModuleLoad aliased = load_module(utf8(alias));
         CHECK(aliased.error.empty());
         CHECK(aliased.plugin.empty());
     }
 #endif
 
     // A directory scan finds the plugin files of a directory and skips the files already loaded.
-    const std::vector<InfillPluginLoad> scanned = load_infill_plugins({ utf8(from_utf8(SAMPLE_INFILL_PLUGIN).parent_path()), utf8(copy_dir) });
+    const std::vector<ModuleLoad> scanned = load_modules({ utf8(from_utf8(SAMPLE_INFILL_PLUGIN).parent_path()), utf8(copy_dir) });
     CHECK(scanned.empty());
 }
 
@@ -574,10 +580,10 @@ TEST_CASE("Infill plugin: a directory scan reports a library without the entry u
         boost::filesystem::copy_file(fixture, copy);
     }
     const boost::dll::shared_library dependency(boost::filesystem::canonical(used));
-    const std::vector<InfillPluginLoad> scanned = load_infill_plugins({ utf8(lone.parent_path()), utf8(used.parent_path()) });
+    const std::vector<ModuleLoad> scanned = load_modules({ utf8(lone.parent_path()), utf8(used.parent_path()) });
     REQUIRE(scanned.size() == 1);
     CHECK(from_utf8(scanned.front().path).filename() == lone.filename());
-    CHECK_THAT(scanned.front().error, Catch::Matchers::ContainsSubstring("not an infill plugin"));
+    CHECK_THAT(scanned.front().error, Catch::Matchers::ContainsSubstring("not a module or infill plugin"));
 }
 
 TEST_CASE("Infill plugin: a pattern whose plugin is missing is substituted", "[InfillPlugin]")

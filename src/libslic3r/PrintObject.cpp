@@ -35,6 +35,8 @@
 #include "Fill/FillLightning.hpp"
 #include "Fill/AdaptiveInfillField.hpp"
 #include "Fill/InfillPatternRegistry.hpp"
+#include "Module/ModuleHooks.hpp"
+#include "Module/ModuleRegistry.hpp"
 #include "format.hpp"
 #include "AABBTreeIndirect.hpp"
 #include "AABBTreeLines.hpp"
@@ -826,6 +828,9 @@ void PrintObject::infill()
                 for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++ layer_idx) {
                     m_print->throw_if_canceled();
                     m_layers[layer_idx]->make_fills(&m_adaptive_fill_octrees, this->m_lightning_generator.get());
+                    // Orca: modules may trim the infill of the layer and add paths to it.
+                    if (ModuleRegistry::has_fill_hooks())
+                        run_module_fill_hooks(*m_layers[layer_idx]);
                 }
             }
         );
@@ -1463,7 +1468,16 @@ bool PrintObject::invalidate_state_by_config_options(
     std::vector<PrintObjectStep> steps;
     bool invalidated = false;
     for (const t_config_option_key &opt_key : opt_keys) {
-        if (   opt_key == "brim_width"
+        if (opt_key == "module_region_values") {
+            // Orca: recompute from the steps the changed module options declare.
+            const uint32_t changed = ModuleRegistry::changed_steps(old_config.option_throw<ConfigOptionString>(opt_key)->value,
+                                                                   new_config.option_throw<ConfigOptionString>(opt_key)->value);
+            if (changed & msSlice)          steps.emplace_back(posSlice);
+            if (changed & msPerimeters)     steps.emplace_back(posPerimeters);
+            if (changed & msPrepareInfill)  steps.emplace_back(posPrepareInfill);
+            if (changed & msInfill)         steps.emplace_back(posInfill);
+            if (changed & msGCode)          invalidated |= m_print->invalidate_step(psGCodeExport);
+        } else if (   opt_key == "brim_width"
             || opt_key == "leading_brim_length"
             || opt_key == "extra_brim_width"
             || opt_key == "brim_object_gap"
@@ -4329,7 +4343,7 @@ static void apply_to_print_region_config(PrintRegionConfig &out, const DynamicPr
 
     // 2) Copy the rest of the values.
     for (auto it = in.cbegin(); it != in.cend(); ++ it)
-        if (it->first != key_extruder)
+        if (it->first != key_extruder) {
             if (ConfigOption* my_opt = out.option(it->first, false); my_opt != nullptr) {
                 if (one_of(it->first, keys_extruders)) {
                     // "Default" (0) clears explicit override for this scope and lets fallback apply.
@@ -4374,7 +4388,11 @@ static void apply_to_print_region_config(PrintRegionConfig &out, const DynamicPr
                         }
                     }
                 }
+            } else if (const ModuleOption *option = ModuleRegistry::option(it->first); option != nullptr && option->scope == ModuleScope::Region) {
+                // Orca: an override of a module option, which reaches the region through its bag.
+                ModuleRegistry::set_bag_value(out.module_region_values, *option, *it->second);
             }
+        }
 
     // 3) Apply base extruder only to features that were not explicitly overridden.
     if (base_extruder > 0) {

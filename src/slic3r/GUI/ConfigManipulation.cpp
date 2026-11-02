@@ -10,6 +10,8 @@
 #include "MsgDialog.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
+#include "libslic3r/Fill/InfillPlugins.hpp"
+#include "libslic3r/Module/ModuleRegistry.hpp"
 #include "libslic3r/GCode/AdaptivePAProcessor.hpp"
 #include "Plater.hpp"
 
@@ -886,7 +888,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("infill_complete_top", have_infill && sparse_pattern.has_option("infill_complete_top"), -1, _L("Select 3D Honeycomb infill with nonzero sparse infill density to use this setting."));
 
     // Orca: parameters of infill plugin patterns; shown while a plugin pattern is in use.
-    auto plugin_pattern = [config](const char *opt_key) { return infill_pattern(config->opt_enum<InfillPattern>(opt_key)).plugin(); };
+    auto plugin_pattern = [config](const char *opt_key) { return infill_plugin_uses_text_params(config->opt_enum<InfillPattern>(opt_key)); };
     toggle_line("infill_plugin_params",
                 (have_infill && plugin_pattern("sparse_infill_pattern")) || plugin_pattern("top_surface_pattern") ||
                 plugin_pattern("bottom_surface_pattern") || plugin_pattern("internal_solid_infill_pattern"),
@@ -1365,6 +1367,16 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
 
     std::string printer_type = wxGetApp().preset_bundle->printers.get_edited_preset().get_printer_type(wxGetApp().preset_bundle);
     toggle_line("enable_wrapping_detection", DevPrinterConfigUtil::support_wrapping_detection(printer_type), -1, _L("The selected printer does not support wrapping detection."));
+
+    // Orca: module settings follow the conditions of their modules.
+    for (const ModuleOption *option : ModuleRegistry::options_with_condition()) {
+        const bool     enabled = ModuleRegistry::condition_holds(*option, *config);
+        const wxString reason  = _L("Unavailable while this condition is false:") + " " + from_u8(option->enabled_if);
+        if (option->hide_when_disabled)
+            toggle_line(option->key, enabled, -1, reason);
+        else
+            toggle_field(option->key, enabled, -1, reason);
+    }
 }
 
 void ConfigManipulation::update_print_sla_config(DynamicPrintConfig* config, const bool is_global_config/* = false*/)

@@ -30,6 +30,7 @@
 #include "GCode/SmallAreaInfillFlowCompensator.hpp"
 // ORCA: post processor below used for Dynamic Pressure advance
 #include "GCode/AdaptivePAProcessor.hpp"
+#include "Module/ModuleHooks.hpp"
 
 #include "GCode/TimelapsePosPicker.hpp"
 #include "libslic3r_version.h"
@@ -221,6 +222,9 @@ struct LayerResult {
 	// Is indicating if this LayerResult should be processed, or it is just inserted artificial LayerResult.
     // It is used for the pressure equalizer because it needs to buffer one layer back.
     bool        nop_layer_result { false };
+    // Orca: where the layer change and the layer's own setup commands (first-to-second layer temperatures,
+    // accelerations) end in gcode; G-code that modules insert before the layer goes there.
+    size_t      setup_end { 0 };
 
     static LayerResult make_nop_layer_result() { return {"", std::numeric_limits<size_t>::max(), false, false, true}; }
 };
@@ -882,6 +886,8 @@ protected:
     std::unique_ptr<PressureEqualizer>  m_pressure_equalizer;
     
     std::unique_ptr<AdaptivePAProcessor>      m_pa_processor;
+    // Orca: the G-code hooks of modules, with their option values for the print being exported.
+    std::vector<ModuleGCodeHook>              m_module_gcode_hooks;
 
     // IMEX: active parallel mode name ("primary", "copy", "iq-copy", etc.).
     // Set at the start of export. Empty string means non-IMEX or not yet set.

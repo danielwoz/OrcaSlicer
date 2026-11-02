@@ -2,6 +2,7 @@
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/Model.hpp"
+#include "libslic3r/Module/ModuleRegistry.hpp"
 
 #include "GUI_Factories.hpp"
 #include "GUI_ObjectList.hpp"
@@ -199,6 +200,17 @@ std::map<std::string, std::vector<SimpleSettingData>> SettingsFactory::PART_CATE
        {"gap_infill_speed", "", 12},
        {"internal_bridge_speed", "", 13}}}};
 
+// Orca: offers the region settings of modules for objects, parts, modifiers and height ranges, one category per module.
+void SettingsFactory::add_module_settings()
+{
+    for (const ModuleRecord *module : ModuleRegistry::modules()) {
+        int priority = 1;
+        for (const ModuleOption *option : module->settings)
+            if (option->scope == ModuleScope::Region)
+                PART_CATEGORY_SETTINGS[module->label].push_back({ option->key, "", priority++ });
+    }
+}
+
 std::vector<std::string> SettingsFactory::get_options(const bool is_part)
 {
     if (printer_technology() == ptSLA) {
@@ -215,6 +227,9 @@ std::vector<std::string> SettingsFactory::get_options(const bool is_part)
         std::vector<std::string> obj_options = obj_config.keys();
         options.insert(options.end(), obj_options.begin(), obj_options.end());
     }
+    // Orca: module settings of region scope; overrides group by category, the module label.
+    std::vector<std::string> module_options = ModuleRegistry::option_keys(ModuleScope::Region);
+    options.insert(options.end(), module_options.begin(), module_options.end());
     return options;
 }
 

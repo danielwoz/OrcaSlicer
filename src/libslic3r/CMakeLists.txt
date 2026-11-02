@@ -191,6 +191,12 @@ set(lisbslic3r_sources
     Fill/InfillPlugins.hpp
     Fill/FillPlugin.cpp
     Fill/FillPlugin.hpp
+    Module/ModuleHooks.cpp
+    Module/ModuleHooks.hpp
+    Module/ModuleLoader.cpp
+    Module/ModuleLoader.hpp
+    Module/ModuleRegistry.cpp
+    Module/ModuleRegistry.hpp
     Fill/FillConcentric.cpp
     Fill/FillConcentric.hpp
     Fill/FillSpiralInset.cpp
@@ -722,8 +728,8 @@ if (USE_SLIC3R_CONSOLE_LOG)
     target_compile_definitions(libslic3r PRIVATE $<$<CONFIG:RelWithDebInfo>:SLIC3R_CONSOLE_LOG>)
 endif()
 target_include_directories(libslic3r PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/TextureToColor PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
-# The C ABI of infill plugins (Fill/InfillPlugins.cpp, Fill/FillPlugin.cpp).
-target_include_directories(libslic3r PRIVATE ${CMAKE_SOURCE_DIR}/sdk/infill/include)
+# The C ABIs of infill plugins (Fill/InfillPlugins.cpp, Fill/FillPlugin.cpp) and of modules (Module/*.cpp).
+target_include_directories(libslic3r PRIVATE ${CMAKE_SOURCE_DIR}/sdk/infill/include ${CMAKE_SOURCE_DIR}/sdk/modules/include)
 target_include_directories(libslic3r SYSTEM PUBLIC ${EXPAT_INCLUDE_DIRS})
 
 # Find the OCCT and related libraries

@@ -2719,7 +2719,7 @@ public:
         const ConfigOption* opt = this->option_throw(opt_key);
         if (opt->type() != TYPE::static_type())
             throw BadOptionTypeException("Conversion to a wrong type");
-        return static_cast<TYPE*>(opt);
+        return static_cast<const TYPE*>(opt);
     }
 };
 
@@ -2772,6 +2772,11 @@ protected:
     // Perform composite conversions, for example merging multiple keys into one key.
     // For conversion of single options, the handle_legacy() method above is called.
     virtual void                    handle_legacy_composite() {}
+    // Keeps the value of a key handle_legacy() dropped, in a form this config can store; returns true when it was kept.
+    virtual bool                    keep_unknown_option(const t_config_option_key & /* opt_key */, const std::string & /* value */,
+                                                        ConfigSubstitutionContext & /* substitutions */) { return false; }
+    // Whether save() and save_to_json() leave a key out, its value being what reading a file without it gives.
+    virtual bool                    omit_on_save(const t_config_option_key & /* opt_key */) const { return false; }
 
 public:
 	using ConfigOptionResolver::option;

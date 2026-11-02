@@ -82,3 +82,14 @@ if (TARGET sample_infill_lines)
         SKIP_RETURN_CODE 77
         TIMEOUT 900)
 endif ()
+
+# Modules: the sample modules of tests/modules, loaded from the environment or a CLI flag.
+if (TARGET infill_walls)
+    add_test(NAME cli_modules
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_modules.sh $<TARGET_FILE:OrcaSlicer> ${ORCA_CLI_TEST_PYTHON}
+            $<TARGET_FILE_DIR:infill_walls>)
+    set_tests_properties(cli_modules PROPERTIES
+        LABELS "CLI;RequiresApp"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 900)
+endif ()

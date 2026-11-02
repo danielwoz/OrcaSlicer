@@ -49,7 +49,7 @@ void FillPlugin::_fill_surface_single(const FillParams &params, unsigned int thi
 
     // A Fill serves one fill group, and the parameters are part of the group key, so one reading per config holds.
     if (! m_params_read || m_params_config != params.config) {
-        m_params        = infill_plugin_param_values(m_pattern->id, params.config ? params.config->infill_plugin_params.value : std::string());
+        m_params        = infill_plugin_param_values(m_pattern->id, params.config);
         m_params_config = params.config;
         m_params_read   = true;
     }
@@ -80,7 +80,7 @@ void FillPlugin::_fill_surface_single(const FillParams &params, unsigned int thi
         // The pattern cannot fill this region: it stays empty, as with a built-in pattern.
         throw InfillFailedException();
     else if (status != ORCA_INFILL_OK)
-        throw Slic3r::SlicingError(Slic3r::format(_u8L("The infill pattern \"%1%\" of the plugin \"%2%\" failed (error %3%)."),
+        throw Slic3r::SlicingError(Slic3r::format(_u8L("The infill pattern \"%1%\" of \"%2%\" failed (error %3%)."),
                                                   m_pattern->key, m_pattern->plugin, status));
 
     const uint32_t post = m_pattern->post;

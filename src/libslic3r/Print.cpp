@@ -85,6 +85,7 @@
 #include "LocalesUtils.hpp"
 #include "Fill/InfillPatternRegistry.hpp"
 #include "Fill/InfillPlugins.hpp"
+#include "Module/ModuleRegistry.hpp"
 #include <float.h>
 
 #include <algorithm>
@@ -265,7 +266,7 @@ bool Print::has_tpu_filament() const
 
 // Called by Print::apply().
 // This method only accepts PrintConfig option keys.
-bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* new_config */, const std::vector<t_config_option_key> &opt_keys)
+bool Print::invalidate_state_by_config_options(const ConfigOptionResolver &new_config, const std::vector<t_config_option_key> &opt_keys)
 {
     if (opt_keys.empty())
         return false;
@@ -447,7 +448,17 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
     bool invalidated = false;
 
     for (const t_config_option_key &opt_key : opt_keys) {
-        if (steps_exclusion_geometry.find(opt_key) != steps_exclusion_geometry.end()) {
+        if (opt_key == "module_print_values") {
+            // Orca: recompute from the steps the changed module options declare. m_config still holds the old values
+            // here, Print::apply() updates it afterwards.
+            const uint32_t changed = ModuleRegistry::changed_steps(m_config.module_print_values.value,
+                                                                   new_config.option_throw<ConfigOptionString>(opt_key)->value);
+            if (changed & msSlice)          osteps.emplace_back(posSlice);
+            if (changed & msPerimeters)     osteps.emplace_back(posPerimeters);
+            if (changed & msPrepareInfill)  osteps.emplace_back(posPrepareInfill);
+            if (changed & msInfill)         osteps.emplace_back(posInfill);
+            if (changed & msGCode)          steps.emplace_back(psGCodeExport);
+        } else if (steps_exclusion_geometry.find(opt_key) != steps_exclusion_geometry.end()) {
             // Exclusions are consumed while generating brims, support, tree
             // support and wipe-tower geometry, not only during final export.
             steps.emplace_back(psWipeTower);
@@ -2052,7 +2063,8 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         }
     }
 
-    // Orca: report infill plugin parameters that are ignored or corrected.
+    // Orca: report infill plugin parameters that are ignored or corrected. The parameters of a module's pattern are
+    // module settings, reported below.
     if (InfillPatternRegistry::has_runtime_patterns()) {
         std::set<std::string> messages;
         for (const PrintObject *object : m_objects)
@@ -2060,9 +2072,9 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                 const PrintRegionConfig &config = object->printing_region(i).config();
                 for (InfillPattern pattern : { config.sparse_infill_pattern.value, config.top_surface_pattern.value,
                                                config.bottom_surface_pattern.value, config.internal_solid_infill_pattern.value })
-                    if (infill_pattern(pattern).plugin()) {
+                    if (infill_plugin_uses_text_params(pattern)) {
                         std::vector<std::string> pattern_messages;
-                        infill_plugin_param_values(pattern, config.infill_plugin_params.value, &pattern_messages);
+                        infill_plugin_param_values(pattern, &config, &pattern_messages);
                         messages.insert(pattern_messages.begin(), pattern_messages.end());
                     }
             }
@@ -2073,6 +2085,16 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
             w.type    = STRING_EXCEPT_INFILL_PLUGIN_PARAMS;
             add_warning(std::move(w));
         }
+    }
+
+    // Orca: module settings that are kept but not used, and module values outside their ranges.
+    for (ModuleWarning &w : ModuleRegistry::warnings(*this)) {
+        StringObjectException warning;
+        warning.string  = std::move(w.message);
+        warning.object  = w.object;
+        warning.opt_key = std::move(w.opt_key);
+        warning.type    = STRING_EXCEPT_MODULE_SETTINGS;
+        add_warning(std::move(warning));
     }
 
     // A flow ratio of 0 would extrude nothing, and a nil one would write NaN extrusion lengths.

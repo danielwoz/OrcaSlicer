@@ -37,6 +37,9 @@ const std::set<std::string> kDeprecatedRegionFields = {
     "wall_infill_order",
 };
 
+// Derived in Print::apply() and never shown or stored in presets.
+const std::set<std::string> kDerivedRegionFields = { "module_region_values" };
+
 void check_keys_are_in_a_preset(const t_config_option_keys& keys, const std::string& class_name)
 {
     REQUIRE_FALSE(keys.empty());
@@ -51,7 +54,8 @@ void check_keys_are_in_a_preset(const t_config_option_keys& keys, const std::str
                      << " is missing from "
                         "Preset::print_options()/filament_options(); add it to "
                         "s_Preset_print_options (or s_Preset_filament_options) in Preset.cpp.");
-            const bool registered = in_print.count(key) || in_filament.count(key) || kDeprecatedRegionFields.count(key);
+            const bool registered = in_print.count(key) || in_filament.count(key) || kDeprecatedRegionFields.count(key) ||
+                                    kDerivedRegionFields.count(key);
             REQUIRE(registered);
         }
     }

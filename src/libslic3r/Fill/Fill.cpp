@@ -1023,7 +1023,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                 }
                 // Orca: apply fill multiline only for sparse infill
                 params.multiline = params.extrusion_role == erInternalInfill ? int(region_config.fill_multiline) : 1;
-                params.plugin_params = infill_plugin_params_section(params.pattern, region_config.infill_plugin_params.value);
+                params.plugin_params = infill_plugin_params_section(params.pattern, &region_config);
 
                 // Orca: Pass through separated_infills only where it can move the pattern.
                 params.separated_infills = region_config.separated_infills && is_separable_infill_pattern(params.pattern) &&
