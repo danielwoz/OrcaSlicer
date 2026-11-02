@@ -49,7 +49,16 @@ void log_infill_plugin_loads();
 std::vector<double> infill_plugin_param_values(InfillPattern pattern, const std::string &text, std::vector<std::string> *messages = nullptr);
 // The parameter values of the pattern as a canonical string; empty for a built-in pattern or one without parameters.
 std::string infill_plugin_params_section(InfillPattern pattern, const std::string &text);
-// One "<token>/<name> = <default>  <range or values>  <label>" line per parameter of the pattern.
-std::string infill_plugin_param_help(InfillPattern pattern);
+// An infill_plugin_params text in canonical form for pattern: its entries replaced by one "<token>/<name> = <value>"
+// entry per value that differs from the default, every other entry kept as written, one entry per line, sorted by
+// pattern and parameter; repeated entries keep their order, so the last one still wins.
+std::string infill_plugin_params_with(const std::string &text, InfillPattern pattern, const std::vector<double> &values);
+// "<pattern label>: <name>=<value>, ...", joined by "; ", for the plugin patterns whose values in the text differ from
+// their defaults; empty when there are none. changed, when given, receives the number of those values.
+std::string infill_plugin_params_summary(const std::string &text, size_t *changed = nullptr);
+
+struct InfillPluginPattern;
+// The registered plugin patterns, by token.
+std::vector<const InfillPluginPattern*> infill_plugin_patterns();
 
 } // namespace Slic3r

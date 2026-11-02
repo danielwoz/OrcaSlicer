@@ -79,10 +79,11 @@ Problems are logged and shown as a notification. `out.log()` writes to the same 
   `KEEP_ORDER` (paths print in the order emitted) and `ROTATE_TEMPLATE_SAFE` (`sparse_infill_rotate_template`).
 - Draw across the whole `req.bbox()`. `ORCA_INFILL_POST_CLIP` cuts the lines to the region (without it they must stay
   inside); `ORCA_INFILL_POST_DEFAULT` also drops pieces under 0.8 x spacing and joins line ends along the outline.
-- Parameters arrive in `req.param(i)`, in declaration order; choices arrive as their index. Users set them in the
-  *Pattern parameters* setting, one per line or separated by `;`: `org.example.stripes/gap = 2`, also on the command
-  line as `--infill-plugin-params "org.example.stripes/gap = 2"`. On/off values accept `1`/`0` and `true`/`false`;
-  values out of range are clamped and unknown names are reported, both with a warning.
+- Parameters arrive in `req.param(i)`, in declaration order; choices arrive as their index. Users edit them in a dialog
+  built from your declarations, which stores each changed value as a line of the *Pattern parameters* setting:
+  `org.example.stripes/gap = 2`. On the command line they are written the same way, one per line or separated by `;`:
+  `--infill-plugin-params "org.example.stripes/gap = 2"`. On/off values accept `1`/`0` and `true`/`false`; values
+  out of range are clamped and unknown names are reported, both with a warning.
 - Throw `orca_infill::Failed` when a region cannot be filled: it stays empty. Any other exception stops the slice
   with an error naming your plugin.
 - Need help with geometry? `out.clip()` and `out.offset()` take `req.region()` or a region `out.offset()` returned.

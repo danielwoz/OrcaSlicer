@@ -469,6 +469,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/PresetComboBoxes.hpp
     GUI/PresetHints.cpp
     GUI/PresetHints.hpp
+    GUI/InfillPluginParamsDialog.cpp
+    GUI/InfillPluginParamsDialog.hpp
     GUI/PrimitiveSizeDialog.cpp
     GUI/PrimitiveSizeDialog.hpp
     GUI/PrinterCloudAuthDialog.cpp
@@ -937,6 +939,8 @@ else ()
     add_library(libslic3r_gui STATIC ${SLIC3R_GUI_SOURCES})
 endif ()
 target_include_directories(libslic3r_gui PRIVATE Utils ${CMAKE_CURRENT_BINARY_DIR})
+# The C ABI of infill plugins, for the parameter types of InfillPluginParamsDialog.
+target_include_directories(libslic3r_gui PRIVATE ${CMAKE_SOURCE_DIR}/sdk/infill/include)
 
 if (WIN32)
     target_include_directories(libslic3r_gui SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../deps/WebView2/include)

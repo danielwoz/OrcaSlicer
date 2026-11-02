@@ -73,6 +73,9 @@ const t_field& OptionsGroup::build_field(const t_config_option_key& id, const Co
     case ConfigOptionDef::GUIType::printer_agent_select: m_fields.emplace(
             id, PrinterAgentChoice::Create<PrinterAgentChoice>(this->ctrl_parent(), opt, id));
         break;
+    case ConfigOptionDef::GUIType::infill_plugin_params:
+        m_fields.emplace(id, InfillPluginParamsField::Create<InfillPluginParamsField>(this->ctrl_parent(), opt, id));
+        break;
     default:
         switch (opt.type) {
             case coFloatOrPercent:
@@ -151,6 +154,11 @@ const t_field& OptionsGroup::build_field(const t_config_option_key& id, const Co
     if (auto plugin_config_field = dynamic_cast<PluginConfigField*>(field.get()))
         if (auto config_group = dynamic_cast<ConfigOptionsGroup*>(this))
             plugin_config_field->set_preset_type(config_group->config_type());
+
+    // The parameter dialog lists the infill plugin patterns that the edited configuration selects first.
+    if (auto params_field = dynamic_cast<InfillPluginParamsField*>(field.get()))
+        if (auto config_group = dynamic_cast<ConfigOptionsGroup*>(this))
+            params_field->set_config([config_group]() -> const ConfigBase* { return config_group->config(); });
 
     // assign function objects for callbacks, etc.
     return field;

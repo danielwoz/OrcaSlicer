@@ -299,7 +299,6 @@ TEST_CASE("Infill plugin: parameters are read from infill_plugin_params", "[Infi
               infill_plugin_params_section(pattern, "org.orcaslicer.sample.lines/cross=1"));
         CHECK(infill_plugin_params_section(pattern, "") == "spacing_scale=1;cross=0;phase=0");
         CHECK(infill_plugin_params_section(ipGyroid, "org.orcaslicer.sample.lines/cross=1").empty());
-        CHECK_THAT(infill_plugin_param_help(pattern), Catch::Matchers::ContainsSubstring("org.orcaslicer.sample.lines/spacing_scale = 1"));
     }
 
     SECTION("slicing") {
@@ -335,6 +334,37 @@ TEST_CASE("Infill plugin: parameters are read from infill_plugin_params", "[Infi
         }
         CHECK(parameter_warnings(sample_config("org.orcaslicer.sample.lines/spacing_scale=2")).empty());
     }
+}
+
+TEST_CASE("Infill plugin: parameter text is rewritten in canonical form", "[InfillPlugin]")
+{
+    using V = std::vector<double>;
+    const InfillPattern pattern = sample_pattern();
+
+    // The pattern's entries become its non-default values; other entries stay as written; one entry per line, sorted.
+    const std::string text = "zz.other/x = 1;org.orcaslicer.sample.lines/cross=true\n org.orcaslicer.sample.lines / bogus = 3\nno pattern";
+    const std::string edited = infill_plugin_params_with(text, pattern, V{ 2.5, 0., 1. });
+    CHECK(edited == "no pattern\norg.orcaslicer.sample.lines/phase = staggered\norg.orcaslicer.sample.lines/spacing_scale = 2.5\nzz.other/x = 1");
+    CHECK(infill_plugin_param_values(pattern, edited) == V{ 2.5, 0., 1. });
+    CHECK(infill_plugin_params_with(edited, pattern, infill_plugin_param_values(pattern, edited)) == edited);
+
+    // Values are clamped to the declared range and rounded for every type but FLOAT; defaults leave no entry.
+    CHECK(infill_plugin_params_with("", pattern, V{ 9., 0.4, 0. }) == "org.orcaslicer.sample.lines/spacing_scale = 4");
+    CHECK(infill_plugin_params_with("org.orcaslicer.sample.lines/cross=1", pattern, V{ 1., 0., 0. }).empty());
+    // Repeated entries keep their order, so the last one still wins.
+    CHECK(infill_plugin_params_with("a.b/x=2\na.b/x=1;a.a/y=0", pattern, V{ 1., 0., 0. }) == "a.a/y=0\na.b/x=2\na.b/x=1");
+    // Built-in patterns have no entries to replace.
+    CHECK(infill_plugin_params_with("b.b/x=1;a.a/x=1", ipGyroid, {}) == "a.a/x=1\nb.b/x=1");
+
+    CHECK(infill_plugin_params_summary("").empty());
+    CHECK(infill_plugin_params_summary("org.orcaslicer.sample.lines/spacing_scale=1;zz.other/x=1").empty());
+    size_t changed = 0;
+    CHECK(infill_plugin_params_summary(edited, &changed) == "Lines (sample): spacing_scale=2.5, phase=staggered");
+    CHECK(changed == 2);
+
+    const std::vector<const InfillPluginPattern*> patterns = infill_plugin_patterns();
+    CHECK(std::is_sorted(patterns.begin(), patterns.end(), [](const InfillPluginPattern *a, const InfillPluginPattern *b) { return a->key < b->key; }));
+    CHECK(std::count_if(patterns.begin(), patterns.end(), [pattern](const InfillPluginPattern *p) { return p->id == pattern; }) == 1);
 }
 
 TEST_CASE("Infill plugin: regions with different parameters are filled apart", "[InfillPlugin]")
