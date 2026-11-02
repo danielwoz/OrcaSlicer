@@ -444,6 +444,8 @@ public:
     }
 
     static const std::vector<std::string>&  print_options();
+    // Orca: adds module options; called before any preset collection is built.
+    static void                             append_print_options(const std::vector<std::string> &keys);
     static const std::vector<std::string>&  filament_options();
     // Printer options contain the nozzle options.
     static const std::vector<std::string>&  printer_options();

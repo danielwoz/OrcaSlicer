@@ -15,6 +15,7 @@
 #include "PrintBase.hpp"
 #include "libslic3r_version.h"
 #include "TriangleSelector.hpp"
+#include "Module/ModuleRegistry.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1345,6 +1346,9 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 	new_full_config.option("print_settings_id",            true);
 	new_full_config.option("filament_settings_id",         true);
 	new_full_config.option("printer_settings_id",          true);
+    // Orca: module options reach the print and region configs through module_print_values and module_region_values.
+    // Packed before any copy of the full config is kept, so every copy has them.
+    ModuleRegistry::pack_values(new_full_config);
 
     // BBS
     std::vector <unsigned int> used_filaments = this->extruders(true);

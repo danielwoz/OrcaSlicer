@@ -6,6 +6,7 @@
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
 #include "libslic3r/Fill/InfillPlugins.hpp"
+#include "libslic3r/Module/ModuleRegistry.hpp"
 #include "libslic3r/BeltTransform.hpp"
 #include "libslic3r/FilamentMixer.hpp"
 #include "libslic3r/Utils.hpp"
@@ -3530,6 +3531,18 @@ void TabPrint::build()
         option.opt.height = 25;//250;
         optgroup->append_single_option_line(option, "others_settings_notes");
 
+    // Orca: a page with one group per module, in module key order; it exists only when a loaded module has settings.
+    if (ModuleRegistry::has_options()) {
+        page = add_options_page(L("Modules"), "custom-gcode_other");
+        for (const ModuleRecord *module : ModuleRegistry::modules()) {
+            if (module->settings.empty())
+                continue;
+            optgroup = page->new_optgroup(from_u8(module->label), L"param_gcode");
+            for (const ModuleOption *setting : module->settings)
+                optgroup->append_single_option_line(setting->key);
+        }
+    }
+
     // Orca: hide the dependencies tab for process for now. The UI is not ready yet.
     // page = add_options_page(L("Dependencies"), "param_profile_dependencies"); // icons ready
     //     optgroup = page->new_optgroup(L("Profile dependencies"), "param_profile_dependencies"); // icons ready
@@ -3585,7 +3598,7 @@ void TabPrint::toggle_options()
     if (Field *field = get_field("infill_plugin_params"); field != nullptr && field->getWindow() != nullptr) {
         std::set<InfillPattern> patterns;
         for (const char *opt_key : { "sparse_infill_pattern", "top_surface_pattern", "bottom_surface_pattern", "internal_solid_infill_pattern" })
-            if (const InfillPattern p = m_config->opt_enum<InfillPattern>(opt_key); infill_pattern(p).plugin())
+            if (const InfillPattern p = m_config->opt_enum<InfillPattern>(opt_key); infill_plugin_uses_text_params(p))
                 patterns.insert(p);
         wxString help = _(print_config_def.get("infill_plugin_params")->tooltip);
         for (InfillPattern p : patterns)
@@ -4321,7 +4334,7 @@ void TabPrintPlate::update_custom_dirty(std::vector<std::string> &dirty_options,
 }
 
 TabPrintObject::TabPrintObject(ParamsPanel* parent) :
-    TabPrintModel(parent, concat(PrintObjectConfig().keys(), PrintRegionConfig().keys()))
+    TabPrintModel(parent, concat(concat(PrintObjectConfig().keys(), PrintRegionConfig().keys()), ModuleRegistry::option_keys(ModuleScope::Region)))
 {
     m_parent_tab = wxGetApp().get_tab(Preset::TYPE_PRINT);
 }
@@ -4335,7 +4348,7 @@ void TabPrintObject::notify_changed(ObjectBase * object)
 //BBS: GUI refactor
 
 TabPrintPart::TabPrintPart(ParamsPanel* parent) :
-    TabPrintModel(parent, PrintRegionConfig().keys())
+    TabPrintModel(parent, concat(PrintRegionConfig().keys(), ModuleRegistry::option_keys(ModuleScope::Region)))
 {
     m_parent_tab = wxGetApp().get_model_tab();
 }
@@ -4348,7 +4361,7 @@ void TabPrintPart::notify_changed(ObjectBase * object)
 
 static std::string layer_height = "layer_height";
 TabPrintLayer::TabPrintLayer(ParamsPanel* parent) :
-    TabPrintModel(parent, concat({ layer_height }, PrintRegionConfig().keys()))
+    TabPrintModel(parent, concat(concat({ layer_height }, PrintRegionConfig().keys()), ModuleRegistry::option_keys(ModuleScope::Region)))
 {
     m_parent_tab = wxGetApp().get_model_tab();
 }

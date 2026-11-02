@@ -136,6 +136,10 @@ int role_passes(const std::string &gcode, const std::string &role);
 // The `roles` in the order their extrusion blocks first appear, consecutive repeats collapsed.
 std::vector<std::string> role_sequence(const std::string &gcode, const std::vector<std::string> &roles);
 
+// The G-code without the lines that differ between two runs of the same slice: the generator line with its time stamp
+// and the object label ids, which come from a process-wide counter. Lines containing a text of also_drop go as well.
+std::string strip_nondeterministic_gcode_lines(const std::string &gcode, const std::vector<std::string> &also_drop = {});
+
 } } // namespace Slic3r::Test
 
 #endif // SLIC3R_TEST_HELPERS_HPP

@@ -413,9 +413,9 @@ static void add_config_substitutions(const ConfigSubstitutions& conf_substitutio
 		}
 
 		wxString old_val = bold_string(conf_substitution.old_value);
-		// Orca: a pattern token with a '.' names a pattern of an infill plugin.
+		// Orca: a pattern token with a '.' names a pattern of an infill plugin or a module.
 		if (def->enum_keys_map == &ConfigOptionEnum<InfillPattern>::get_enum_values() && conf_substitution.old_value.find('.') != std::string::npos)
-			old_val += " " + _L("(its infill plugin is not installed)");
+			old_val += " " + _L("(the module or infill plugin that provides it is not installed)");
 		changes += format_wxstr("<tr><td><b>\"%1%\" (%2%)</b></td><td>: ", def->opt_key, _(def->label)) +
 				   format_wxstr(_L("%1% was replaced with %2%"), old_val, bold(new_val)) +
 				   "</td></tr>";

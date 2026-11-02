@@ -19,13 +19,14 @@
 #include "slic3r/Utils/CloudDeleteQueue.hpp"
 #include "slic3r/Utils/NetworkAgent.hpp"
 #include "GUI_Init.hpp"
+#include "GUI_Factories.hpp"
 #include "GUI_ObjectList.hpp"
 #include "slic3r/GUI/UserManager.hpp"
 #include "slic3r/GUI/TaskManager.hpp"
 #include "format.hpp"
 #include "libslic3r_version.h"
-#include "libslic3r/Fill/InfillPatternRegistry.hpp"
-#include "libslic3r/Fill/InfillPlugins.hpp"
+#include "libslic3r/Module/ModuleLoader.hpp"
+#include "libslic3r/Module/ModuleRegistry.hpp"
 #include "BuildCommit.hpp"
 #include "Downloader.hpp"
 #include <boost/algorithm/string/split.hpp>
@@ -950,11 +951,11 @@ void GUI_App::post_init()
     init_webview_runtime();
 #endif
 
-    // Orca: report the infill plugins that could not be loaded, or only in part.
-    for (const InfillPluginLoad &failure : infill_plugin_failures())
+    // Orca: report the modules and infill plugins that could not be loaded, or only in part.
+    for (const ModuleLoad &failure : module_load_failures())
         plater()->get_notification_manager()->push_notification(NotificationType::CustomNotification,
             NotificationManager::NotificationLevel::WarningNotificationLevel,
-            format(_L("Infill plugin %1%: %2%"), failure.path, failure.error));
+            format(_L("Module %1%: %2%"), failure.path, failure.error));
 
     m_open_method = "double_click";
     bool switch_to_3d = false;
@@ -3467,12 +3468,13 @@ bool GUI_App::on_init_inner()
         scrn->SetText(_L("Loading configuration") + dots, 5);
     }
 
-    // Orca: the patterns of infill plugins are values of the pattern options, so the plugins of the data directory
-    // load before any preset or project is read; the pattern options stay unchanged afterwards. The plugins loaded
-    // at start-up, before the log file was opened, are logged first.
-    log_infill_plugin_loads();
-    load_infill_plugins({ (boost::filesystem::path(data_dir()) / "infill_plugins").string() });
-    InfillPatternRegistry::seal();
+    // Orca: module settings are options and the patterns of modules and infill plugins are values of the pattern
+    // options, so the modules of the data directory load before any preset or project is read; the options stay
+    // unchanged afterwards. The modules loaded at start-up, before the log file was opened, are logged first.
+    log_module_loads();
+    load_modules(module_data_dirs(data_dir()));
+    ModuleRegistry::seal();
+    SettingsFactory::add_module_settings();
 
     BOOST_LOG_TRIVIAL(info) << "loading systen presets...";
     preset_bundle = new PresetBundle();

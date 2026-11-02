@@ -801,6 +801,10 @@ public:
     static void handle_legacy(t_config_option_key &opt_key, std::string &value);
     static void handle_legacy_composite(DynamicPrintConfig &config);
 
+    // Orca: adds an option of a module. Main thread only, before any configuration is read on another thread.
+    // Returns nullptr when the key is in use.
+    static ConfigOptionDef* add_module_option(const t_config_option_key &opt_key, ConfigOptionType type);
+
     // Array options growing with the number of extruders
     const std::vector<std::string>& extruder_option_keys() const { return m_extruder_option_keys; }
     // Options defining the extruder retract properties. These keys are sorted lexicographically.
@@ -828,9 +832,9 @@ private:
     std::vector<std::string>    m_filament_retract_keys;
 };
 
-// The one and only global definition of SLic3r configuration options.
-// This definition is constant.
-extern const PrintConfigDef print_config_def;
+// The one and only global definition of the configuration options. Modules add options at start-up
+// (PrintConfigDef::add_module_option), so it is read through a const reference.
+extern const PrintConfigDef &print_config_def;
 
 class StaticPrintConfig;
 
@@ -910,6 +914,12 @@ public:
     // For conversion of single options, the handle_legacy() method above is called.
     void                handle_legacy_composite() override
         { PrintConfigDef::handle_legacy_composite(*this); }
+
+    // Orca: keeps the settings of modules that are not loaded, and restores those of loaded ones, see ModuleRegistry.
+    bool                keep_unknown_option(const t_config_option_key &opt_key, const std::string &value,
+                                            ConfigSubstitutionContext &substitutions) override;
+    // Orca: module settings at their defaults, empty kept settings and the derived bags are not saved, see ModuleRegistry.
+    bool                omit_on_save(const t_config_option_key &opt_key) const override;
 
     //BBS special case Support G/ Support W
     std::string get_filament_type(std::string &displayed_filament_type, int id = 0);
@@ -1601,6 +1611,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool, zaa_dont_alternate_fill_direction))
     ((ConfigOptionFloat, zaa_min_z))
     ((ConfigOptionFloat, zaa_minimize_perimeter_height))
+    // Orca: the region's module option values that differ from their defaults, see Module/ModuleRegistry.hpp.
+    ((ConfigOptionString, module_region_values))
     )
 
 PRINT_CONFIG_CLASS_DEFINE(
@@ -2134,6 +2146,8 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionPoint,               bed_mesh_max))
     ((ConfigOptionPoint,               bed_mesh_probe_distance))
     ((ConfigOptionFloat,               adaptive_bed_mesh_margin))
+    // Orca: the print's module option values that differ from their defaults, see Module/ModuleRegistry.hpp.
+    ((ConfigOptionString,              module_print_values))
 
 
 )
@@ -2480,6 +2494,8 @@ public:
 
     // Orca: copies the values of a pattern option of print_config_def, which infill plugins extend at start-up.
     static void             refresh_enum_values(const t_config_option_key &opt_key);
+    // Orca: copies a module option of print_config_def into the command line definition.
+    static void             add_module_option(const ConfigOptionDef &def);
 
 private:
     class PrintAndCLIConfigDef : public ConfigDef

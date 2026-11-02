@@ -43,4 +43,19 @@ struct Lines
 
 } // namespace
 
+#ifdef ORCA_SAMPLE_LINES_MODULE
+#include "orca_module_sdk.hpp"
+namespace {
+// The same pattern as a module: its parameters are the settings sample_lines__spacing_scale, __cross and __phase.
+struct SampleLines
+{
+    static constexpr const char *key     = "sample_lines";
+    static constexpr const char *label   = "Lines (sample)";
+    static constexpr const char *version = "1.0.0";
+    using patterns = std::tuple<Lines>;
+};
+} // namespace
+ORCA_MODULE(SampleLines)
+#else
 ORCA_INFILL_PLUGIN("OrcaSlicer sample infill patterns", "1.0.0", Lines)
+#endif

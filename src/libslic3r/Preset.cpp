@@ -35,6 +35,7 @@
 #include "ParallelResolve.hpp"
 #include "Semver.hpp"
 #include "PrintConfig.hpp"
+#include "Module/ModuleRegistry.hpp"
 #include "libslic3r_version.h"
 #include "I18N.hpp"
 
@@ -1110,7 +1111,13 @@ DynamicPrintConfig Preset::load_external_config(Type type, const DynamicPrintCon
             std::string extruder_id_name, extruder_variant_name;
             std::set<std::string> *key_set1 = nullptr, *key_set2 = nullptr;
             Preset::get_extruder_names_and_keysets(type, extruder_id_name, extruder_variant_name, &key_set1, &key_set2);
-            cfg.update_non_diff_values_to_base_config(*base_config, cfg_keys, different_settings_list, extruder_id_name, extruder_variant_name, *key_set1, *key_set2);
+            // Orca: system presets never set module settings, so the project's values of those and of the kept ones are
+            // the user's, whatever the list says: a list saved with a module names its setting, not the kept one.
+            t_config_option_keys refreshed_keys;
+            std::copy_if(cfg_keys.begin(), cfg_keys.end(), std::back_inserter(refreshed_keys), [](const std::string &key) {
+                return ! is_module_option_key(key) && key != "missing_module_options";
+            });
+            cfg.update_non_diff_values_to_base_config(*base_config, refreshed_keys, different_settings_list, extruder_id_name, extruder_variant_name, *key_set1, *key_set2);
         }
     }
     if (keys)
@@ -1520,6 +1527,8 @@ static std::vector<std::string> s_Preset_print_options{
     "zaa_dont_alternate_fill_direction",
     "zaa_min_z",
     "ironing_expansion",
+    // Orca: the settings of modules that are not loaded.
+    "missing_module_options",
 };
 
 static std::vector<std::string> s_Preset_filament_options {/*"filament_colour", */ "default_filament_colour", "required_nozzle_HRC", "filament_diameter", "pellet_flow_coefficient", "volumetric_speed_coefficients", "filament_type",
@@ -1735,6 +1744,12 @@ static std::vector<std::string> s_Preset_sla_printer_options {
 };
 
 const std::vector<std::string>& Preset::print_options()          { return s_Preset_print_options; }
+void Preset::append_print_options(const std::vector<std::string> &keys)
+{
+    for (const std::string &key : keys)
+        if (std::find(s_Preset_print_options.begin(), s_Preset_print_options.end(), key) == s_Preset_print_options.end())
+            s_Preset_print_options.emplace_back(key);
+}
 const std::vector<std::string>& Preset::filament_options()       { return s_Preset_filament_options; }
 const std::vector<std::string>& Preset::machine_limits_options() { return s_Preset_machine_limits_options; }
 // The following nozzle options of a printer profile will be adjusted to match the size

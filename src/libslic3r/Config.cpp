@@ -605,6 +605,9 @@ bool ConfigBase::set_deserialize_nothrow(const t_config_option_key &opt_key_src,
     // If the opt_key is no more valid in this version of Slic3r, opt_key is cleared by handle_legacy().
     this->handle_legacy(opt_key, value);
     if (opt_key.empty()) {
+        // Orca: the value may still be kept, see keep_unknown_option().
+        if (this->keep_unknown_option(opt_key_src, value_src, substitutions_ctxt))
+            return true;
         // Ignore the option.
         //BBS: record these options, keep only one repeated opt_key
         auto iter = std::find(substitutions_ctxt.unrecogized_keys.begin(), substitutions_ctxt.unrecogized_keys.end(), opt_key_src);
@@ -1565,6 +1568,8 @@ void ConfigBase::save_to_json(std::ostream &os, const std::string &name, const s
     //record all the key-values
     for (const std::string &opt_key : this->keys())
     {
+        if (this->omit_on_save(opt_key))
+            continue;
         const ConfigOption* opt = this->option(opt_key);
         if ( opt->is_scalar() ) {
             if (opt->type() == coString && (opt_key != "bed_custom_texture" && opt_key != "bed_custom_model"))
@@ -1612,7 +1617,8 @@ void ConfigBase::save(const std::string &file) const
     c.open(file, std::ios::out | std::ios::trunc);
     c << "# " << Slic3r::header_slic3r_generated() << std::endl;
     for (const std::string &opt_key : this->keys())
-        c << opt_key << " = " << this->opt_serialize(opt_key) << std::endl;
+        if (! this->omit_on_save(opt_key))
+            c << opt_key << " = " << this->opt_serialize(opt_key) << std::endl;
     c.close();
 
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" <<__LINE__ << boost::format(", saved config to %1%\n")%file;

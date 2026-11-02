@@ -44,6 +44,8 @@ struct SettingsFactory
     //BBS: add api to get options for catogary
     static std::vector<SimpleSettingData> get_visible_options(const std::string& category, const bool is_part);
     static std::map<std::string, std::vector<SimpleSettingData>> get_all_visible_options(const bool is_part);
+    // Orca: called once, after the modules load.
+    static void add_module_settings();
 };
 
 class MenuFactory

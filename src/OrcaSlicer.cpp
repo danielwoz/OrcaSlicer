@@ -105,8 +105,8 @@
 #include "libslic3r/Platform.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
-#include "libslic3r/Fill/InfillPatternRegistry.hpp"
-#include "libslic3r/Fill/InfillPlugins.hpp"
+#include "libslic3r/Module/ModuleLoader.hpp"
+#include "libslic3r/Module/ModuleRegistry.hpp"
 #include "libslic3r/SLAPrint.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/Format/AMF.hpp"
@@ -1523,8 +1523,8 @@ int CLI::run(int argc, char **argv)
 #endif // SLIC3R_GUI
     }
 
-    // Orca: no infill plugin loads from here on, so configurations may be read on other threads.
-    InfillPatternRegistry::seal();
+    // Orca: no module or infill plugin loads from here on, so configurations may be read on other threads.
+    ModuleRegistry::seal();
 
     // Setup logging for CLI
     const ConfigOptionInt* opt_loglevel = m_config.opt<ConfigOptionInt>("debug");
@@ -1538,8 +1538,8 @@ int CLI::run(int argc, char **argv)
     if (opt_logfile) {
         set_logging_file(opt_logfile->value);
     }
-    // Orca: the infill plugins loaded before the log was set up.
-    log_infill_plugin_loads();
+    // Orca: the modules and infill plugins loaded before the log was set up.
+    log_module_loads();
 
     global_begin_time = (long long)Slic3r::Utils::get_current_time_utc();
     BOOST_LOG_TRIVIAL(warning) << boost::format("cli mode, Current OrcaSlicer Version %1%")%SoftFever_VERSION;
@@ -7050,11 +7050,12 @@ int CLI::run(int argc, char **argv)
                         else if (!warnings.empty()) {
                             for (const auto& w : warnings) {
                                 BOOST_LOG_TRIVIAL(warning) << "got warnings: "<< w.string << std::endl;
-                                if (w.type == STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE || w.type == STRING_EXCEPT_INFILL_PLUGIN_PARAMS) {
+                                const char *kind = w.type == STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE ? "infill_pattern_unavailable" :
+                                                   w.type == STRING_EXCEPT_INFILL_PLUGIN_PARAMS       ? "infill_plugin_params" :
+                                                   w.type == STRING_EXCEPT_MODULE_SETTINGS            ? "module_settings" : nullptr;
+                                if (kind != nullptr) {
                                     boost::nowide::cerr << "warning: " << w.string << std::endl;
-                                    cli_record_warning(sliced_info,
-                                                       w.type == STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE ? "infill_pattern_unavailable" : "infill_plugin_params",
-                                                       nlohmann::json{{"plate_id", index + 1}, {"key", w.opt_key}, {"text", w.string}});
+                                    cli_record_warning(sliced_info, kind, nlohmann::json{{"plate_id", index + 1}, {"key", w.opt_key}, {"text", w.string}});
                                 }
                             }
                         }
@@ -8214,14 +8215,15 @@ bool CLI::setup(int argc, char **argv)
     set_sys_shapes_dir((path_resources / "shapes").string());
     set_custom_gcodes_dir((path_resources / "custom_gcodes").string());
 
-    // Orca: the patterns of infill plugins are values of the pattern options, so the plugins load before the command
-    // line is parsed. The GUI adds the plugins of its data directory before it loads presets.
-    if (const InfillPluginStartup startup = infill_plugin_startup(argc, argv, path_to_binary); startup.disabled)
-        disable_infill_plugins();
+    // Orca: module settings are options and the patterns of modules and infill plugins are values of the pattern
+    // options, so they load before the command line is parsed. The GUI adds those of its data directory before it
+    // loads presets.
+    if (const ModuleStartup startup = module_startup(argc, argv, path_to_binary); startup.disabled)
+        disable_modules();
     else
-        for (const InfillPluginLoad &load : load_infill_plugins(startup.dirs))
+        for (const ModuleLoad &load : load_modules(startup.dirs))
             if (! load.error.empty())
-                boost::nowide::cerr << "warning: infill plugin " << load.path << ": " << load.error << std::endl;
+                boost::nowide::cerr << "warning: module " << load.path << ": " << load.error << std::endl;
 
     // Parse all command line options into a DynamicConfig.
     // If any option is unsupported, print usage and abort immediately.

@@ -120,6 +120,20 @@ static void make_string_bold(wxString& str)
 #endif
 }
 
+// Orca: names an option the search index does not hold by its definition, under "Others" when it has no category.
+static void name_unindexed_option(Search::Option &option, const std::string &opt_key, Preset::Type type)
+{
+    option = Search::Option();
+    const ConfigOptionDef* def = print_config_def.get(opt_key);
+    const std::string label = def ? (def->full_label.empty() ? def->label : def->full_label) : std::string();
+    option.label_local = (label.empty() ? from_u8(opt_key) : _L(label)).ToStdWstring();
+    option.category_local = (def && !def->category.empty() ?
+        Tab::translate_category(from_u8(def->category), type) : _L("Others")).ToStdWstring();
+}
+
+// Orca: the settings kept for modules that are not installed have no page, but a change of them is listed.
+static bool lists_unindexed_option(const std::string &opt_key) { return opt_key == "missing_module_options"; }
+
 // preset(root) node
 ModelNode::ModelNode(Preset::Type preset_type, wxWindow* parent_win, const wxString& text, const std::string& icon_name) :
     m_parent_win(parent_win),
@@ -1602,14 +1616,9 @@ void UnsavedChangesDialog::update_tree(Preset::Type type, DynamicConfig * config
     for (const std::string &opt_key : config->keys()) {
         int                   variant_index = -2;
         Search::Option        option        = index.get_option(opt_key, type, variant_index);
-        if (variant_index == -2) {
+        if (variant_index == -2)
             // Orca: Every transferred setting must remain visible even when it is absent from the search index.
-            const ConfigOptionDef* def = print_config_def.get(opt_key);
-            const std::string label = def ? (def->full_label.empty() ? def->label : def->full_label) : std::string();
-            option.label_local = (label.empty() ? from_u8(opt_key) : _L(label)).ToStdWstring();
-            option.category_local = (def && !def->category.empty() ?
-                Tab::translate_category(from_u8(def->category), type) : _L("Others")).ToStdWstring();
-        }
+            name_unindexed_option(option, opt_key, type);
         auto category = option.category_local;
         auto opt = dynamic_cast<ConfigOptionVectorBase*>(config->option(opt_key));
         std::string           value_from    = opt->vserialize()[from];
@@ -1680,12 +1689,14 @@ void UnsavedChangesDialog::update_tree(Preset::Type type, PresetCollection* pres
 
         for (const std::string& opt_key : dirty_options) {
             int variant_index = -2;
-            const Search::Option &option = index.get_option(opt_key, type, variant_index);
+            Search::Option option = index.get_option(opt_key, type, variant_index);
             if (variant_index == -2) {
                 // When founded option isn't the correct one.
                 // It can be for dirty_options: "default_print_profile", "printer_model", "printer_settings_id",
                 // because of they don't exist in the index
-                continue;
+                if (! lists_unindexed_option(opt_key))
+                    continue;
+                name_unindexed_option(option, opt_key, type);
             }
             wxString category = option.category_local;
             wxString label = option.label_local;
@@ -2263,7 +2274,9 @@ void DiffPresetDialog::update_tree()
                 // This can happen for dirty_options such as:
                 // "default_print_profile", "printer_model", "printer_settings_id",
                 // because they do not exist in the index.
-                continue;
+                if (! lists_unindexed_option(opt_key))
+                    continue;
+                name_unindexed_option(option, opt_key, type);
             }
             m_tree->Append(opt_key, type, option.category_local, option.group_local, option.label_local,
                 left_val, right_val, get_category_icon(option.category));

@@ -234,6 +234,9 @@ src/libslic3r/PrintConfig.cpp
 src/libslic3r/Fill/InfillPatternRegistry.cpp
 src/libslic3r/Fill/InfillPlugins.cpp
 src/libslic3r/Fill/FillPlugin.cpp
+src/libslic3r/Module/ModuleHooks.cpp
+src/libslic3r/Module/ModuleLoader.cpp
+src/libslic3r/Module/ModuleRegistry.cpp
 src/libslic3r/Zipper.cpp
 src/libslic3r/PrintObject.cpp
 src/libslic3r/PrintObjectSlice.cpp

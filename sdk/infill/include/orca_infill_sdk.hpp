@@ -101,17 +101,32 @@ inline void ORCA_INFILL_CALL collect_path(void *user, const orca_infill_point *p
     }
 }
 
+inline Region copy_region(const orca_infill_region &region)
+{
+    Region out { copy_points(region.contour.points, region.contour.count), {} };
+    for (size_t i = 0; i < region.hole_count; ++ i)
+        out.holes.emplace_back(copy_points(region.holes[i].points, region.holes[i].count));
+    return out;
+}
+
 inline void ORCA_INFILL_CALL collect_region(void *user, const orca_infill_region *region) noexcept
 {
     auto &collector = *static_cast<Collector<Region>*>(user);
     try {
-        Region out { copy_points(region->contour.points, region->contour.count), {} };
-        for (size_t i = 0; i < region->hole_count; ++ i)
-            out.holes.emplace_back(copy_points(region->holes[i].points, region->holes[i].count));
-        collector.out.emplace_back(std::move(out));
+        collector.out.emplace_back(copy_region(*region));
     } catch (...) {
         collector.failed = true;
     }
+}
+
+// The region grown (delta_mm > 0) or shrunk, through the host service.
+inline std::vector<Region> offset(const orca_infill_host &host, const orca_infill_region &region, double delta_mm)
+{
+    Collector<Region> regions;
+    check(host.offset_region(&region, delta_mm, &collect_region, &regions));
+    if (regions.failed)
+        throw std::bad_alloc();
+    return std::move(regions.out);
 }
 
 // Calls f with a view of region, valid during the call.
@@ -150,14 +165,7 @@ public:
         return std::move(pieces.out);
     }
     // The region grown (delta_mm > 0) or shrunk.
-    std::vector<Region> offset(const orca_infill_region &region, double delta_mm) const
-    {
-        detail::Collector<Region> regions;
-        detail::check(m_host.offset_region(&region, delta_mm, &detail::collect_region, &regions));
-        if (regions.failed)
-            throw std::bad_alloc();
-        return std::move(regions.out);
-    }
+    std::vector<Region> offset(const orca_infill_region &region, double delta_mm) const { return detail::offset(m_host, region, delta_mm); }
     // The same for a region that offset() returned.
     std::vector<Points> clip(const std::vector<Points> &polylines, const Region &region) const
     { return detail::with_view(region, [&](const orca_infill_region &view) { return this->clip(polylines, view); }); }
@@ -173,16 +181,11 @@ namespace detail {
 template<class P, class = void> struct has_params : std::false_type {};
 template<class P> struct has_params<P, std::void_t<decltype(P::params)>> : std::true_type {};
 
-// The C entry of a pattern: maps exceptions to status codes.
-template<class P>
-orca_infill_status ORCA_INFILL_CALL generate(void *, const orca_infill_host *host, const orca_infill_request *request,
-                                             orca_infill_sink *sink) noexcept
+// Runs f, mapping its exceptions to status codes.
+template<class F> orca_infill_status guarded(F &&f) noexcept
 {
-    if (host == nullptr || request == nullptr || sink == nullptr || request->region == nullptr)
-        return ORCA_INFILL_ERR_INVALID;
     try {
-        Output out(*host, sink);
-        P::generate(Request(*request), out);
+        f();
         return ORCA_INFILL_OK;
     } catch (const Failed &) {
         return ORCA_INFILL_ERR_FAILED;
@@ -191,6 +194,19 @@ orca_infill_status ORCA_INFILL_CALL generate(void *, const orca_infill_host *hos
     } catch (...) {
         return ORCA_INFILL_ERR_EXCEPTION;
     }
+}
+
+// The C entry of a pattern.
+template<class P>
+orca_infill_status ORCA_INFILL_CALL generate(void *, const orca_infill_host *host, const orca_infill_request *request,
+                                             orca_infill_sink *sink) noexcept
+{
+    if (host == nullptr || request == nullptr || sink == nullptr || request->region == nullptr)
+        return ORCA_INFILL_ERR_INVALID;
+    return guarded([&] {
+        Output out(*host, sink);
+        P::generate(Request(*request), out);
+    });
 }
 
 template<class P, size_t... I>

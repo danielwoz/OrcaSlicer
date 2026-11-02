@@ -15,6 +15,7 @@
 
 #include "GCode/Thumbnails.hpp"
 #include "Fill/InfillPatternRegistry.hpp"
+#include "Module/ModuleRegistry.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -5185,6 +5186,20 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comExpert;
     def->set_default_value(new ConfigOptionFloat(35));
 
+    // Orca: derived from the module options in Print::apply() and never edited. Files leave them out, and reading a
+    // file drops them.
+    for (const char *key : { "module_print_values", "module_region_values" }) {
+        def = this->add(key, coString);
+        def->cli = ConfigOptionDef::nocli;
+        def->set_default_value(new ConfigOptionString(""));
+    }
+    // Orca: the settings of modules that are not loaded, as "key = value" lines; see ModuleRegistry. No page shows it;
+    // the label names it where changes are listed.
+    def = this->add("missing_module_options", coString);
+    def->label = L("Settings of modules that are not installed");
+    def->cli = ConfigOptionDef::nocli;
+    def->set_default_value(new ConfigOptionString(""));
+
     def = this->add("zaa_dont_alternate_fill_direction", coBool);
     def->label    = L("Don't alternate fill direction");
     def->category = L("Quality");
@@ -9653,6 +9668,14 @@ void PrintConfigDef::init_sla_params()
 
 void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &value)
 {
+    // Orca: module settings skip the renames below. An unknown one, the kept values and the derived bags are dropped
+    // here; DynamicPrintConfig::keep_unknown_option() keeps or restores them.
+    if (is_module_option_key(opt_key) || opt_key == "missing_module_options" ||
+        opt_key == "module_print_values" || opt_key == "module_region_values") {
+        if (! is_module_option_key(opt_key) || ! print_config_def.has(opt_key))
+            opt_key = "";
+        return;
+    }
     //BBS: handle legacy options
     if (opt_key == "curr_bed_type" && value == "SuperTack Plate") {
         value = "Supertack Plate";
@@ -9752,6 +9775,9 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
         copy_value.erase(std::remove(copy_value.begin(), copy_value.end(), '\"'), copy_value.end()); // remove '"' in string
         std::set<std::string> split_keys = SplitStringAndRemoveDuplicateElement(copy_value, ";");
         for (std::string split_key : split_keys) {
+            // Orca: module settings and the kept ones stay listed, whether their module is loaded or not.
+            if (is_module_option_key(split_key) || split_key == "missing_module_options")
+                continue;
             std::string copy_key = split_key, copy_value = "";
             handle_legacy(copy_key, copy_value);
             if (copy_key != split_key) {
@@ -10005,18 +10031,32 @@ void PrintConfigDef::handle_legacy_composite(DynamicPrintConfig &config)
     normalize_filament_values_to_variants(config);
 }
 
-const PrintConfigDef print_config_def;
+static PrintConfigDef s_print_config_def;
+const PrintConfigDef &print_config_def = s_print_config_def;
 
-// Orca: The option definitions are nodes of the map inside print_config_def. They are allocated apart from that const
-// object, so updating them is well defined; the map itself is never changed. Runs on the main thread before any
-// configuration is read on another thread.
+ConfigOptionDef* PrintConfigDef::add_module_option(const t_config_option_key &opt_key, ConfigOptionType type)
+{
+    return s_print_config_def.has(opt_key) ? nullptr : s_print_config_def.add(opt_key, type);
+}
+
+bool DynamicPrintConfig::keep_unknown_option(const t_config_option_key &opt_key, const std::string &value, ConfigSubstitutionContext &substitutions)
+{
+    return ModuleRegistry::keep_unknown_option(*this, opt_key, value, substitutions);
+}
+
+bool DynamicPrintConfig::omit_on_save(const t_config_option_key &opt_key) const
+{
+    return ModuleRegistry::omit_on_save(opt_key, *this->option(opt_key));
+}
+
+// Orca: Runs on the main thread before any configuration is read on another thread.
 void publish_infill_pattern_values()
 {
     // Assigned in place: every enum_keys_map pointer to the map stays valid.
     s_keys_map_InfillPattern   = InfillPatternRegistry::keys_map();
     s_keys_names_InfillPattern = enum_names_from_keys_map(s_keys_map_InfillPattern);
     for (const auto &[opt_key, slot] : InfillPatternRegistry::options()) {
-        InfillPatternRegistry::define_enum_values(*const_cast<ConfigOptionDef*>(print_config_def.get(opt_key)), slot);
+        InfillPatternRegistry::define_enum_values(s_print_config_def.options.at(opt_key), slot);
         DynamicPrintAndCLIConfig::refresh_enum_values(opt_key);
     }
 }
@@ -13063,16 +13103,18 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->label = L("Data directory");
     def->tooltip = L("Load and store settings at the given directory. This is useful for maintaining different profiles or including configurations from a network storage.");
 
-    def = this->add("infill_plugin_dir", coStrings);
-    def->label = L("Infill plugin directories");
-    def->tooltip = L("Load the infill pattern plugins found in these directories, before those of ORCA_INFILL_PLUGIN_PATH, "
+    def = this->add("module_dir", coStrings);
+    def->label = L("Module directories");
+    def->tooltip = L("Load the modules and infill pattern plugins found in these directories, before those of ORCA_MODULE_PATH, "
                      "the application and the data directory.");
+    def->cli = "module-dir|infill-plugin-dir";
     def->cli_params = "\"dir1;dir2\"";
     def->set_default_value(new ConfigOptionStrings());
 
-    def = this->add("no_infill_plugins", coBool);
-    def->label = L("Do not load infill plugins");
-    def->tooltip = L("Do not load any infill pattern plugin. Setting the environment variable ORCA_INFILL_PLUGINS=0 does the same.");
+    def = this->add("no_modules", coBool);
+    def->label = L("Do not load modules");
+    def->tooltip = L("Do not load any module or infill pattern plugin. Setting the environment variable ORCA_MODULES=0 does the same.");
+    def->cli = "no-modules|no-infill-plugins";
     def->set_default_value(new ConfigOptionBool(false));
 
 
@@ -13200,6 +13242,12 @@ void DynamicPrintAndCLIConfig::refresh_enum_values(const t_config_option_key &op
     ConfigOptionDef       &target = s_def.options.at(opt_key);
     target.enum_values = source.enum_values;
     target.enum_labels = source.enum_labels;
+}
+
+void DynamicPrintAndCLIConfig::add_module_option(const ConfigOptionDef &def)
+{
+    ConfigOptionDef &copy = s_def.options.emplace(def.opt_key, def).first->second;
+    s_def.by_serialization_key_ordinal[copy.serialization_key_ordinal] = &copy;
 }
 
 void DynamicPrintAndCLIConfig::handle_legacy(t_config_option_key &opt_key, std::string &value) const
