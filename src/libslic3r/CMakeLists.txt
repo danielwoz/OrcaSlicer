@@ -14,7 +14,7 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/libslic3r_version.h.in ${CMAKE_CURREN
 option(ORCA_INFILL_OPTIONAL_DEFAULT "Initial value of the ORCA_INFILL_<NAME> options" ON)
 set(ORCA_OPTIONAL_INFILL_PATTERNS
     ZIGZAG CROSSZAG LOCKEDZAG LINE TRIHEXAGON QUARTERCUBIC SUPPORTCUBIC
-    LATERALHONEYCOMB LATERALLATTICE TPMSD TPMSFK HILBERTCURVE OCTAGRAMSPIRAL)
+    LATERALHONEYCOMB LATERALLATTICE TPMSD TPMSFK HILBERTCURVE OCTAGRAMSPIRAL STAGGERED)
 set(ORCA_INFILL_PATTERN_DEFINES "")
 set(ORCA_INFILL_LEFT_OUT "")
 foreach (_pattern IN LISTS ORCA_OPTIONAL_INFILL_PATTERNS)
@@ -211,6 +211,8 @@ set(lisbslic3r_sources
     Fill/FillPlanePath.hpp
     Fill/FillRectilinear.cpp
     Fill/FillRectilinear.hpp
+    Fill/FillStaggered.cpp
+    Fill/FillStaggered.hpp
     Fill/AdaptiveInfillField.cpp
     Fill/AdaptiveInfillField.hpp
     Fill/FillTpmsD.cpp
@@ -645,6 +647,9 @@ if (NOT ORCA_INFILL_TPMSD)
 endif ()
 if (NOT ORCA_INFILL_TPMSFK)
     list(REMOVE_ITEM lisbslic3r_sources Fill/FillTpmsFK.cpp)
+endif ()
+if (NOT ORCA_INFILL_STAGGERED)
+    list(REMOVE_ITEM lisbslic3r_sources Fill/FillStaggered.cpp)
 endif ()
 
 add_library(libslic3r STATIC ${lisbslic3r_sources}

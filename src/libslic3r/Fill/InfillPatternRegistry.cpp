@@ -16,6 +16,7 @@
 #include "FillPlanePath.hpp"
 #include "FillRectilinear.hpp"
 #include "FillSpiralInset.hpp"
+#include "FillStaggered.hpp"
 #include "FillTpmsD.hpp"
 #include "FillTpmsFK.hpp"
 
@@ -48,6 +49,7 @@ constexpr const char *honeycomb_3d_options[]      = { "infill_complete_top", nul
 constexpr const char *lateral_honeycomb_options[] = { "infill_overhang_angle", nullptr };
 constexpr const char *lateral_lattice_options[]   = { "lateral_lattice_angle_1", "lateral_lattice_angle_2", nullptr };
 constexpr const char *gyroid_options[]            = { "gyroid_optimized", nullptr };
+constexpr const char *staggered_options[]         = { "staggered_spacing_scale", "staggered_cross", nullptr };
 
 // Indexed by InfillPattern. The ordinals decide in which order fills are trimmed against each other and printed,
 // and the slot lists keep this order, so rows are never reordered.
@@ -149,6 +151,10 @@ constexpr std::array<InfillPatternDescriptor, size_t(ipCount)> s_builtins {{
       1., 0.5f, false, ipSupportBase, nullptr, &make_fill<FillSupportBase> },
     { ipConcentricInternal, nullptr, nullptr, 0, ipfArachne,
       1., 0.5f, false, ipConcentricInternal, nullptr, &make_fill<FillConcentricInternal> },
+    // Patterns added after the slicer's own patterns; they are listed last in the pattern options.
+    { ipStaggered, "staggered", L("Staggered Lines"), ipsSparse,
+      ipfSeparable | ipfMultiline | ipfRotateTemplateSafe,
+      1., 0.5f, true, ipRectilinear, staggered_options, optional_fill<ORCA_INFILL_STAGGERED != 0, FillStaggered>() },
 }};
 
 // The descriptor of a value that names no pattern: void area factor 1, combine clearance factor 0.5.

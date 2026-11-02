@@ -1225,6 +1225,8 @@ static std::vector<std::string> s_Preset_print_options{
     "lateral_lattice_angle_1",
     "lateral_lattice_angle_2",
     "infill_overhang_angle",
+    "staggered_spacing_scale",
+    "staggered_cross",
     "lightning_overhang_angle",
     "lightning_prune_angle",
     "lightning_straightening_angle",

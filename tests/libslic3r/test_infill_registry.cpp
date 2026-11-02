@@ -17,29 +17,30 @@ using namespace Slic3r;
 
 namespace {
 
-// The tokens and labels of the built-in patterns, in InfillPattern order.
+// The tokens and labels of the built-in patterns, in InfillPattern order. The patterns only the slicer uses
+// (ipSupportBase, ipConcentricInternal) have none.
 const std::vector<std::string> frozen_tokens{
     "monotonic", "monotonicline", "rectilinear", "alignedrectilinear", "zigzag", "crosszag", "lockedzag", "line", "grid",
     "triangles", "tri-hexagon", "cubic", "adaptivecubic", "quartercubic", "supportcubic", "lightning", "honeycomb",
     "3dhoneycomb", "lateral-honeycomb", "lateral-lattice", "crosshatch", "tpmsd", "tpmsfk", "gyroid", "concentric",
-    "spiralinset", "hilbertcurve", "archimedeanchords", "octagramspiral"};
+    "spiralinset", "hilbertcurve", "archimedeanchords", "octagramspiral", "", "", "staggered"};
 const std::vector<std::string> frozen_labels{
     "Monotonic", "Monotonic line", "Rectilinear", "Aligned Rectilinear", "Zig Zag", "Cross Zag", "Locked Zag", "Line", "Grid",
     "Triangles", "Tri-hexagon", "Cubic", "Adaptive Cubic", "Quarter Cubic", "Support Cubic", "Lightning", "Honeycomb",
     "3D Honeycomb", "Lateral Honeycomb", "Lateral Lattice", "Cross Hatch", "TPMS-D", "TPMS-FK", "Gyroid", "Concentric",
-    "Spiral Inset", "Hilbert Curve", "Archimedean Chords", "Octagram Spiral"};
+    "Spiral Inset", "Hilbert Curve", "Archimedean Chords", "Octagram Spiral", "", "", "Staggered Lines"};
 
 // The value and label lists of the pattern options.
 const std::vector<std::string> frozen_sparse_values{
     "rectilinear", "alignedrectilinear", "zigzag", "crosszag", "lockedzag", "line", "grid", "triangles", "tri-hexagon",
     "cubic", "adaptivecubic", "quartercubic", "supportcubic", "lightning", "honeycomb", "3dhoneycomb", "lateral-honeycomb",
     "lateral-lattice", "crosshatch", "tpmsd", "tpmsfk", "gyroid", "concentric", "hilbertcurve", "archimedeanchords",
-    "octagramspiral"};
+    "octagramspiral", "staggered"};
 const std::vector<std::string> frozen_sparse_labels{
     "Rectilinear", "Aligned Rectilinear", "Zig Zag", "Cross Zag", "Locked Zag", "Line", "Grid", "Triangles", "Tri-hexagon",
     "Cubic", "Adaptive Cubic", "Quarter Cubic", "Support Cubic", "Lightning", "Honeycomb", "3D Honeycomb", "Lateral Honeycomb",
     "Lateral Lattice", "Cross Hatch", "TPMS-D", "TPMS-FK", "Gyroid", "Concentric", "Hilbert Curve", "Archimedean Chords",
-    "Octagram Spiral"};
+    "Octagram Spiral", "Staggered Lines"};
 const std::vector<std::string> frozen_surface_values{
     "monotonic", "monotonicline", "rectilinear", "alignedrectilinear", "concentric", "spiralinset", "hilbertcurve",
     "archimedeanchords", "octagramspiral"};
@@ -70,7 +71,7 @@ using Patterns = std::set<InfillPattern>;
 const Patterns frozen_separable{ipMonotonic, ipMonotonicLine, ipRectilinear, ipAlignedRectilinear, ipZigZag, ipCrossZag,
                                 ipLockedZag, ipLine, ipGrid, ipTriangles, ipStars, ipCubic, ipQuarterCubic, ipHoneycomb,
                                 ip3DHoneycomb, ipLateralHoneycomb, ipLateralLattice, ipCrossHatch, ipTpmsD, ipTpmsFK, ipGyroid,
-                                ipHilbertCurve, ipArchimedeanChords, ipOctagramSpiral};
+                                ipHilbertCurve, ipArchimedeanChords, ipOctagramSpiral, ipStaggered};
 const Patterns frozen_octree{ipAdaptiveCubic, ipSupportCubic};
 const Patterns frozen_adaptive{ipGyroid, ipTpmsD, ipTpmsFK};
 const Patterns frozen_smoothable{ipHilbertCurve, ipOctagramSpiral, ipLightning, ipHoneycomb, ip3DHoneycomb, ipConcentric, ipCrossHatch};
@@ -78,7 +79,7 @@ const Patterns frozen_smoothable_multiline{ipGrid, ipTriangles, ipStars, ipCubic
 const Patterns frozen_multiline{ipGyroid, ipGrid, ipRectilinear, ipTpmsD, ipTpmsFK, ipCrossHatch, ipHoneycomb, ipLateralLattice,
                                 ipLateralHoneycomb, ipConcentric, ipCubic, ipStars, ipAlignedRectilinear, ipLightning, ip3DHoneycomb,
                                 ipAdaptiveCubic, ipSupportCubic, ipTriangles, ipQuarterCubic, ipArchimedeanChords, ipHilbertCurve,
-                                ipOctagramSpiral};
+                                ipOctagramSpiral, ipStaggered};
 const Patterns frozen_no_anchors{ipConcentric, ipSpiralInset};
 const Patterns frozen_no_anchor_max{ipLine};
 const Patterns frozen_fill_order{ipConcentric, ipSpiralInset, ipArchimedeanChords, ipOctagramSpiral};
@@ -86,7 +87,7 @@ const Patterns frozen_centered_surface{ipArchimedeanChords, ipOctagramSpiral};
 const Patterns frozen_line_based_solid{ipRectilinear, ipMonotonic, ipMonotonicLine, ipAlignedRectilinear};
 const Patterns frozen_arachne{ipConcentric, ipSpiralInset, ipConcentricInternal};
 const Patterns frozen_no_reverse{ipGrid};
-const Patterns frozen_rotate_template_safe{ipRectilinear, ipLine, ipZigZag, ipCrossZag, ipLockedZag};
+const Patterns frozen_rotate_template_safe{ipRectilinear, ipLine, ipZigZag, ipCrossZag, ipLockedZag, ipStaggered};
 const Patterns frozen_small_area_flow_comp{ipRectilinear, ipAlignedRectilinear, ipMonotonic, ipMonotonicLine};
 const Patterns frozen_no_surface_retract{ipHilbertCurve};
 const Patterns frozen_curved_bridge_anchors{ipHilbertCurve, ipOctagramSpiral};
@@ -102,7 +103,8 @@ const std::map<InfillPattern, std::set<std::string>> frozen_owned_options{
     {ip3DHoneycomb, {"infill_complete_top"}},
     {ipLateralHoneycomb, {"infill_overhang_angle"}},
     {ipLateralLattice, {"lateral_lattice_angle_1", "lateral_lattice_angle_2"}},
-    {ipGyroid, {"gyroid_optimized"}}};
+    {ipGyroid, {"gyroid_optimized"}},
+    {ipStaggered, {"staggered_spacing_scale", "staggered_cross"}}};
 
 // The patterns a build may leave out, with their fallbacks and CMake options.
 struct FrozenOptional
@@ -124,7 +126,8 @@ const std::vector<FrozenOptional> frozen_optional{
     {ipTpmsD, ipGyroid, ORCA_INFILL_TPMSD != 0},
     {ipTpmsFK, ipGyroid, ORCA_INFILL_TPMSFK != 0},
     {ipHilbertCurve, ipRectilinear, ORCA_INFILL_HILBERTCURVE != 0},
-    {ipOctagramSpiral, ipArchimedeanChords, ORCA_INFILL_OCTAGRAMSPIRAL != 0}};
+    {ipOctagramSpiral, ipArchimedeanChords, ORCA_INFILL_OCTAGRAMSPIRAL != 0},
+    {ipStaggered, ipRectilinear, ORCA_INFILL_STAGGERED != 0}};
 
 const FrozenOptional *find_optional(InfillPattern pattern)
 {
@@ -153,13 +156,14 @@ TEST_CASE("Infill pattern rows describe the built-in patterns in InfillPattern o
 {
     const auto &builtins = InfillPatternRegistry::builtins();
     REQUIRE(builtins.size() == size_t(ipCount));
+    REQUIRE(frozen_tokens.size() == size_t(ipCount));
     for (size_t i = 0; i < builtins.size(); ++i) {
         CAPTURE(i);
         const InfillPatternDescriptor &pattern = builtins[i];
         CHECK(size_t(pattern.id) == i);
         CHECK(InfillPatternRegistry::find(InfillPattern(i)) == &pattern);
         CHECK(&infill_pattern(InfillPattern(i)) == &pattern);
-        if (i < frozen_tokens.size()) {
+        if (! frozen_tokens[i].empty()) {
             REQUIRE_FALSE(pattern.internal());
             CHECK(pattern.key == frozen_tokens[i]);
             CHECK(pattern.label == frozen_labels[i]);
@@ -197,7 +201,8 @@ TEST_CASE("Infill pattern options list the built-in patterns in InfillPattern or
             builtin_keys.emplace(key, value);
     t_config_enum_values frozen_keys;
     for (size_t i = 0; i < frozen_tokens.size(); ++i)
-        frozen_keys.emplace(frozen_tokens[i], int(i));
+        if (! frozen_tokens[i].empty())
+            frozen_keys.emplace(frozen_tokens[i], int(i));
     CHECK(builtin_keys == frozen_keys);
 
     const t_config_enum_names &names = ConfigOptionEnum<InfillPattern>::get_enum_names();
@@ -303,6 +308,8 @@ TEST_CASE("Infill pattern availability follows the CMake options", "[InfillRegis
 TEST_CASE("Infill pattern tokens load, validate and save unchanged", "[InfillRegistry]")
 {
     for (const std::string &token : frozen_tokens) {
+        if (token.empty())
+            continue;
         CAPTURE(token);
         const std::string opt_key = option_offering(token);
         REQUIRE_FALSE(opt_key.empty());

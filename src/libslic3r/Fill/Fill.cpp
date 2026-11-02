@@ -314,6 +314,10 @@ struct SurfaceFillParams
     // For Gyroid: when true, use the parameterized "optimized" wave.
     bool gyroid_optimized = false;
 
+    // For Staggered Lines; the filler reads them from the region config, they only keep regions that differ apart.
+    double staggered_spacing_scale = 1.;
+    bool   staggered_cross         = false;
+
     // For TPMS: grade the density from the surface to the interior of the object.
     AdaptiveInfillMode     adaptive_infill_mode          = AdaptiveInfillMode::Disabled;
     float                adaptive_infill_interior_density  = 0.f;
@@ -361,6 +365,8 @@ struct SurfaceFillParams
 		RETURN_COMPARE_NON_EQUAL(skin_infill_depth);
         RETURN_COMPARE_NON_EQUAL(infill_overhang_angle);
 		RETURN_COMPARE_NON_EQUAL(gyroid_optimized);
+		RETURN_COMPARE_NON_EQUAL(staggered_spacing_scale);
+		RETURN_COMPARE_NON_EQUAL(staggered_cross);
 		RETURN_COMPARE_NON_EQUAL(adaptive_infill_mode);
 		RETURN_COMPARE_NON_EQUAL(adaptive_infill_interior_density);
 		RETURN_COMPARE_NON_EQUAL(adaptive_infill_gradient);
@@ -397,6 +403,8 @@ struct SurfaceFillParams
                 this->center_of_surface_pattern == rhs.center_of_surface_pattern &&
                 this->separated_infills       == rhs.separated_infills &&
                 this->gyroid_optimized        == rhs.gyroid_optimized        &&
+                this->staggered_spacing_scale == rhs.staggered_spacing_scale &&
+                this->staggered_cross         == rhs.staggered_cross         &&
                 this->adaptive_infill_mode           == rhs.adaptive_infill_mode           &&
                 this->adaptive_infill_interior_density   == rhs.adaptive_infill_interior_density   &&
                 this->adaptive_infill_gradient  == rhs.adaptive_infill_gradient  &&
@@ -1014,6 +1022,10 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                 }
                 // Orca: apply fill multiline only for sparse infill
                 params.multiline = params.extrusion_role == erInternalInfill ? int(region_config.fill_multiline) : 1;
+                // Orca: Staggered Lines settings split the fills only where that pattern is used; reset otherwise, as params is reused.
+                const bool staggered = params.pattern == ipStaggered;
+                params.staggered_spacing_scale = staggered ? region_config.staggered_spacing_scale.value : 1.;
+                params.staggered_cross         = staggered && region_config.staggered_cross.value;
 
                 // Orca: Pass through separated_infills only where it can move the pattern.
                 params.separated_infills = region_config.separated_infills && is_separable_infill_pattern(params.pattern) &&
@@ -1577,7 +1589,9 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
         // Create the filler object.
         std::unique_ptr<Fill> f = std::unique_ptr<Fill>(Fill::new_from_type(surface_fill.params.pattern));
         f->set_bounding_box(bbox);
-        f->layer_id = this->id() - this->object()->get_layer(0)->id(); // We need to subtract raft layers.
+        // We need to subtract raft layers. Orca: except for Staggered Lines, whose anchors follow the layer number of
+        // their printed infill, which counts raft layers.
+        f->layer_id = surface_fill.params.pattern == ipStaggered ? this->id() : this->id() - this->object()->get_layer(0)->id();
         {
             const auto &rcfg = m_regions[surface_fill.region_id]->region().config();
             f->dont_alternate_fill_direction = rcfg.zaa_enabled && rcfg.zaa_dont_alternate_fill_direction;
@@ -1634,6 +1648,8 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
         // Without the sparse extrusion role, the filler uses each surface's bounds
         // instead of the object's bounds, so bridge anchors shift away from printed infill.
         params.extrusion_role            = surface_fill.params.extrusion_role;
+        // Orca: Patterns that read their settings from the region config lay out their anchors with them.
+        params.config                    = &layerm.region().config();
 
         for (ExPolygon &expoly : surface_fill.expolygons) {
             // Orca: Match the per-body box and octree of make_fills() before generating physical anchors.
