@@ -28,11 +28,19 @@ library (`.dll`, `.so` or `.dylib`) that talks to OrcaSlicer through a plain C i
    ORCA_INFILL_PLUGIN("Example patterns", "1.0.0", Stripes)
    ```
 
-2. Build it with the CMake helper; on Windows it links the C++ runtime in, so it never depends on OrcaSlicer's:
+2. Build it with a `CMakeLists.txt` like this one; on Windows the helper links the C++ runtime in, so the plugin never
+   depends on OrcaSlicer's:
    ```cmake
-   include(<OrcaSlicer>/sdk/infill/OrcaInfillPlugin.cmake)
+   cmake_minimum_required(VERSION 3.15)   # 3.15 is needed for the static MSVC runtime
+   project(stripes LANGUAGES CXX)
+   set(ORCA_INFILL_SDK_DIR "" CACHE PATH "<OrcaSlicer>/sdk/infill")
+   if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+       set(CMAKE_BUILD_TYPE Release)
+   endif ()
+   include(${ORCA_INFILL_SDK_DIR}/OrcaInfillPlugin.cmake)
    orca_add_infill_plugin(stripes stripes.cpp)
    ```
+   `cmake -S . -B build -DORCA_INFILL_SDK_DIR=<OrcaSlicer>/sdk/infill && cmake --build build --config Release`
 3. Put the library where OrcaSlicer looks, restart, and pick "Stripes" in the pattern list. Libraries it depends on
    can sit next to it (give it an `$ORIGIN` or `@loader_path` rpath on Linux and macOS); linking them in is simpler.
 
@@ -48,20 +56,33 @@ In this order; the first plugin to claim a pattern token wins:
   `OrcaSlicer.app/Contents/PlugIns/infill_plugins` on macOS, `<prefix>/lib/orca-slicer/infill_plugins` on Linux;
 - `infill_plugins` in the data directory (the GUI's, or the CLI's `--datadir`).
 
-`--no-infill-plugins` or `ORCA_INFILL_PLUGINS=0` turns plugins off. Problems are logged and shown as a notification.
-`out.log()` writes to the same log; on the command line, `--debug 3` shows info lines and `--debug 4` debug lines.
+Each directory is read without its subdirectories, so point it at the folder holding the library itself; a
+multi-configuration generator puts it in `build/Release`. Only `.dll` files are loaded on Windows, `.so` on Linux,
+and `.so` or `.dylib` on macOS. `--no-infill-plugins` or `ORCA_INFILL_PLUGINS=0` turns plugins off.
+
+Problems are logged and shown as a notification. `out.log()` writes to the same log. On the command line,
+`--debug 3 --logfile <file>` writes info lines, including "Loaded infill plugin ...", to that file. A
+`--sparse-infill-pattern` value naming a pattern whose plugin was not found is rejected as an invalid value.
 
 ## How your lines are used
 
 - `generate()` is called once per region of a layer, in the *pattern frame*: the infill direction is the x axis, so
   draw your lines as if the infill angle were zero. Lay them out from `req.origin()` so they line up across regions
-  and layers. Coordinates are integers; use `req.units(mm)` and `req.mm(units)`, never a fixed scale.
-- `req.line_distance()` is the distance between lines for the requested density, already allowing for multiline;
-  `req.multiline()` is 1 unless the pattern declares `ORCA_INFILL_CAP_MULTILINE`.
+  and layers. Coordinates are integers; use `req.units(mm)` and `req.mm(units)`, never a fixed scale. `req.units()`
+  rounds to the nearest unit, where libslic3r's `scale_()` cast truncates: keep that in mind when porting a pattern
+  and comparing G-code exactly.
+- `req.layer_index()` counts raft layers. `req.line_distance()` is the distance between lines for the requested
+  density, already allowing for multiline; `req.multiline()` is 1 unless the pattern declares
+  `ORCA_INFILL_CAP_MULTILINE`.
+- `caps` says which slicer settings apply to the pattern: `MULTILINE` (`fill_multiline`; the host draws the copies),
+  `SEPARABLE` (`separated_infills` moves the origin to each body), `FIXED_ANGLE` (no 90 degree turn between layers),
+  `KEEP_ORDER` (paths print in the order emitted) and `ROTATE_TEMPLATE_SAFE` (`sparse_infill_rotate_template`).
 - Draw across the whole `req.bbox()`. `ORCA_INFILL_POST_CLIP` cuts the lines to the region (without it they must stay
   inside); `ORCA_INFILL_POST_DEFAULT` also drops pieces under 0.8 x spacing and joins line ends along the outline.
 - Parameters arrive in `req.param(i)`, in declaration order; choices arrive as their index. Users set them in the
-  *Pattern parameters* field, one per line: `org.example.stripes/gap = 2`.
+  *Pattern parameters* setting, one per line or separated by `;`: `org.example.stripes/gap = 2`, also on the command
+  line as `--infill-plugin-params "org.example.stripes/gap = 2"`. On/off values accept `1`/`0` and `true`/`false`;
+  values out of range are clamped and unknown names are reported, both with a warning.
 - Throw `orca_infill::Failed` when a region cannot be filled: it stays empty. Any other exception stops the slice
   with an error naming your plugin.
 - Need help with geometry? `out.clip()` and `out.offset()` take `req.region()` or a region `out.offset()` returned.
