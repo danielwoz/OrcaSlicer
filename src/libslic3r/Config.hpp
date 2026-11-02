@@ -2336,6 +2336,8 @@ public:
         plugin_config,
         // PrinterAgentChoice
         printer_agent_select,
+        // Parameters of infill plugin patterns, string value: a summary and a button opening InfillPluginParamsDialog.
+        infill_plugin_params,
     };
 
 	// Identifier of this option. It is stored here so that it is accessible through the by_serialization_key_ordinal map.

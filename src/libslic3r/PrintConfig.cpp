@@ -3772,9 +3772,8 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip = L("Parameters of infill patterns provided by plugins, one per line or separated by \";\", written as "
                      "<pattern>/<parameter> = <value>.");
-    def->multiline = true;
+    def->gui_type = ConfigOptionDef::GUIType::infill_plugin_params;
     def->full_width = true;
-    def->height = 5;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionString(""));
 

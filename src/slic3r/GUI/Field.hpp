@@ -609,6 +609,42 @@ private:
     int         m_preset_type { -1 };
 };
 
+// The parameters of infill plugin patterns: a one-line summary of the values the text sets and a button opening
+// InfillPluginParamsDialog. The value is the option's text; the dialog hands back the edited text, which goes through
+// the ordinary on_change_field path like any other setting.
+class InfillPluginParamsField : public Field {
+    using Field::Field;
+public:
+    InfillPluginParamsField(const ConfigOptionDef& opt, const t_config_option_key& id) : Field(opt, id) {}
+    InfillPluginParamsField(wxWindow* parent, const ConfigOptionDef& opt, const t_config_option_key& id) : Field(parent, opt, id) {}
+
+    void BUILD() override;
+
+    // The configuration whose selected patterns the dialog lists first; set by the option group.
+    void set_config(std::function<const ConfigBase*()> config) { m_config = std::move(config); }
+
+    void set_value(const boost::any& value, bool change_event = false) override;
+    boost::any& get_value() override;
+
+    void enable() override;
+    void disable() override;
+
+    wxWindow* getWindow() override { return window; }
+
+    void msw_rescale() override;
+
+private:
+    void edit();
+    // mixed: the selected objects have different values.
+    void update_summary(bool mixed = false);
+
+    wxWindow*     window { nullptr };  // panel holding the button and the summary
+    ::Button*     m_button { nullptr };
+    wxStaticText* m_summary { nullptr };
+    std::string   m_text;
+    std::function<const ConfigBase*()> m_config;
+};
+
 class ColourPicker : public Field {
 public:
 	ColourPicker(const ConfigOptionDef& opt, const t_config_option_key& id) : Field(opt, id) {}

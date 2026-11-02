@@ -75,6 +75,8 @@
 #include "MsgDialog.hpp"
 #include "BitmapComboBox.hpp"
 #include "PluginsConfigDialog.hpp"
+#include "InfillPluginParamsDialog.hpp"
+#include "libslic3r/Fill/InfillPlugins.hpp"
 #include "Widgets/Button.hpp"
 
 // BBS
@@ -2612,6 +2614,101 @@ void PluginConfigField::msw_rescale()
     if (m_opt.height >= 0) size.SetHeight(m_opt.height * m_em_unit);
     if (m_opt.width >= 0)  size.SetWidth(m_opt.width * m_em_unit);
     m_button->SetMinSize(size);
+}
+
+void InfillPluginParamsField::BUILD()
+{
+    // The panel lays out its children whenever the option group resizes it to the width of the row.
+    auto panel = new wxPanel(m_parent, wxID_ANY);
+    panel->SetBackgroundColour(m_parent->GetBackgroundColour());
+    window = panel;
+
+    m_button = new ::Button(panel, _L("Edit") + dots);
+    m_button->SetStyle(ButtonStyle::Regular, ButtonType::Parameter);
+    m_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { edit(); });
+    m_summary = new wxStaticText(panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END | wxST_NO_AUTORESIZE);
+    wxGetApp().UpdateDarkUI(m_summary);
+
+    // The summary gets a line of its own: next to the button it would have no room in a settings column.
+    auto sizer = new wxBoxSizer(wxVERTICAL);
+    sizer->Add(m_button, 0, wxALIGN_LEFT);
+    sizer->Add(m_summary, 0, wxEXPAND | wxTOP | wxBOTTOM, m_em_unit / 2);
+    panel->SetSizer(sizer);
+    msw_rescale();
+
+    if (const ConfigOptionString* def = m_opt.get_default_value<ConfigOptionString>())
+        m_text = def->value;
+    update_summary();
+    m_value = m_text;
+}
+
+void InfillPluginParamsField::update_summary(bool mixed)
+{
+    // The line only counts the changed values, so it fits the settings column; the tooltip lists them, followed by the
+    // whole text, which includes the entries of patterns whose plugins are not installed.
+    size_t            changed = 0;
+    const std::string summary = infill_plugin_params_summary(m_text, &changed);
+    m_summary->SetLabel(mixed ? wxString() : changed == 0 ? _L("Default values") :
+                        format_wxstr(_L_PLURAL("%1% value changed", "%1% values changed", changed), changed));
+    const wxString tooltip = get_tooltip_text(wxEmptyString) + (summary.empty() ? "" : "\n\n" + from_u8(summary)) +
+                             (m_text.empty() ? "" : "\n\n" + from_u8(m_text));
+    m_summary->SetToolTip(tooltip);
+    m_button->SetToolTip(tooltip);
+}
+
+void InfillPluginParamsField::edit()
+{
+    std::string edited;
+    {
+        InfillPluginParamsDialog dlg(m_button, m_text, m_config ? m_config() : nullptr);
+        if (dlg.ShowModal() != wxID_OK)
+            return;
+        edited = dlg.text();
+    }
+    if (edited == m_text)
+        return;
+    m_text  = edited;
+    m_value = m_text;
+    update_summary();
+    on_change_field();
+}
+
+void InfillPluginParamsField::set_value(const boost::any& value, bool change_event)
+{
+    m_disable_change_event = !change_event;
+    // An empty value stands for values that differ between the selected objects: the summary is blank, like the value
+    // of other fields, and the dialog starts from the defaults; its result becomes the value of every selected object.
+    if (value.empty())
+        m_text.clear();
+    else if (value.type() == typeid(wxString))
+        m_text = into_u8(boost::any_cast<wxString>(value));
+    else if (value.type() == typeid(std::string))
+        m_text = boost::any_cast<std::string>(value);
+    m_value = m_text;
+    update_summary(value.empty());
+    m_disable_change_event = false;
+}
+
+boost::any& InfillPluginParamsField::get_value()
+{
+    // std::string, not wxString: change_opt_value any_casts a coString to std::string.
+    m_value = m_text;
+    return m_value;
+}
+
+void InfillPluginParamsField::enable() { m_button->Enable(); }
+
+void InfillPluginParamsField::disable() { m_button->Disable(); }
+
+void InfillPluginParamsField::msw_rescale()
+{
+    Field::msw_rescale();
+    m_button->SetStyle(ButtonStyle::Regular, ButtonType::Parameter);
+    window->GetSizer()->SetItemMinSize(m_summary, wxSize((m_opt.width >= 0 ? m_opt.width : def_width_wider()) * m_em_unit, -1));
+    wxSize size = window->GetSizer()->CalcMin();
+    size.SetWidth(std::max(size.GetWidth(), (m_opt.width >= 0 ? m_opt.width : def_width_wider()) * m_em_unit));
+    window->SetMinSize(size);
+    window->SetSize(size);
 }
 
 void ColourPicker::BUILD()

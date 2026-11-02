@@ -548,6 +548,40 @@ const InfillPluginPattern* plugin_pattern(InfillPattern pattern)
     return descriptor.plugin() ? static_cast<const InfillPluginPattern*>(descriptor.context) : nullptr;
 }
 
+// An entry of an infill_plugin_params text, written as <pattern token>/<parameter name> = <value>.
+struct ParamEntry
+{
+    std::string text;  // the whole entry, trimmed
+    std::string token; // empty when the entry has no '/'
+    std::string name, value;
+};
+
+// The entries of a text, separated by new lines or ';', without the empty ones. The token contains dots and the name
+// none, so the first '/' separates them.
+std::vector<ParamEntry> param_entries(const std::string &text)
+{
+    std::vector<ParamEntry> out;
+    size_t begin = 0;
+    while (begin < text.size()) {
+        size_t end = text.find_first_of("\n\r;", begin);
+        if (end == std::string::npos)
+            end = text.size();
+        ParamEntry entry;
+        entry.text = boost::algorithm::trim_copy(text.substr(begin, end - begin));
+        begin = end + 1;
+        if (entry.text.empty())
+            continue;
+        if (const size_t slash = entry.text.find('/'); slash != std::string::npos) {
+            const size_t equals = entry.text.find('=', slash);
+            entry.token = boost::algorithm::trim_copy(entry.text.substr(0, slash));
+            entry.name  = boost::algorithm::trim_copy(entry.text.substr(slash + 1, equals == std::string::npos ? std::string::npos : equals - slash - 1));
+            entry.value = equals == std::string::npos ? std::string() : boost::algorithm::trim_copy(entry.text.substr(equals + 1));
+        }
+        out.emplace_back(std::move(entry));
+    }
+    return out;
+}
+
 std::string format_value(const InfillPluginParam &param, double value)
 {
     switch (param.type) {
@@ -747,6 +781,16 @@ void log_infill_plugin_loads()
 
 // ---- Parameter text ----
 
+std::vector<const InfillPluginPattern*> infill_plugin_patterns()
+{
+    std::vector<const InfillPluginPattern*> out;
+    for (int id = int(ipCount); InfillPatternRegistry::find(InfillPattern(id)) != nullptr; ++ id)
+        if (const InfillPluginPattern *pattern = plugin_pattern(InfillPattern(id)); pattern != nullptr)
+            out.push_back(pattern);
+    std::sort(out.begin(), out.end(), [](const InfillPluginPattern *a, const InfillPluginPattern *b) { return a->key < b->key; });
+    return out;
+}
+
 std::vector<double> infill_plugin_param_values(InfillPattern pattern, const std::string &text, std::vector<std::string> *messages)
 {
     const InfillPluginPattern *plugin = plugin_pattern(pattern);
@@ -758,55 +802,40 @@ std::vector<double> infill_plugin_param_values(InfillPattern pattern, const std:
     if (plugin->params.empty() && messages == nullptr)
         return values;
 
-    // Entries are separated by new lines or ';' and written as <pattern token>/<parameter name> = <value>. The token
-    // contains dots and the name none, so the first '/' separates them.
-    size_t begin = 0;
-    while (begin < text.size()) {
-        size_t end = text.find_first_of("\n\r;", begin);
-        if (end == std::string::npos)
-            end = text.size();
-        const std::string entry = boost::algorithm::trim_copy(text.substr(begin, end - begin));
-        begin = end + 1;
-        if (entry.empty())
-            continue;
-        const size_t      slash = entry.find('/');
-        const std::string token = slash == std::string::npos ? std::string() : boost::algorithm::trim_copy(entry.substr(0, slash));
+    for (const ParamEntry &entry : param_entries(text)) {
         // Every plugin token has a '.', so an entry without one belongs to no pattern, installed or not.
-        if (token.find('.') == std::string::npos) {
+        if (entry.token.find('.') == std::string::npos) {
             if (messages != nullptr)
                 messages->emplace_back(Slic3r::format(_u8L("Infill pattern parameters: \"%1%\" is not written as <pattern>/<parameter> = <value> and is ignored."),
-                                                      entry));
+                                                      entry.text));
             continue;
         }
-        if (token != plugin->key)
+        if (entry.token != plugin->key)
             continue;
-        const size_t      equals = entry.find('=', slash);
-        const std::string name   = boost::algorithm::trim_copy(entry.substr(slash + 1, equals == std::string::npos ? std::string::npos : equals - slash - 1));
-        const std::string value  = equals == std::string::npos ? std::string() : boost::algorithm::trim_copy(entry.substr(equals + 1));
-        const auto        it     = std::find_if(plugin->params.begin(), plugin->params.end(),
-                                                [&name](const InfillPluginParam &param) { return param.name == name; });
+        const auto it = std::find_if(plugin->params.begin(), plugin->params.end(),
+                                     [&entry](const InfillPluginParam &param) { return param.name == entry.name; });
         if (it == plugin->params.end()) {
             if (messages != nullptr) {
                 std::string names;
                 for (const InfillPluginParam &param : plugin->params)
                     names += (names.empty() ? "" : ", ") + param.name;
                 messages->emplace_back(Slic3r::format(_u8L("Infill pattern %1%: unknown parameter \"%2%\" is ignored. Its parameters are: %3%."),
-                                                      plugin->key, name, names));
+                                                      plugin->key, entry.name, names));
             }
             continue;
         }
         const InfillPluginParam &param = *it;
         double                  &out   = values[size_t(it - plugin->params.begin())];
-        if (const std::optional<double> parsed = parse_value(param, value); ! parsed) {
+        if (const std::optional<double> parsed = parse_value(param, entry.value); ! parsed) {
             out = param.default_value;
             if (messages != nullptr)
                 messages->emplace_back(Slic3r::format(_u8L("Infill pattern %1%: \"%2%\" is not a valid value of %3%; %4% is used."),
-                                                      plugin->key, value, param.name, format_value(param, out)));
+                                                      plugin->key, entry.value, param.name, format_value(param, out)));
         } else if (*parsed < param.min_value || *parsed > param.max_value) {
             out = std::clamp(*parsed, param.min_value, param.max_value);
             if (messages != nullptr)
                 messages->emplace_back(Slic3r::format(_u8L("Infill pattern %1%: %2% = %3% is outside %4% to %5%; %6% is used."),
-                                                      plugin->key, param.name, value, format_value(param, param.min_value),
+                                                      plugin->key, param.name, entry.value, format_value(param, param.min_value),
                                                       format_value(param, param.max_value), format_value(param, out)));
         } else
             out = *parsed;
@@ -828,23 +857,50 @@ std::string infill_plugin_params_section(InfillPattern pattern, const std::strin
     return out;
 }
 
-std::string infill_plugin_param_help(InfillPattern pattern)
+std::string infill_plugin_params_with(const std::string &text, InfillPattern pattern, const std::vector<double> &values)
 {
     const InfillPluginPattern *plugin = plugin_pattern(pattern);
-    if (plugin == nullptr)
-        return {};
+    // Each entry with its sort key: <token>/<name>, or the entry itself when it has no '/'.
+    std::vector<std::pair<std::string, std::string>> entries;
+    for (const ParamEntry &entry : param_entries(text))
+        if (plugin == nullptr || entry.token != plugin->key)
+            entries.emplace_back(entry.token.empty() ? entry.text : entry.token + "/" + entry.name, entry.text);
+    if (plugin != nullptr)
+        for (size_t i = 0; i < plugin->params.size() && i < values.size(); ++ i)
+            if (const InfillPluginParam &param = plugin->params[i]; std::isfinite(values[i])) {
+                // Within the declared range, and integral for every type but FLOAT.
+                double value = std::clamp(values[i], param.min_value, param.max_value);
+                if (param.type != ORCA_INFILL_PARAM_FLOAT)
+                    value = std::round(value);
+                if (value == param.default_value)
+                    continue;
+                const std::string key = plugin->key + "/" + param.name;
+                entries.emplace_back(key, key + " = " + format_value(param, value));
+            }
+    std::stable_sort(entries.begin(), entries.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
     std::string out;
-    for (const InfillPluginParam &param : plugin->params) {
-        std::string range;
-        switch (param.type) {
-        case ORCA_INFILL_PARAM_BOOL: range = "0 or 1"; break;
-        case ORCA_INFILL_PARAM_ENUM: range = boost::algorithm::join(param.enum_values, ", "); break;
-        default: range = format_value(param, param.min_value) + " to " + format_value(param, param.max_value); break;
-        }
-        out += (out.empty() ? "" : "\n") + plugin->key + "/" + param.name + " = " + format_value(param, param.default_value) +
-               (param.unit.empty() ? "" : " " + param.unit) + "  (" + range + ")  " + param.label +
-               (param.tooltip.empty() ? "" : ": " + param.tooltip);
+    for (const auto &entry : entries)
+        out += (out.empty() ? "" : "\n") + entry.second;
+    return out;
+}
+
+std::string infill_plugin_params_summary(const std::string &text, size_t *changed)
+{
+    std::string out;
+    size_t      count = 0;
+    for (const InfillPluginPattern *plugin : infill_plugin_patterns()) {
+        const std::vector<double> values = infill_plugin_param_values(plugin->id, text);
+        std::string pattern_changes;
+        for (size_t i = 0; i < values.size(); ++ i)
+            if (const InfillPluginParam &param = plugin->params[i]; values[i] != param.default_value) {
+                pattern_changes += (pattern_changes.empty() ? "" : ", ") + param.name + "=" + format_value(param, values[i]);
+                ++ count;
+            }
+        if (! pattern_changes.empty())
+            out += (out.empty() ? "" : "; ") + plugin->label + ": " + pattern_changes;
     }
+    if (changed != nullptr)
+        *changed = count;
     return out;
 }
 

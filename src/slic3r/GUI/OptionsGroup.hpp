@@ -322,6 +322,7 @@ public:
 
 	const wxString& config_category() const throw() { return m_config_category; }
 	int config_type() const throw() override { return m_config_type; }
+	const DynamicPrintConfig* config() const { return m_config; }
 	const t_opt_map&   opt_map() const throw() { return m_opt_map; }
 
 	void 		set_config_category_and_type(const wxString &category, int type) { m_config_category = category; m_config_type = type; }
