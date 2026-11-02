@@ -9,6 +9,31 @@ endif()
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/libslic3r_version.h.in ${CMAKE_CURRENT_BINARY_DIR}/libslic3r_version.h @ONLY)
 
+# Orca: infill patterns a build can leave out. A left-out pattern stays a known value: configurations naming
+# it load, validate and save unchanged, and slice with the fallback of its row in Fill/InfillPatternRegistry.cpp.
+option(ORCA_INFILL_OPTIONAL_DEFAULT "Initial value of the ORCA_INFILL_<NAME> options" ON)
+set(ORCA_OPTIONAL_INFILL_PATTERNS
+    ZIGZAG CROSSZAG LOCKEDZAG LINE TRIHEXAGON QUARTERCUBIC SUPPORTCUBIC
+    LATERALHONEYCOMB LATERALLATTICE TPMSD TPMSFK HILBERTCURVE OCTAGRAMSPIRAL)
+set(ORCA_INFILL_PATTERN_DEFINES "")
+set(ORCA_INFILL_LEFT_OUT "")
+foreach (_pattern IN LISTS ORCA_OPTIONAL_INFILL_PATTERNS)
+    option(ORCA_INFILL_${_pattern} "Build the ${_pattern} infill pattern" ${ORCA_INFILL_OPTIONAL_DEFAULT})
+    if (ORCA_INFILL_${_pattern})
+        string(APPEND ORCA_INFILL_PATTERN_DEFINES "#define ORCA_INFILL_${_pattern} 1\n")
+    else ()
+        string(APPEND ORCA_INFILL_PATTERN_DEFINES "#define ORCA_INFILL_${_pattern} 0\n")
+        list(APPEND ORCA_INFILL_LEFT_OUT ${_pattern})
+    endif ()
+endforeach ()
+if (ORCA_INFILL_LEFT_OUT)
+    message(STATUS "Infill patterns left out of this build: ${ORCA_INFILL_LEFT_OUT}")
+endif ()
+# The CLI tests read the list (tests/cli/CMakeLists.txt).
+set(ORCA_INFILL_LEFT_OUT "${ORCA_INFILL_LEFT_OUT}" CACHE INTERNAL "")
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/libslic3r_infill_patterns.h.in
+               ${CMAKE_CURRENT_BINARY_DIR}/libslic3r_infill_patterns.h @ONLY)
+
 if (MINGW)
     add_compile_options(-Wa,-mbig-obj)
 endif ()
@@ -160,6 +185,8 @@ set(lisbslic3r_sources
     Fill/FillAdaptive.hpp
     Fill/FillBase.cpp
     Fill/FillBase.hpp
+    Fill/InfillPatternRegistry.cpp
+    Fill/InfillPatternRegistry.hpp
     Fill/FillConcentric.cpp
     Fill/FillConcentric.hpp
     Fill/FillSpiralInset.cpp
@@ -607,6 +634,17 @@ if (APPLE)
             Format/ModelIO.hpp
             Format/ModelIO.mm
         )
+endif ()
+
+# Sources used by a single optional infill pattern; their headers stay, the registry names the classes.
+if (NOT ORCA_INFILL_LINE)
+    list(REMOVE_ITEM lisbslic3r_sources Fill/FillLine.cpp)
+endif ()
+if (NOT ORCA_INFILL_TPMSD)
+    list(REMOVE_ITEM lisbslic3r_sources Fill/FillTpmsD.cpp)
+endif ()
+if (NOT ORCA_INFILL_TPMSFK)
+    list(REMOVE_ITEM lisbslic3r_sources Fill/FillTpmsFK.cpp)
 endif ()
 
 add_library(libslic3r STATIC ${lisbslic3r_sources}

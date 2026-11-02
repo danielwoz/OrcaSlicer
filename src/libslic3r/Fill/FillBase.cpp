@@ -47,6 +47,7 @@
 // BBS: new infill pattern header
 #include "FillConcentricInternal.hpp"
 #include "FillCrossHatch.hpp"
+#include "InfillPatternRegistry.hpp"
 #include "libslic3r/Polyline.hpp"
 #include "libslic3r/ShortestPath.hpp"
 #include "libslic3r/Line.hpp"
@@ -62,70 +63,12 @@ float Fill::infill_anchor = 400;
 //BBS: 20mm
 float Fill::infill_anchor_max = 20;
 
-Fill* Fill::new_from_type(const InfillPattern type)
-{
-    switch (type) {
-    case ipConcentric:          return new FillConcentric();
-    case ipSpiralInset:    return new FillSpiralInset();
-    case ipHoneycomb:           return new FillHoneycomb();
-    case ipLateralHoneycomb:         return new FillLateralHoneycomb();
-    case ip3DHoneycomb:         return new Fill3DHoneycomb();
-    case ipGyroid:              return new FillGyroid();
-    case ipTpmsD:               return new FillTpmsD();//from creality print
-    case ipTpmsFK:              return new FillTpmsFK();
-    case ipRectilinear:         return new FillRectilinear();
-    case ipAlignedRectilinear:  return new FillAlignedRectilinear();
-    case ipCrossHatch:          return new FillCrossHatch();
-    case ipMonotonic:           return new FillMonotonic();
-    case ipLine:                return new FillLine();
-    case ipGrid:                return new FillGrid();
-    case ipLateralLattice:           return new FillLateralLattice();
-    case ipTriangles:           return new FillTriangles();
-    case ipStars:               return new FillStars();
-    case ipCubic:               return new FillCubic();
-    case ipQuarterCubic:        return new FillQuarterCubic();
-    case ipArchimedeanChords:   return new FillArchimedeanChords();
-    case ipHilbertCurve:        return new FillHilbertCurve();
-    case ipOctagramSpiral:      return new FillOctagramSpiral();
-    case ipAdaptiveCubic:       return new FillAdaptive::Filler();
-    case ipSupportCubic:        return new FillAdaptive::Filler();
-    case ipSupportBase:         return new FillSupportBase();  // simply line fill
-    case ipLightning:           return new FillLightning::Filler();
-    // BBS: for internal solid infill only
-    case ipConcentricInternal:  return new FillConcentricInternal();
-    // BBS: for bottom and top surface only
-    // Orca: Replace BBS implementation with Prusa implementation
-    case ipMonotonicLine:       return new FillMonotonicLines();
-    case ipZigZag:              return new FillZigZag();
-    case ipCrossZag:            return new FillCrossZag();
-    case ipLockedZag:           return new FillLockedZag();
-    default: throw Slic3r::InvalidArgument("unknown type");
-    }
-}
+Fill* Fill::new_from_type(const InfillPattern type) { return InfillPatternRegistry::create(type); }
 
 Fill* Fill::new_from_type(const std::string &type)
 {
-    const t_config_enum_values &enum_keys_map = ConfigOptionEnum<InfillPattern>::get_enum_values();
-    t_config_enum_values::const_iterator it = enum_keys_map.find(type);
-    return (it == enum_keys_map.end()) ? nullptr : new_from_type(InfillPattern(it->second));
-}
-
-// Force initialization of the Fill::use_bridge_flow() internal static map in a thread safe fashion even on compilers
-// not supporting thread safe non-static data member initializers.
-static bool use_bridge_flow_initializer = Fill::use_bridge_flow(ipGrid);
-
-bool Fill::use_bridge_flow(const InfillPattern type)
-{
-	static std::vector<unsigned char> cached;
-	if (cached.empty()) {
-		cached.assign(size_t(ipCount), 0);
-		for (size_t i = 0; i < cached.size(); ++ i) {
-			auto *fill = Fill::new_from_type((InfillPattern)i);
-			cached[i] = fill->use_bridge_flow();
-			delete fill;
-		}
-	}
-	return cached[type] != 0;
+    const InfillPatternDescriptor *pattern = InfillPatternRegistry::find(type);
+    return pattern == nullptr ? nullptr : InfillPatternRegistry::create(pattern->id);
 }
 
 Polylines Fill::fill_surface(const Surface *surface, const FillParams &params)

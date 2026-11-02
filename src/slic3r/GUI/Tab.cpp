@@ -4,6 +4,7 @@
 #include "libslic3r/IMEXHelpers.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/Fill/InfillPatternRegistry.hpp"
 #include "libslic3r/BeltTransform.hpp"
 #include "libslic3r/FilamentMixer.hpp"
 #include "libslic3r/Utils.hpp"
@@ -2482,9 +2483,7 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
     if (opt_key == "sparse_infill_rotate_template") {
         // Orca: show warning dialog if rotate template for solid infill if not support
         const auto _sparse_infill_pattern = m_config->option<ConfigOptionEnum<InfillPattern>>("sparse_infill_pattern")->value;
-        bool       is_safe_to_rotate      = _sparse_infill_pattern == ipRectilinear || _sparse_infill_pattern == ipLine ||
-                                 _sparse_infill_pattern == ipZigZag || _sparse_infill_pattern == ipCrossZag ||
-                                 _sparse_infill_pattern == ipLockedZag;
+        bool       is_safe_to_rotate      = infill_pattern(_sparse_infill_pattern).has(ipfRotateTemplateSafe);
 
         auto new_value = boost::any_cast<std::string>(value);
         is_safe_to_rotate = is_safe_to_rotate || new_value.empty();

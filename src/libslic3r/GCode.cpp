@@ -53,6 +53,7 @@
 #include "libslic3r/format.hpp"
 #include "Time.hpp"
 #include "GCode/ExtrusionProcessor.hpp"
+#include "Fill/InfillPatternRegistry.hpp"
 #include <Eigen/Geometry>
 #include <Shiny/ShinyMacros.h>
 #include <algorithm>
@@ -9168,18 +9169,11 @@ bool GCode::_needSAFC(const ExtrusionPath &path)
     if (!m_small_area_infill_flow_compensator || !m_config.small_area_infill_flow_compensation.value)
         return false;
 
-    static const InfillPattern supported_patterns[] = {
-        InfillPattern::ipRectilinear,
-        InfillPattern::ipAlignedRectilinear,
-        InfillPattern::ipMonotonic,
-        InfillPattern::ipMonotonicLine,
-    };
-
-    return std::any_of(std::begin(supported_patterns), std::end(supported_patterns), [&](const InfillPattern pattern) {
-        return (this->on_first_layer() && this->config().bottom_surface_pattern == pattern) ||
-               (path.role() == erSolidInfill && this->config().internal_solid_infill_pattern == pattern) ||
-               (path.role() == erTopSolidInfill && this->config().top_surface_pattern == pattern);
-    });
+    // Orca: small area flow compensation applies to the surfaces of the parallel line patterns.
+    auto compensated = [](InfillPattern pattern) { return sliced_infill_pattern(pattern).has(ipfSmallAreaFlowComp); };
+    return (this->on_first_layer() && compensated(this->config().bottom_surface_pattern.value)) ||
+           (path.role() == erSolidInfill && compensated(this->config().internal_solid_infill_pattern.value)) ||
+           (path.role() == erTopSolidInfill && compensated(this->config().top_surface_pattern.value));
 }
 
 double GCode::calc_max_volumetric_speed(const double layer_height, const double line_width, const std::string co_str)
@@ -10753,8 +10747,9 @@ std::string GCode::retract(bool toolchange, bool is_last_retraction, LiftType li
         (the extruder might be already retracted fully or partially). We call these
         methods even if we performed wipe, since this will ensure the entire retraction
         length is honored in case wipe path was too short.  */
-    if ((!this->on_first_layer()  || this->config().bottom_surface_pattern != InfillPattern::ipHilbertCurve) &&
-	    (role != erTopSolidInfill || this->config().top_surface_pattern    != InfillPattern::ipHilbertCurve))
+    auto no_retract = [](InfillPattern pattern) { return sliced_infill_pattern(pattern).has(ipfNoSurfaceRetract); };
+    if ((!this->on_first_layer() || !no_retract(this->config().bottom_surface_pattern.value)) &&
+        (role != erTopSolidInfill || !no_retract(this->config().top_surface_pattern.value)))
         gcode += toolchange ? m_writer.retract_for_toolchange() : m_writer.retract();
 
     gcode += m_writer.reset_e();

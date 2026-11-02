@@ -2695,3 +2695,67 @@ SCENARIO("a rendered no-light thumbnail does not suppress the plate thumbnail", 
         }
     }
 }
+
+TEST_CASE("Infill patterns this build leaves out survive a 3MF round trip", "[3mf][InfillRegistry]")
+{
+    // Runs only in a build that leaves patterns out (ORCA_INFILL_<NAME>=OFF).
+    for (const InfillPatternDescriptor &pattern : InfillPatternRegistry::builtins()) {
+        if (pattern.available())
+            continue;
+        CAPTURE(pattern.key);
+        const std::string opt_key = (pattern.slots & ipsSparse) ? "sparse_infill_pattern" : "top_surface_pattern";
+        ScopedSlic3rTemporaryDir temporary_dir("orca_infill_pattern");
+
+        // Stores the model and config, then checks the token the project and the object settings were written with.
+        auto store = [&](Model &model, DynamicPrintConfig &config, const std::string &name) {
+            const std::string path = (temporary_dir.path() / name).string();
+            model.set_backup_path((temporary_dir.path() / (name + "_backup")).string());
+            auto plate = std::make_unique<PlateData>();
+            plate->plate_index = 0;
+            StoreParams store_params;
+            store_params.path = path.c_str();
+            store_params.model = &model;
+            store_params.config = &config;
+            store_params.plate_data_list.push_back(plate.get());
+            store_params.strategy = SaveStrategy::Zip64 | SaveStrategy::Silence;
+            REQUIRE(store_bbs_3mf(store_params));
+            std::string project_settings, model_settings;
+            REQUIRE(read_cad_recipe_entry(path, project_settings, "Metadata/project_settings.config"));
+            REQUIRE(read_cad_recipe_entry(path, model_settings, "Metadata/model_settings.config"));
+            CHECK(nlohmann::json::parse(project_settings).value(opt_key, std::string()) == pattern.key);
+            CHECK(model_settings.find("key=\"" + opt_key + "\" value=\"" + pattern.key + "\"") != std::string::npos);
+            return path;
+        };
+
+        Model model;
+        ModelObject *object = model.add_object();
+        object->add_volume(make_cube(10.0, 10.0, 10.0));
+        object->add_instance();
+        object->config.set_key_value(opt_key, new ConfigOptionEnum<InfillPattern>(pattern.id));
+        DynamicPrintConfig source = DynamicPrintConfig::full_print_config();
+        source.set_key_value(opt_key, new ConfigOptionEnum<InfillPattern>(pattern.id));
+        const std::string path = store(model, source, "stored.3mf");
+
+        Model reloaded_model;
+        reloaded_model.set_backup_path((temporary_dir.path() / "reloaded_backup").string());
+        DynamicPrintConfig reloaded;
+        ConfigSubstitutionContext substitutions{ForwardCompatibilitySubstitutionRule::Enable};
+        PlateDataPtrs reloaded_plates;
+        std::vector<Preset *> project_presets;
+        bool is_bbl_3mf = false;
+        bool is_orca_3mf = false;
+        Semver file_version;
+        const bool loaded = load_bbs_3mf(
+            path.c_str(), &reloaded, &substitutions, &reloaded_model, &reloaded_plates,
+            &project_presets, &is_bbl_3mf, &is_orca_3mf, &file_version, nullptr,
+            LoadStrategy::LoadModel | LoadStrategy::LoadConfig);
+        release_PlateData_list(reloaded_plates);
+
+        REQUIRE(loaded);
+        CHECK(substitutions.substitutions.empty());
+        CHECK(reloaded.opt_serialize(opt_key) == pattern.key);
+        REQUIRE(reloaded_model.objects.size() == 1);
+        CHECK(reloaded_model.objects.front()->config.opt_serialize(opt_key) == pattern.key);
+        store(reloaded_model, reloaded, "stored_again.3mf");
+    }
+}

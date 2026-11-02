@@ -14,6 +14,7 @@
 #include "Surface.hpp"
 #include "libslic3r.h"
 #include "Utils.hpp"
+#include "Fill/InfillPatternRegistry.hpp"
 
 #include <algorithm>
 #include <boost/log/trivial.hpp>
@@ -448,39 +449,7 @@ coordf_t Layer::get_sparse_infill_max_void_area()
 
         //BBS: rough estimation and need to be optimized
         double spacing = flow.scaled_spacing() * (100 - density) / density;
-        switch (pattern) {
-            case ipConcentric:
-            case ipSpiralInset:
-            case ipRectilinear:
-            case ipLine:
-            case ipGyroid:
-            case ipTpmsD:
-            case ipTpmsFK:
-            case ipAlignedRectilinear:
-            case ipOctagramSpiral:
-            case ipHilbertCurve:
-            case ipLateralHoneycomb:
-            case ip3DHoneycomb:
-            case ipArchimedeanChords:
-                max_void_area = std::max(max_void_area, spacing * spacing);
-                break;
-            case ipGrid:
-            case ipLateralLattice:
-            case ipHoneycomb:
-            case ipLightning:
-                max_void_area = std::max(max_void_area, 4.0 * spacing * spacing);
-                break;
-            case ipCubic:
-            case ipAdaptiveCubic:
-            case ipTriangles:
-            case ipStars:
-            case ipSupportCubic:
-                max_void_area = std::max(max_void_area, 4.5 * spacing * spacing);
-                break;
-            default:
-                max_void_area = std::max(max_void_area, spacing * spacing);
-                break;
-        }
+        max_void_area = std::max(max_void_area, sliced_infill_pattern(pattern).void_area_factor * spacing * spacing);
     };
     return max_void_area;
 }

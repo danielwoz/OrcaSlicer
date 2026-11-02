@@ -38,6 +38,7 @@
 #include "FillTpmsD.hpp"
 #include "FillTpmsFK.hpp"
 #include "FillConcentric.hpp"
+#include "InfillPatternRegistry.hpp"
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/Line.hpp"
@@ -669,9 +670,7 @@ void split_solid_surface(size_t layer_id, const SurfaceFill &fill, ExPolygons &n
 {
     assert(fill.surface.surface_type == stInternalSolid);
 
-    const bool line_based_pattern =
-        fill.params.pattern == ipRectilinear || fill.params.pattern == ipMonotonic ||
-        fill.params.pattern == ipMonotonicLine || fill.params.pattern == ipAlignedRectilinear;
+    const bool line_based_pattern = sliced_infill_pattern(fill.params.pattern).has(ipfLineBasedSolid);
 
     // ORCA: For non-line patterns, split by a geometric "core" so only thin areas get rerouted.
     if (!line_based_pattern) {
@@ -1007,7 +1006,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                     params.extruder = region_config.internal_solid_filament_id;
                 // Orca: forced fill order applies only to top/bottom surfaces filled with a
                 // center-based pattern; everything else stays at Default to keep batching together.
-                if (params.pattern == ipConcentric || params.pattern == ipSpiralInset || params.pattern == ipArchimedeanChords || params.pattern == ipOctagramSpiral) {
+                if (sliced_infill_pattern(params.pattern).has(ipfFillOrder)) {
                     if (params.extrusion_role == erTopSolidInfill)
                         params.fill_order = region_config.top_surface_fill_order.value;
                     else if (params.extrusion_role == erBottomSurface)
@@ -1065,7 +1064,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                 }
 
                 // Calculate the actual flow we'll be using for this infill.
-		        params.bridge = is_bridge || Fill::use_bridge_flow(params.pattern);
+		        params.bridge = is_bridge;
                 const bool is_thick_bridge = surface.is_bridge() && (surface.is_internal_bridge() ? object_config.thick_internal_bridges : object_config.thick_bridges);
 				params.flow   = params.bridge ?
 					//Orca: enable thick bridge based on config
@@ -1310,7 +1309,7 @@ static int infill_body(const Layer &layer, const SurfaceFill &fill, const ExPoly
     const auto &params = fill.params;
     const bool per_model = (params.extrusion_role == erTopSolidInfill || params.extrusion_role == erBottomSurface) &&
                            params.center_of_surface_pattern == CenterOfSurfacePattern::Each_Model &&
-                           (params.pattern == ipArchimedeanChords || params.pattern == ipOctagramSpiral);
+                           sliced_infill_pattern(params.pattern).has(ipfCenteredSurface);
     int body = -1;
     if (per_model || params.separated_infills || is_octree_infill_pattern(params.pattern)) {
         const BoundingBox box          = get_extents(expoly);
@@ -1427,8 +1426,7 @@ void Layer::make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLigh
         params.anchor_length     = surface_fill.params.anchor_length;
 		params.anchor_length_max = surface_fill.params.anchor_length_max;
 		params.resolution        = resolution;
-        params.use_arachne       = surface_fill.params.pattern == ipConcentric || surface_fill.params.pattern == ipSpiralInset ||
-                                   surface_fill.params.pattern == ipConcentricInternal;
+        params.use_arachne       = sliced_infill_pattern(surface_fill.params.pattern).has(ipfArachne);
         params.layer_height      = layerm->layer()->height;
         params.lateral_lattice_angle_1   = surface_fill.params.lateral_lattice_angle_1;
         params.lateral_lattice_angle_2   = surface_fill.params.lateral_lattice_angle_2;
@@ -1475,7 +1473,7 @@ void Layer::make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLigh
         } else if (surface_fill.params.pattern == ip3DHoneycomb) {
             params.infill_complete_top = surface_fill.params.infill_complete_top;
         }
-		if (surface_fill.params.pattern == ipGrid)
+		if (sliced_infill_pattern(surface_fill.params.pattern).has(ipfNoReverse))
 			params.can_reverse = false;
 		for (ExPolygon& expoly : surface_fill.expolygons) {
 
@@ -1572,38 +1570,9 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
 			continue;
 		}
 
-        switch (surface_fill.params.pattern) {
-        case ipCount: continue; break;
-        case ipSupportBase: continue; break;
-        case ipConcentricInternal: continue; break;
-        case ipLightning:
-		case ipAdaptiveCubic:
-        case ipSupportCubic:
-        case ipRectilinear:
-        case ipMonotonic:
-        case ipMonotonicLine:
-        case ipAlignedRectilinear:
-        case ipGrid:
-        case ipLateralLattice:
-        case ipTriangles:
-        case ipStars:
-        case ipCubic:
-        case ipLine:
-        case ipConcentric:
-        case ipSpiralInset:
-        case ipHoneycomb:
-        case ipLateralHoneycomb:
-        case ip3DHoneycomb:
-        case ipGyroid:
-        case ipTpmsD:
-        case ipTpmsFK:
-        case ipHilbertCurve:
-        case ipArchimedeanChords:
-        case ipOctagramSpiral:
-        case ipZigZag:
-        case ipCrossZag:
-		case ipLockedZag: break;
-        }
+        // The patterns only the slicer uses lay no anchors.
+        if (sliced_infill_pattern(surface_fill.params.pattern).internal())
+            continue;
 
         // Create the filler object.
         std::unique_ptr<Fill> f = std::unique_ptr<Fill>(Fill::new_from_type(surface_fill.params.pattern));

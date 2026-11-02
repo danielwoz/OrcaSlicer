@@ -10,6 +10,7 @@
 #include "format.hpp"
 
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/Fill/InfillPatternRegistry.hpp"
 
 #include <algorithm>
 #include <boost/algorithm/string/erase.hpp>
@@ -1592,11 +1593,16 @@ void Choice::BUILD()
             image_path /= "images";
             for (auto el : m_opt.enum_labels) {
                 auto icon_name = "param_" + m_opt.enum_values[i];
+                wxString label = _(el);
+                // Orca: an infill pattern this build leaves out stays selectable and prints with its fallback.
+                if (m_opt.enum_keys_map == &ConfigOptionEnum<InfillPattern>::get_enum_values())
+                    if (const InfillPatternDescriptor *pattern = InfillPatternRegistry::find(m_opt.enum_values[i]); pattern != nullptr && ! pattern->available())
+                        label += " (" + _L("not included in this build") + ")";
                 if (boost::filesystem::exists(image_path / (icon_name + ".svg"))) {
                     ScalableBitmap bm(temp, icon_name, 24);
-				    temp->Append(_(el), bm.bmp());
+				    temp->Append(label, bm.bmp());
                 } else {
-                    temp->Append(_(el));
+                    temp->Append(label);
                 }
                 ++i;
             }
