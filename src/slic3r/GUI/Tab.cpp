@@ -3205,6 +3205,9 @@ void TabPrint::build()
         optgroup->append_single_option_line("lightning_overhang_angle", "strength_settings_patterns#lightning");
         optgroup->append_single_option_line("lightning_prune_angle", "strength_settings_patterns#lightning");
         optgroup->append_single_option_line("lightning_straightening_angle", "strength_settings_patterns#lightning");
+        // Orca: options added by infill modules follow those of the built-in patterns.
+        for (const auto &[option, module] : InfillPatternRegistry::region_options())
+            optgroup->append_single_option_line(option->key, option->wiki != nullptr ? option->wiki : "");
         optgroup->append_single_option_line("infill_anchor_max", "strength_settings_infill#anchor");
         optgroup->append_single_option_line("infill_anchor", "strength_settings_infill#anchor");
         optgroup->append_single_option_line("internal_solid_infill_pattern", "strength_settings_infill#internal-solid-infill");

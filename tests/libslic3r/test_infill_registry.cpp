@@ -1,12 +1,15 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_message.hpp>
 
+#include "libslic3r/Fill/FillRectilinear.hpp"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
+#include "libslic3r/Preset.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r_infill_patterns.h"
 
 #include <algorithm>
 #include <cstring>
+#include <initializer_list>
 #include <map>
 #include <set>
 #include <string>
@@ -172,10 +175,12 @@ TEST_CASE("Infill pattern rows describe the built-in patterns in InfillPattern o
     }
     CHECK(builtins[ipSupportBase].internal());
     CHECK(builtins[ipConcentricInternal].internal());
-    CHECK(InfillPatternRegistry::find(ipCount) == nullptr);
-    CHECK(infill_pattern(ipCount).internal());
-    CHECK(infill_pattern(ipCount).flags == 0);
-    CHECK_FALSE(infill_pattern(ipCount).available());
+    // The first value past the patterns of this build names none.
+    const InfillPattern none = InfillPattern(InfillPatternRegistry::patterns().size());
+    CHECK(InfillPatternRegistry::find(none) == nullptr);
+    CHECK(infill_pattern(none).internal());
+    CHECK(infill_pattern(none).flags == 0);
+    CHECK_FALSE(infill_pattern(none).available());
 }
 
 TEST_CASE("Infill pattern options list the built-in patterns in InfillPattern order", "[InfillRegistry]")
@@ -185,8 +190,16 @@ TEST_CASE("Infill pattern options list the built-in patterns in InfillPattern or
         const ConfigOptionDef *def = print_config_def.get(frozen.key);
         REQUIRE(def != nullptr);
         CHECK(def->enum_keys_map == &ConfigOptionEnum<InfillPattern>::get_enum_values());
-        CHECK(def->enum_values == frozen.values);
-        CHECK(def->enum_labels == frozen.labels);
+        // The patterns with an enum value, in list order; the patterns of appended modules are listed among them.
+        REQUIRE(def->enum_labels.size() == def->enum_values.size());
+        std::vector<std::string> values, labels;
+        for (size_t i = 0; i < def->enum_values.size(); ++i)
+            if (! InfillPatternRegistry::find(def->enum_values[i])->appended()) {
+                values.emplace_back(def->enum_values[i]);
+                labels.emplace_back(def->enum_labels[i]);
+            }
+        CHECK(values == frozen.values);
+        CHECK(labels == frozen.labels);
         REQUIRE(def->default_value.get() != nullptr);
         CHECK(def->default_value->getInt() == int(frozen.default_value));
     }
@@ -297,6 +310,9 @@ TEST_CASE("Infill pattern availability follows the CMake options", "[InfillRegis
         CHECK(InfillPatternRegistry::find(pattern.id)->available() == built);
         all_built = all_built && built;
     }
+    // Patterns without an enum value follow the CMake options of their modules.
+    for (const InfillPatternDescriptor &pattern : InfillPatternRegistry::patterns())
+        all_built = all_built && (! pattern.appended() || pattern.available());
     CHECK(InfillPatternRegistry::all_available() == all_built);
 }
 
@@ -357,5 +373,244 @@ TEST_CASE("Infill patterns this build leaves out are sliced with their fallbacks
                 CHECK(unavailable.front().second == pattern);
             }
         }
+    }
+}
+
+namespace {
+
+// The module describing each InfillPattern enum value.
+const std::map<InfillPattern, std::string> frozen_modules{
+    {ipMonotonic, "rectilinear"}, {ipMonotonicLine, "rectilinear"}, {ipRectilinear, "rectilinear"},
+    {ipAlignedRectilinear, "rectilinear"}, {ipZigZag, "zigzag"}, {ipCrossZag, "crosszag"}, {ipLockedZag, "lockedzag"},
+    {ipLine, "line"}, {ipGrid, "rectilinear"}, {ipTriangles, "rectilinear"}, {ipStars, "trihexagon"}, {ipCubic, "rectilinear"},
+    {ipAdaptiveCubic, "adaptivecubic"}, {ipQuarterCubic, "quartercubic"}, {ipSupportCubic, "supportcubic"},
+    {ipLightning, "lightning"}, {ipHoneycomb, "honeycomb"}, {ip3DHoneycomb, "3dhoneycomb"},
+    {ipLateralHoneycomb, "lateralhoneycomb"}, {ipLateralLattice, "laterallattice"}, {ipCrossHatch, "crosshatch"},
+    {ipTpmsD, "tpmsd"}, {ipTpmsFK, "tpmsfk"}, {ipGyroid, "gyroid"}, {ipConcentric, "concentric"},
+    {ipSpiralInset, "spiralinset"}, {ipHilbertCurve, "hilbertcurve"}, {ipArchimedeanChords, "planepath"},
+    {ipOctagramSpiral, "octagramspiral"}, {ipSupportBase, "rectilinear"}, {ipConcentricInternal, "concentric"}};
+
+// Modules of the builder tests. Their rows use a filler class every build has.
+constexpr InfillPatternDescriptor test_zz_rows[] = {
+    {ipCount, "zz-test", "ZZ test", ipsSparse, ipfSeparable, 1., 0.5f, ipRectilinear, nullptr, &make_fill<FillRectilinear>}};
+constexpr InfillPatternDescriptor test_aa_rows[] = {
+    {ipCount, "aa-test", "AA test", ipsSparse, ipfSeparable, 1., 0.5f, ipRectilinear, nullptr, &make_fill<FillRectilinear>}};
+constexpr InfillPatternDescriptor test_zz_after_line_rows[] = {
+    {ipCount, "zz-test", "ZZ test", ipsSparse, ipfSeparable, 1., 0.5f, ipRectilinear, nullptr, &make_fill<FillRectilinear>, "line"}};
+constexpr InfillPatternDescriptor test_aa_after_line_rows[] = {
+    {ipCount, "aa-test", "AA test", ipsSparse, ipfSeparable, 1., 0.5f, ipRectilinear, nullptr, &make_fill<FillRectilinear>, "line"}};
+constexpr InfillPatternDescriptor test_after_appended_rows[] = {
+    {ipCount, "bb-test", "BB test", ipsSparse, ipfSeparable, 1., 0.5f, ipRectilinear, nullptr, &make_fill<FillRectilinear>, "aa-test"}};
+constexpr InfillPatternDescriptor test_gyroid_rows[] = {
+    {ipGyroid, "gyroid-test", "Gyroid test", ipsSparse, ipfSeparable, 1., 0.5f, ipCount, nullptr, &make_fill<FillRectilinear>}};
+constexpr InfillPatternDescriptor test_optional_fallback_rows[] = {
+    {ipCount, "cc-test", "CC test", ipsSparse, ipfSeparable, 1., 0.5f, ipZigZag, nullptr, &make_fill<FillRectilinear>}};
+constexpr InfillPatternDescriptor test_surface_fallback_rows[] = {
+    {ipCount, "dd-test", "DD test", ipsSurface, ipfSeparable, 1., 0.5f, ipGrid, nullptr, &make_fill<FillRectilinear>}};
+constexpr InfillPatternDescriptor test_no_factory_rows[] = {
+    {ipCount, "ee-test", "EE test", ipsSparse, ipfSeparable, 1., 0.5f, ipCount, nullptr, nullptr}};
+constexpr InfillRegionOption test_region_options[] = {{"test_option", InfillOptionStep::PrepareInfill, nullptr}};
+
+// Modules ORCA_INFILL_MODULE() refuses at compile time.
+constexpr InfillPatternDescriptor test_dotted_token_rows[] = {
+    {ipCount, "zz.test", "ZZ test", ipsSparse, ipfSeparable, 1., 0.5f, ipRectilinear, nullptr, &make_fill<FillRectilinear>}};
+constexpr InfillPatternDescriptor test_no_label_rows[] = {
+    {ipCount, "zz-test", nullptr, ipsSparse, ipfSeparable, 1., 0.5f, ipRectilinear, nullptr, &make_fill<FillRectilinear>}};
+constexpr InfillPatternDescriptor test_appended_ironing_rows[] = {
+    {ipCount, "zz-test", "ZZ test", ipsIroning, ipfSeparable, 1., 0.5f, ipRectilinear, nullptr, &make_fill<FillRectilinear>}};
+static_assert(valid_infill_module(InfillModule{"zztest", test_zz_rows, std::size(test_zz_rows)}));
+static_assert(! valid_infill_module(InfillModule{"bad", test_dotted_token_rows, std::size(test_dotted_token_rows)}));
+static_assert(! valid_infill_module(InfillModule{"bad", test_no_label_rows, std::size(test_no_label_rows)}));
+static_assert(! valid_infill_module(InfillModule{"bad", test_appended_ironing_rows, std::size(test_appended_ironing_rows)}));
+// Region options without the function that defines them.
+static_assert(! valid_infill_module(InfillModule{"bad", test_zz_rows, std::size(test_zz_rows), test_region_options, std::size(test_region_options)}));
+
+const InfillModule test_zz_module{"zztest", test_zz_rows, std::size(test_zz_rows)};
+const InfillModule test_aa_module{"aatest", test_aa_rows, std::size(test_aa_rows)};
+const InfillModule test_zz_after_line_module{"zztest", test_zz_after_line_rows, std::size(test_zz_after_line_rows)};
+const InfillModule test_aa_after_line_module{"aatest", test_aa_after_line_rows, std::size(test_aa_after_line_rows)};
+const InfillModule test_after_appended_module{"bbtest", test_after_appended_rows, std::size(test_after_appended_rows)};
+const InfillModule test_gyroid_module{"gyroidtest", test_gyroid_rows, std::size(test_gyroid_rows)};
+const InfillModule test_optional_fallback_module{"cctest", test_optional_fallback_rows, std::size(test_optional_fallback_rows)};
+const InfillModule test_surface_fallback_module{"ddtest", test_surface_fallback_rows, std::size(test_surface_fallback_rows)};
+const InfillModule test_no_factory_module{"eetest", test_no_factory_rows, std::size(test_no_factory_rows)};
+const InfillModule test_option_module_1{"optiontest1", test_zz_rows, std::size(test_zz_rows), test_region_options, std::size(test_region_options)};
+const InfillModule test_option_module_2{"optiontest2", test_aa_rows, std::size(test_aa_rows), test_region_options, std::size(test_region_options)};
+
+// Builds the table of the modules of this build followed by the given ones; returns the error.
+std::string build_with(std::initializer_list<detail::InfillModuleEntry> extra, detail::InfillPatternTable &table)
+{
+    std::vector<detail::InfillModuleEntry> entries(detail::infill_module_entries, detail::infill_module_entries + detail::infill_module_entry_count);
+    entries.insert(entries.end(), extra);
+    return detail::build_infill_pattern_table(entries.data(), entries.size(), table);
+}
+
+std::vector<std::string> slot_tokens(const detail::InfillPatternTable &table, InfillPatternSlot slot)
+{
+    std::vector<std::string> tokens;
+    for (const InfillPatternDescriptor *pattern : detail::infill_slot_patterns(table, slot))
+        tokens.emplace_back(pattern->key);
+    return tokens;
+}
+
+} // namespace
+
+TEST_CASE("Infill patterns belong to their modules", "[InfillRegistry]")
+{
+    for (int i = 0; i < int(ipCount); ++i) {
+        CAPTURE(i);
+        const InfillModule *module = InfillPatternRegistry::module_of(InfillPattern(i));
+        REQUIRE(module != nullptr);
+        CHECK(module->name == frozen_modules.at(InfillPattern(i)));
+    }
+    std::set<std::string> expected;
+    for (const auto &[pattern, name] : frozen_modules)
+        expected.insert(name);
+    CHECK(expected.size() == 23);
+    // Every built-in module is present; the other modules of this build add patterns without an enum value only.
+    std::set<std::string> names;
+    for (const InfillModule *module : InfillPatternRegistry::modules()) {
+        CAPTURE(module->name);
+        CHECK(names.insert(module->name).second);
+        if (expected.count(module->name) == 0)
+            for (size_t i = 0; i < module->pattern_count; ++i)
+                CHECK(module->patterns[i].appended());
+    }
+    CHECK(std::includes(names.begin(), names.end(), expected.begin(), expected.end()));
+    CHECK(InfillPatternRegistry::module_of(InfillPattern(InfillPatternRegistry::patterns().size())) == nullptr);
+}
+
+TEST_CASE("The generated infill module list builds a consistent table", "[InfillRegistry]")
+{
+    detail::InfillPatternTable table;
+    REQUIRE(detail::build_infill_pattern_table(detail::infill_module_entries, detail::infill_module_entry_count, table).empty());
+    REQUIRE(table.rows.size() == InfillPatternRegistry::patterns().size());
+    for (size_t i = 0; i < detail::infill_module_entry_count; ++i) {
+        const detail::InfillModuleEntry &entry = detail::infill_module_entries[i];
+        CAPTURE(entry.module->name);
+        for (size_t j = 0; j < entry.module->pattern_count; ++j) {
+            const InfillPatternDescriptor &row = entry.module->patterns[j];
+            if (row.appended())
+                continue;
+            const InfillPatternDescriptor &built = table.rows[size_t(row.id)];
+            CHECK(built.optional == ! entry.core);
+            CHECK((built.factory != nullptr) == entry.built);
+            CHECK(InfillPatternRegistry::find(row.id)->available() == entry.built);
+        }
+    }
+}
+
+TEST_CASE("The infill module table places appended patterns and rejects contradicting modules", "[InfillRegistry]")
+{
+    detail::InfillPatternTable table;
+
+    SECTION("appended patterns follow the enum values in token order") {
+        REQUIRE(build_with({{&test_zz_module, false, true}, {&test_aa_module, false, true}}, table).empty());
+        const InfillPattern aa = table.by_key.at("aa-test"), zz = table.by_key.at("zz-test");
+        CHECK(int(aa) >= int(ipCount));
+        CHECK(int(zz) > int(aa));
+        for (size_t i = size_t(ipCount); i + 1 < table.rows.size(); ++i)
+            CHECK(std::strcmp(table.rows[i].key, table.rows[i + 1].key) < 0);
+        CHECK(table.rows[size_t(aa)].optional);
+        CHECK(table.rows[size_t(aa)].fallback == ipRectilinear);
+        const std::vector<std::string> sparse = slot_tokens(table, ipsSparse);
+        const auto position = [&sparse](const std::string &token) { return std::find(sparse.begin(), sparse.end(), token) - sparse.begin(); };
+        for (const std::string &token : frozen_sparse_values) {
+            CHECK(position(token) < position("aa-test"));
+            CHECK(position(token) < position("zz-test"));
+        }
+        CHECK(position("aa-test") < position("zz-test"));
+    }
+    SECTION("appended patterns with a place follow their anchor in token order") {
+        REQUIRE(build_with({{&test_zz_after_line_module, false, true}, {&test_aa_after_line_module, false, true}}, table).empty());
+        std::vector<std::string> after_line;
+        for (const InfillPatternDescriptor &row : table.rows)
+            if (row.menu_after != nullptr && std::strcmp(row.menu_after, "line") == 0)
+                after_line.emplace_back(row.key);
+        std::sort(after_line.begin(), after_line.end());
+        const std::vector<std::string> sparse = slot_tokens(table, ipsSparse);
+        const auto line = std::find(sparse.begin(), sparse.end(), "line");
+        REQUIRE(sparse.end() - line > ptrdiff_t(after_line.size()));
+        CHECK(std::vector<std::string>(line + 1, line + 1 + after_line.size()) == after_line);
+        CHECK(std::find(after_line.begin(), after_line.end(), "aa-test") < std::find(after_line.begin(), after_line.end(), "zz-test"));
+    }
+    SECTION("an anchor must have an enum value") {
+        const std::string error = build_with({{&test_aa_module, false, true}, {&test_after_appended_module, false, true}}, table);
+        CHECK(error.find("menu_after of bb-test") != std::string::npos);
+    }
+    SECTION("an enum value belongs to one module") {
+        const std::string error = build_with({{&test_gyroid_module, true, true}}, table);
+        CHECK(error.find("gyroid") != std::string::npos);
+        CHECK(error.find("gyroidtest") != std::string::npos);
+    }
+    SECTION("a token is used once") {
+        const std::string error = build_with({{&test_zz_module, false, true}, {&test_zz_after_line_module, false, true}}, table);
+        CHECK(error.find("the token zz-test is used twice") != std::string::npos);
+    }
+    SECTION("a fallback is always built") {
+        const std::string error = build_with({{&test_optional_fallback_module, false, true}}, table);
+        CHECK(error.find("the fallback of cc-test") != std::string::npos);
+    }
+    SECTION("a fallback is offered in every slot of its pattern") {
+        const std::string error = build_with({{&test_surface_fallback_module, false, true}}, table);
+        CHECK(error.find("the fallback of dd-test") != std::string::npos);
+    }
+    SECTION("a built module has factories") {
+        const std::string error = build_with({{&test_no_factory_module, true, true}}, table);
+        CHECK(error.find("the module eetest has no factory") != std::string::npos);
+    }
+    SECTION("a left-out module needs no factories") {
+        CHECK(build_with({{&test_zz_module, false, false}}, table).empty());
+        CHECK_FALSE(table.rows[size_t(table.by_key.at("zz-test"))].available());
+        CHECK_FALSE(table.all_available);
+    }
+    SECTION("a region option is added once") {
+        const std::string error = build_with({{&test_option_module_1, false, true}, {&test_option_module_2, false, true}}, table);
+        CHECK(error.find("the option test_option is added twice") != std::string::npos);
+    }
+}
+
+TEST_CASE("Options added by infill modules are complete region options", "[InfillRegistry]")
+{
+    const PrintRegionConfig        region;
+    const std::vector<std::string> &preset_keys = Preset::print_options();
+    // Each member REGION_OPTIONS adds in a module.cmake is a region option of the module source.
+    for (const char *key : std::initializer_list<const char *>{ORCA_INFILL_MODULE_REGION_OPTION_KEYS}) {
+        CAPTURE(key);
+        CHECK(InfillPatternRegistry::region_option(key) != nullptr);
+    }
+    for (const auto &[option, module] : InfillPatternRegistry::region_options()) {
+        CAPTURE(option->key, module->name);
+        CHECK(std::string(option->key).rfind(std::string(module->name) + "_", 0) == 0);
+        const ConfigOption *member = region.option(option->key);
+        REQUIRE(member != nullptr);
+        const ConfigOptionDef *def = print_config_def.get(option->key);
+        REQUIRE(def != nullptr);
+        CHECK(def->type == member->type());
+        // Defined by the module alone: no print option of the slicer and no SLA option has its key.
+        CHECK(def->printer_technology == ptFFF);
+        CHECK(std::count(preset_keys.begin(), preset_keys.end(), option->key) == 1);
+        bool owned = false;
+        for (size_t i = 0; i < module->pattern_count; ++i)
+            owned = owned || module->patterns[i].has_option(option->key);
+        CHECK(owned);
+    }
+}
+
+TEST_CASE("Infill pattern enum values add only module options to the fill grouping key", "[InfillRegistry]")
+{
+    const PrintRegionConfig region;
+    for (int i = 0; i < int(ipCount); ++i) {
+        CAPTURE(i);
+        const InfillPatternDescriptor &pattern = *InfillPatternRegistry::find(InfillPattern(i));
+        std::string expected;
+        for (const char *const *key = pattern.options; key != nullptr && *key != nullptr; ++key)
+            if (InfillPatternRegistry::region_option(*key) != nullptr) {
+                REQUIRE(region.option(*key) != nullptr);
+                expected += region.option(*key)->serialize() + "\n";
+            }
+        std::string params = "stale";
+        InfillPatternRegistry::module_params(InfillPattern(i), region, params);
+        CHECK(params == expected);
     }
 }

@@ -2759,3 +2759,57 @@ TEST_CASE("Infill patterns this build leaves out survive a 3MF round trip", "[3m
         store(reloaded_model, reloaded, "stored_again.3mf");
     }
 }
+
+TEST_CASE("The Staggered Lines module's token and settings survive a 3MF round trip", "[3mf][InfillModule]")
+{
+    // The worked example module tests/infill_modules/staggered, built or left out.
+    if (InfillPatternRegistry::find("staggered") == nullptr) SKIP("built without tests/infill_modules/staggered");
+    ScopedSlic3rTemporaryDir temporary_dir("orca_infill_module");
+    const std::string path = (temporary_dir.path() / "stored.3mf").string();
+
+    Model model;
+    model.set_backup_path((temporary_dir.path() / "stored_backup").string());
+    ModelObject *object = model.add_object();
+    object->add_volume(make_cube(10.0, 10.0, 10.0));
+    object->add_instance();
+    DynamicPrintConfig overrides;
+    overrides.set_deserialize_strict({{"sparse_infill_pattern", "staggered"}, {"staggered_spacing_scale", "2"}});
+    object->config.apply(overrides);
+    DynamicPrintConfig source = DynamicPrintConfig::full_print_config();
+    source.set_deserialize_strict({{"sparse_infill_pattern", "staggered"}, {"staggered_spacing_scale", "1.5"}, {"staggered_cross", "1"}});
+
+    auto plate = std::make_unique<PlateData>();
+    plate->plate_index = 0;
+    StoreParams store_params;
+    store_params.path = path.c_str();
+    store_params.model = &model;
+    store_params.config = &source;
+    store_params.plate_data_list.push_back(plate.get());
+    store_params.strategy = SaveStrategy::Zip64 | SaveStrategy::Silence;
+    REQUIRE(store_bbs_3mf(store_params));
+
+    Model reloaded_model;
+    reloaded_model.set_backup_path((temporary_dir.path() / "reloaded_backup").string());
+    DynamicPrintConfig reloaded;
+    ConfigSubstitutionContext substitutions{ForwardCompatibilitySubstitutionRule::Enable};
+    PlateDataPtrs reloaded_plates;
+    std::vector<Preset *> project_presets;
+    bool is_bbl_3mf = false;
+    bool is_orca_3mf = false;
+    Semver file_version;
+    const bool loaded = load_bbs_3mf(
+        path.c_str(), &reloaded, &substitutions, &reloaded_model, &reloaded_plates,
+        &project_presets, &is_bbl_3mf, &is_orca_3mf, &file_version, nullptr,
+        LoadStrategy::LoadModel | LoadStrategy::LoadConfig);
+    release_PlateData_list(reloaded_plates);
+
+    REQUIRE(loaded);
+    CHECK(substitutions.substitutions.empty());
+    CHECK(reloaded.opt_serialize("sparse_infill_pattern") == "staggered");
+    CHECK(reloaded.opt_serialize("staggered_spacing_scale") == "1.5");
+    CHECK(reloaded.opt_serialize("staggered_cross") == "1");
+    REQUIRE(reloaded_model.objects.size() == 1);
+    const ModelConfigObject &object_config = reloaded_model.objects.front()->config;
+    CHECK(object_config.opt_serialize("sparse_infill_pattern") == "staggered");
+    CHECK(object_config.opt_serialize("staggered_spacing_scale") == "2");
+}

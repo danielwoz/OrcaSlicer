@@ -327,6 +327,8 @@ struct SurfaceFillParams
 
     // Orca: forced print order of surface fill loops/fragments for center-based patterns.
     SurfaceFillOrder fill_order = SurfaceFillOrder::Default;
+    // Orca: values of the options of an appended pattern, and of the module options a pattern with an enum value owns.
+    std::string module_params;
 
 	bool operator<(const SurfaceFillParams &rhs) const {
 #define RETURN_COMPARE_NON_EQUAL(KEY) if (this->KEY < rhs.KEY) return true; if (this->KEY > rhs.KEY) return false;
@@ -368,6 +370,7 @@ struct SurfaceFillParams
         RETURN_COMPARE_NON_EQUAL(center_of_surface_pattern);
         RETURN_COMPARE_NON_EQUAL(separated_infills);
 		RETURN_COMPARE_NON_EQUAL_TYPED(unsigned, fill_order);
+		RETURN_COMPARE_NON_EQUAL(module_params);
 
 		return false;
 	}
@@ -401,7 +404,8 @@ struct SurfaceFillParams
                 this->adaptive_infill_interior_density   == rhs.adaptive_infill_interior_density   &&
                 this->adaptive_infill_gradient  == rhs.adaptive_infill_gradient  &&
                 this->smooth_factor           == rhs.smooth_factor           &&
-                this->fill_order              == rhs.fill_order;
+                this->fill_order              == rhs.fill_order              &&
+                this->module_params           == rhs.module_params;
 	}
 };
 
@@ -1014,6 +1018,8 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                 }
                 // Orca: apply fill multiline only for sparse infill
                 params.multiline = params.extrusion_role == erInternalInfill ? int(region_config.fill_multiline) : 1;
+                // Orca: regions whose module options differ are filled apart.
+                InfillPatternRegistry::module_params(params.pattern, region_config, params.module_params);
 
                 // Orca: Pass through separated_infills only where it can move the pattern.
                 params.separated_infills = region_config.separated_infills && is_separable_infill_pattern(params.pattern) &&
@@ -1236,6 +1242,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 	        if (internal_solid_fill == nullptr) {
 	        	// Produce another solid fill.
 		        params.extruder 	 = layerm.region().extruder(frSolidInfill);
+                params.module_params.clear();
                 const auto top_pattern = layerm.region().config().top_surface_pattern;
                 if(top_pattern == ipMonotonic || top_pattern == ipMonotonicLine)
                     params.pattern = top_pattern;
@@ -1577,7 +1584,8 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
         // Create the filler object.
         std::unique_ptr<Fill> f = std::unique_ptr<Fill>(Fill::new_from_type(surface_fill.params.pattern));
         f->set_bounding_box(bbox);
-        f->layer_id = this->id() - this->object()->get_layer(0)->id(); // We need to subtract raft layers.
+        // Orca: an appended pattern lays out its anchors on the layer number of its printed infill, which counts raft layers.
+        f->layer_id = sliced_infill_pattern(surface_fill.params.pattern).appended() ? this->id() : this->id() - this->object()->get_layer(0)->id();
         {
             const auto &rcfg = m_regions[surface_fill.region_id]->region().config();
             f->dont_alternate_fill_direction = rcfg.zaa_enabled && rcfg.zaa_dont_alternate_fill_direction;
@@ -1634,6 +1642,7 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
         // Without the sparse extrusion role, the filler uses each surface's bounds
         // instead of the object's bounds, so bridge anchors shift away from printed infill.
         params.extrusion_role            = surface_fill.params.extrusion_role;
+        params.config                    = &layerm.region().config();
 
         for (ExPolygon &expoly : surface_fill.expolygons) {
             // Orca: Match the per-body box and octree of make_fills() before generating physical anchors.

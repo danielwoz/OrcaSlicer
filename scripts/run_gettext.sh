@@ -78,6 +78,8 @@ if $FULL_MODE; then
                 ;;
         esac
     done < "$list_file"
+    # Orca: infill modules carry their own strings.
+    find src/libslic3r/Fill/Modules -name '*.cpp' | LC_ALL=C sort >> "$filtered_list"
 
     if $has_sources; then
         generated_root_dir=$(mktemp -d)

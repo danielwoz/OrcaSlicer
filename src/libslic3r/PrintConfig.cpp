@@ -25,6 +25,7 @@
 #include <cassert>
 #include <map>
 #include <boost/algorithm/string/classification.hpp>
+#include <cstdio>
 #include <cstdlib>
 #include "libslic3r.h"
 #include <boost/algorithm/string/predicate.hpp>
@@ -971,6 +972,7 @@ PrintConfigDef::PrintConfigDef()
     this->init_common_params();
     assign_printer_technology_to_unknown(this->options, ptAny);
     this->init_fff_params();
+    this->init_infill_module_params();
     this->init_extruder_option_keys();
     assign_printer_technology_to_unknown(this->options, ptFFF);
     this->init_sla_params();
@@ -1283,6 +1285,22 @@ void PrintConfigDef::init_common_params()
         def->cli = ConfigOptionDef::nocli;
         def->set_default_value(new ConfigOptionString(""));
     }
+}
+
+void PrintConfigDef::init_infill_module_params()
+{
+    // Orca: options added by infill modules; each is a PrintRegionConfig member of the same key and type.
+    InfillPatternRegistry::define_region_options([this](const char *opt_key, ConfigOptionType type) {
+        if (this->has(opt_key)) {
+            // A module option never replaces an option of the slicer.
+            std::fprintf(stderr, "OrcaSlicer infill pattern modules: the option %s is already defined\n", opt_key);
+            std::abort();
+        }
+        ConfigOptionDef *def = this->add(opt_key, type);
+        def->category = L("Strength");
+        def->mode     = comAdvanced;
+        return def;
+    });
 }
 
 void PrintConfigDef::init_fff_params()

@@ -1,0 +1,5 @@
+#pragma once
+// Members infill modules add to PrintRegionConfig (REGION_OPTIONS of orca_add_infill_module()); empty without any.
+#define ORCA_INFILL_MODULE_REGION_OPTIONS @ORCA_INFILL_MODULE_REGION_OPTIONS@
+// Their keys, each followed by a comma.
+#define ORCA_INFILL_MODULE_REGION_OPTION_KEYS @ORCA_INFILL_MODULE_REGION_OPTION_KEYS@

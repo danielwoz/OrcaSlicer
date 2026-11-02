@@ -27,6 +27,7 @@
 #include <map>
 #include <vector>
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/Fill/InfillPatternRegistry.hpp"
 #include <wx/gdicmn.h>
 #include "slic3r/GUI/wxExtensions.hpp"
 #include <utility>
@@ -197,6 +198,14 @@ std::map<std::string, std::vector<SimpleSettingData>> SettingsFactory::PART_CATE
        {"bridge_speed", "", 11},
        {"gap_infill_speed", "", 12},
        {"internal_bridge_speed", "", 13}}}};
+
+// Orca: options added by infill modules are listed with the other strength settings of a part.
+static const bool s_infill_module_settings = [] {
+    std::vector<SimpleSettingData> &strength = SettingsFactory::PART_CATEGORY_SETTINGS[L("Strength")];
+    for (const auto &[option, module] : InfillPatternRegistry::region_options())
+        strength.push_back({ option->key, "", 1 });
+    return true;
+}();
 
 std::vector<std::string> SettingsFactory::get_options(const bool is_part)
 {

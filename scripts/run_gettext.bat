@@ -80,6 +80,10 @@ endlocal & exit /b %script_exit_code%
             >> "%missing%" echo(!entry!
         )
     )
+    rem Orca: infill modules carry their own strings.
+    for /f "delims=" %%m in ('dir /b /s /on "src\libslic3r\Fill\Modules\*.cpp" 2^>nul') do (
+        >> "%filtered%" echo(%%m
+    )
 exit /b 0
 
 :reportMissing
