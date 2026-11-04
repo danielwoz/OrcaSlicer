@@ -43,6 +43,12 @@ if (_flags MATCHES "-fsanitize")
     set_property(GLOBAL PROPERTY ORCA_INFILL_SANITIZED ON)
 endif ()
 set_property(GLOBAL PROPERTY ORCA_INFILL_RUNTIME_DIR "${ORCA_INFILL_RUNTIME_DIR}")
+# A library carries the debug information of all the shared sources it links, also for the code --gc-sections drops;
+# compressed, it takes about a fifth of the space.
+if (NOT MSVC AND NOT APPLE AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
+    include(CheckLinkerFlag)
+    check_linker_flag(CXX "LINKER:--compress-debug-sections=zlib" ORCA_INFILL_COMPRESS_DEBUG_SECTIONS)
+endif ()
 
 # orca_add_infill_pattern_module(<target> SOURCES <source>... LIBRARIES <library>... EXPORTS_MAP <map> EXPORTS_LIST <list>)
 # Adds a module linked as a pattern library is: with the module seams (runtime/ModuleSeams.cpp) and libslic3r_fillkit,
@@ -72,6 +78,9 @@ function(orca_add_infill_pattern_module target)
                                               "LINKER:--as-needed" "LINKER:--gc-sections")
         if (NOT _sanitized)
             target_link_options(${target} PRIVATE "LINKER:--no-undefined")
+        endif ()
+        if (ORCA_INFILL_COMPRESS_DEBUG_SECTIONS)
+            target_link_options(${target} PRIVATE "LINKER:--compress-debug-sections=zlib")
         endif ()
         set_target_properties(${target} PROPERTIES LINK_DEPENDS "${ARG_EXPORTS_MAP}")
     endif ()
