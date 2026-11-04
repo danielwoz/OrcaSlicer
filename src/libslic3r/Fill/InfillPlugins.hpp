@@ -31,8 +31,9 @@ InfillPluginStartup infill_plugin_startup(int argc, char **argv, const boost::fi
 
 // Loads the infill plugins found directly in the directories, in file name order, and registers their patterns.
 // Directories and files already loaded in this process are skipped, and so are libraries without the entry point that
-// stay loaded as dependencies of other libraries. Main thread only, before configurations are read on other threads;
-// does nothing after disable_infill_plugins() or InfillPatternRegistry::seal().
+// stay loaded as dependencies of other libraries. A library that exports the entry of a built-in pattern library is
+// reported as an error and none of its functions is called. Main thread only, before configurations are read on other
+// threads; does nothing after disable_infill_plugins() or InfillPatternRegistry::seal().
 std::vector<InfillPluginLoad> load_infill_plugins(const std::vector<std::string> &dirs);
 // Loads one plugin file and registers its patterns.
 InfillPluginLoad load_infill_plugin(const std::string &path);

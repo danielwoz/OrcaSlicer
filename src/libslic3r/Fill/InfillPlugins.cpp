@@ -421,9 +421,14 @@ void append_error(std::string &error, const std::string &message)
 }
 
 // Calls the entry of an opened library and registers its patterns into load. Returns false for a library without the
-// entry, which is closed again.
+// entry, which is closed again. A library that carries built-in patterns is closed again without calling anything.
 bool register_plugin(Library lib, InfillPluginLoad &load)
 {
+    if (find_symbol(lib, ORCA_INFILL_BUILTIN_ENTRY_V1) != nullptr) {
+        close_library(lib);
+        load.error = "a built-in pattern library outside the application folder; ignored";
+        return true;
+    }
     const auto entry = reinterpret_cast<orca_infill_plugin_entry_v1_fn>(find_symbol(lib, ORCA_INFILL_ENTRY_V1));
     if (entry == nullptr) {
         // OrcaSlicer took nothing from the library, so it holds no reference into it.
@@ -604,7 +609,8 @@ orca_infill_status call_infill_plugin(const InfillPluginPattern &pattern, const 
     } catch (...) {
     }
     t_generating = previous;
-    return status;
+    // The reserved codes belong to the built-in pattern libraries; a plugin that returns one broke the ABI rules.
+    return status == ORCA_INFILL_ERR_STATE || status == ORCA_INFILL_ERR_CANCELED ? ORCA_INFILL_ERR_EXCEPTION : status;
 }
 
 // ---- Loading ----

@@ -47,6 +47,7 @@ public:
     InfillFailedException() : Slic3r::RuntimeError("Infill failed") {}
 };
 
+// Mirrored for the pattern libraries by orca_infill_lock (Fill/Library/BuiltinMirror.cpp, which checks its size).
 struct LockRegionParam
 {
     LockRegionParam() {}
@@ -56,6 +57,8 @@ struct LockRegionParam
     std::map<Flow, ExPolygons>  skeleton_flow_params;
 };
 
+// Every field but config is mirrored for the pattern libraries by orca_infill_fill_params (Fill/Library/), whose
+// BuiltinMirror.cpp counts the fields: a new field needs a C field there.
 struct FillParams
 {
     bool        full_infill() const { return density > 0.9999f; }
@@ -139,6 +142,10 @@ static_assert(IsTriviallyCopyable<FillParams>::value, "FillParams class is not P
 class Fill
 {
 public:
+    // Every member is mirrored for the pattern libraries by orca_infill_fill_state or passed in a field of its own
+    // (Fill/Library/BuiltinMirror.cpp): a new member needs a C field there, a member of FillLayout, whose size check fails
+    // the build for a member that changes the size of Fill, and a value in tests/infill_patterns/test_builtin_mirror.cpp.
+
     // Index of the layer.
     size_t      layer_id;
     // Z coordinate of the top print surface, in unscaled coordinates
@@ -171,6 +178,10 @@ public:
     // Orca: also used by gap fill function.
     const PrintConfig       *print_config        = nullptr;
     const PrintObjectConfig *print_object_config = nullptr;
+    // The values of these configurations that reach the fillers of a pattern library: the smallest nozzle diameter of
+    // the printer in mm, 0 when unknown, and calib_flowrate_topinfill_special_order of the object.
+    double      min_nozzle_diameter = 0.;
+    bool        calib_flowrate_topinfill_special_order = false;
 
     // BBS: all no overlap expolygons in same layer
     ExPolygons  no_overlap_expolygons;

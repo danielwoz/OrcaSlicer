@@ -48,31 +48,42 @@ constexpr orca_infill_param enum_param(const char *name, const char *label, cons
                                        const char *const (&labels)[N], size_t def, const char *tooltip = nullptr)
 { return { sizeof(orca_infill_param), name, label, tooltip, nullptr, ORCA_INFILL_PARAM_ENUM, double(def), 0., double(N - 1), values, labels, N }; }
 
-// Read-only view of a request.
+namespace detail {
+// Whether field, a member of s, lies within the s.struct_size bytes the other side filled in.
+template<class S, class T> bool covers(const S &s, const T &field)
+{ return size_t(reinterpret_cast<const char*>(&field) - reinterpret_cast<const char*>(&s)) + sizeof(T) <= s.struct_size; }
+} // namespace detail
+
+// Read-only view of a request. A field beyond the struct_size of the host's request reads as zero.
 class Request
 {
 public:
     explicit Request(const orca_infill_request &r) : m_r(r) {}
-    const orca_infill_region &region() const { return *m_r.region; }
-    const orca_infill_bbox   &bbox() const { return m_r.bbox; }
-    Point   origin() const { return m_r.origin; }
-    double  spacing() const { return m_r.spacing; }
-    double  density() const { return m_r.density; }
-    double  z() const { return m_r.z; }
-    double  layer_height() const { return m_r.layer_height; }
-    int64_t layer_index() const { return m_r.layer_index; }
-    int     multiline() const { return m_r.multiline; }
-    int     role() const { return m_r.role; }
-    double  param(size_t i) const { return i < m_r.param_count ? m_r.params[i] : 0.; }
+    const orca_infill_region &region() const { return *field(m_r.region); }
+    const orca_infill_bbox   &bbox() const { return field(m_r.bbox); }
+    Point   origin() const { return field(m_r.origin); }
+    double  spacing() const { return field(m_r.spacing); }
+    double  density() const { return field(m_r.density); }
+    double  z() const { return field(m_r.z); }
+    double  layer_height() const { return field(m_r.layer_height); }
+    int64_t layer_index() const { return field(m_r.layer_index); }
+    int     multiline() const { return field(m_r.multiline); }
+    int     role() const { return field(m_r.role); }
+    double  param(size_t i) const { return i < field(m_r.param_count) ? field(m_r.params)[i] : 0.; }
     // Millimetres between pattern lines for the requested density, leaving room for the host's multiline copies.
-    double  line_distance() const { return m_r.spacing * m_r.multiline / std::max(m_r.density, 1e-3); }
-    int64_t units(double mm) const { return int64_t(std::llround(mm * m_r.units_per_mm)); }
-    double  mm(int64_t units) const { return double(units) / m_r.units_per_mm; }
+    double  line_distance() const { return this->spacing() * this->multiline() / std::max(this->density(), 1e-3); }
+    int64_t units(double mm) const { return int64_t(std::llround(mm * field(m_r.units_per_mm))); }
+    double  mm(int64_t units) const { return double(units) / field(m_r.units_per_mm); }
     // The smallest value >= v on the grid through origin with the given step.
     static int64_t align_up(int64_t v, int64_t origin, int64_t step)
     { const int64_t d = v - origin, q = d / step - ((d % step) < 0 ? 1 : 0); const int64_t a = origin + q * step; return a < v ? a + step : a; }
     const orca_infill_request &raw() const { return m_r; }
 private:
+    template<class T> const T &field(const T &f) const
+    {
+        static const T zero {};
+        return detail::covers(m_r, f) ? f : zero;
+    }
     const orca_infill_request &m_r;
 };
 
@@ -178,7 +189,7 @@ template<class P>
 orca_infill_status ORCA_INFILL_CALL generate(void *, const orca_infill_host *host, const orca_infill_request *request,
                                              orca_infill_sink *sink) noexcept
 {
-    if (host == nullptr || request == nullptr || sink == nullptr || request->region == nullptr)
+    if (host == nullptr || request == nullptr || sink == nullptr || ! covers(*request, request->region) || request->region == nullptr)
         return ORCA_INFILL_ERR_INVALID;
     try {
         Output out(*host, sink);
