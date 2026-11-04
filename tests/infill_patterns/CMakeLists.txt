@@ -6,6 +6,7 @@ add_executable(${_TEST_NAME}_tests
     corpus.cpp
     corpus.hpp
     test_golden.cpp
+    test_parallel_for.cpp
     )
 target_link_libraries(${_TEST_NAME}_tests test_common libslic3r Catch2::Catch2WithMain)
 set_property(TARGET ${_TEST_NAME}_tests PROPERTY FOLDER "tests")
