@@ -502,6 +502,31 @@ TEST_CASE("Infill plugin: failures of a pattern", "[InfillPlugin]")
     }
 }
 
+namespace {
+orca_infill_status ORCA_INFILL_CALL return_status(void *user, const orca_infill_host *, const orca_infill_request *, orca_infill_sink *)
+{
+    return *static_cast<const orca_infill_status*>(user);
+}
+} // namespace
+
+TEST_CASE("Infill plugin: a status reserved for the built-in pattern libraries counts as an exception", "[InfillPlugin]")
+{
+    for (orca_infill_status returned : { ORCA_INFILL_OK, ORCA_INFILL_ERR_FAILED, ORCA_INFILL_ERR_INVALID, ORCA_INFILL_ERR_NOMEM,
+                                         ORCA_INFILL_ERR_EXCEPTION, ORCA_INFILL_ERR_STATE, ORCA_INFILL_ERR_CANCELED }) {
+        CAPTURE(returned);
+        InfillPluginPattern pattern;
+        pattern.key      = "org.orcaslicer.test.status";
+        pattern.plugin   = "OrcaSlicer test fixture 1.0.0";
+        pattern.user     = &returned;
+        pattern.generate = &return_status;
+        orca_infill_request request {};
+        request.struct_size = sizeof(request);
+        Polylines lines;
+        const bool reserved = returned == ORCA_INFILL_ERR_STATE || returned == ORCA_INFILL_ERR_CANCELED;
+        CHECK(call_infill_plugin(pattern, request, lines) == (reserved ? ORCA_INFILL_ERR_EXCEPTION : returned));
+    }
+}
+
 TEST_CASE("Infill plugin: broken plugins are rejected", "[InfillPlugin]")
 {
     auto expect_rejected = [](const InfillPluginLoad &load, const char *reason) {
@@ -578,6 +603,31 @@ TEST_CASE("Infill plugin: a directory scan reports a library without the entry u
     REQUIRE(scanned.size() == 1);
     CHECK(from_utf8(scanned.front().path).filename() == lone.filename());
     CHECK_THAT(scanned.front().error, Catch::Matchers::ContainsSubstring("not an infill plugin"));
+}
+
+TEST_CASE("Infill plugin: a built-in pattern library in a plugin folder is ignored", "[InfillPlugin]")
+{
+    // The fixture's plugin entry would register a pattern, and its built-in entry ends the process.
+    const std::string reason = "a built-in pattern library outside the application folder; ignored";
+    auto expect_ignored = [&reason](const InfillPluginLoad &load) {
+        CAPTURE(load.path);
+        CHECK(load.error == reason);
+        CHECK(load.plugin.empty());
+        CHECK(load.patterns.empty());
+        CHECK(std::any_of(infill_plugin_failures().begin(), infill_plugin_failures().end(),
+                          [&load](const InfillPluginLoad &failure) { return failure.path == load.path; }));
+    };
+    expect_ignored(load_once(INFILL_FIXTURE_BUILTIN_ENTRY));
+
+    // A directory scan reports a copy of it at once.
+    ScopedTemporaryDir dir("orca_infill_plugin");
+    const boost::filesystem::path fixture = from_utf8(INFILL_FIXTURE_BUILTIN_ENTRY);
+    boost::filesystem::copy_file(fixture, dir.path() / fixture.filename());
+    const std::vector<InfillPluginLoad> scanned = load_infill_plugins({ utf8(dir.path()) });
+    REQUIRE(scanned.size() == 1);
+    CHECK(from_utf8(scanned.front().path).filename() == fixture.filename());
+    expect_ignored(scanned.front());
+    CHECK(InfillPatternRegistry::find("org.orcaslicer.test.builtin") == nullptr);
 }
 
 TEST_CASE("Infill plugin: a pattern whose plugin is missing is substituted", "[InfillPlugin]")

@@ -1,4 +1,4 @@
-/* orca_infill_plugin.h - C ABI between OrcaSlicer and infill pattern plugins, version 1.0.
+/* orca_infill_plugin.h - C ABI between OrcaSlicer and infill pattern plugins, version 1.1.
  *
  * A plugin is a shared library (.dll, .so or .dylib) that exports orca_infill_plugin_entry_v1(). OrcaSlicer calls
  * it once, on its main thread, before it reads any configuration, and keeps the library loaded until it exits.
@@ -19,6 +19,10 @@
  *    An incompatible change raises ORCA_INFILL_ABI_MAJOR and renames the entry point.
  *  - Coordinates are scaled integers; request->units_per_mm of them make a millimetre. The scale depends on the size
  *    of the print bed, so it is never a constant.
+ *  - Version 1.1 adds no fields. It reserves an entry point and two status codes for the libraries that carry the
+ *    built-in patterns (orca_infill_builtin.h, in the OrcaSlicer source tree). A plugin never exports
+ *    ORCA_INFILL_BUILTIN_ENTRY_V1 and never returns a reserved status: the host does not load a plugin file that
+ *    exports it, and treats a reserved status returned by a plugin as ORCA_INFILL_ERR_EXCEPTION.
  */
 #ifndef ORCA_INFILL_PLUGIN_H
 #define ORCA_INFILL_PLUGIN_H
@@ -27,8 +31,9 @@
 #include <stdint.h>
 
 #define ORCA_INFILL_ABI_MAJOR 1
-#define ORCA_INFILL_ABI_MINOR 0
+#define ORCA_INFILL_ABI_MINOR 1
 #define ORCA_INFILL_ENTRY_V1  "orca_infill_plugin_entry_v1"
+#define ORCA_INFILL_BUILTIN_ENTRY_V1 "orca_infill_builtin_entry_v1" /* reserved: built-in pattern libraries only */
 
 #if defined(_WIN32)
 #  define ORCA_INFILL_CALL   __cdecl
@@ -48,6 +53,8 @@ typedef int32_t orca_infill_status;
 #define ORCA_INFILL_ERR_INVALID   (-2) /* invalid arguments */
 #define ORCA_INFILL_ERR_NOMEM     (-3)
 #define ORCA_INFILL_ERR_EXCEPTION (-4) /* an exception was caught inside the plugin */
+#define ORCA_INFILL_ERR_STATE     (-5) /* reserved: a built-in library's scaling factor is not the request's */
+#define ORCA_INFILL_ERR_CANCELED  (-6) /* reserved: the host asked a built-in library's prepare_state() to stop */
 
 typedef struct orca_infill_point { int64_t x, y; } orca_infill_point;
 typedef struct orca_infill_bbox  { orca_infill_point min, max; } orca_infill_bbox;

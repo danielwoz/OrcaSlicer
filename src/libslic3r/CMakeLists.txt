@@ -188,6 +188,9 @@ set(lisbslic3r_sources
     Fill/FillBase.cpp
     Fill/FillBase.hpp
     Fill/FillExtrusion.cpp
+    Fill/Library/BuiltinMirror.cpp
+    Fill/Library/BuiltinMirror.hpp
+    Fill/Library/orca_infill_builtin.h
     Fill/InfillPatternRegistry.cpp
     Fill/InfillPatternRegistry.hpp
     Fill/InfillPlugins.cpp
@@ -728,7 +731,8 @@ if (USE_SLIC3R_CONSOLE_LOG)
     target_compile_definitions(libslic3r PRIVATE $<$<CONFIG:RelWithDebInfo>:SLIC3R_CONSOLE_LOG>)
 endif()
 target_include_directories(libslic3r PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/TextureToColor PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
-# The C ABI of infill plugins (Fill/InfillPlugins.cpp, Fill/FillPlugin.cpp).
+# The C ABI of infill plugins (Fill/InfillPlugins.cpp, Fill/FillPlugin.cpp), on which the ABI of the built-in pattern
+# libraries (Fill/Library/orca_infill_builtin.h) builds.
 target_include_directories(libslic3r PRIVATE ${CMAKE_SOURCE_DIR}/sdk/infill/include)
 target_include_directories(libslic3r SYSTEM PUBLIC ${EXPAT_INCLUDE_DIRS})
 
