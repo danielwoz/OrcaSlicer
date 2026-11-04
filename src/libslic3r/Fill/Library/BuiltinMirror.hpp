@@ -8,10 +8,13 @@
 #include <cstdint>
 #include <vector>
 
+#include <admesh/stl.h>
+
 #include "orca_infill_builtin.h"
 
 #include "../AdaptiveInfillField.hpp"
 #include "../FillBase.hpp"
+#include "../../Point.hpp"
 #include "../../Surface.hpp"
 
 namespace Slic3r {
@@ -68,6 +71,11 @@ private:
     orca_infill_field_input              m_input {};
 };
 
+// The C input of an octree (ORCA_INFILL_STATE_OCTREE) of mesh and overhangs, three vertices per overhang triangle, both
+// in the octree frame. It points into them, which must outlive it unchanged.
+orca_infill_octree_input octree_input(const indexed_triangle_set &mesh, const std::vector<Vec3d> &overhangs, double line_spacing,
+                                      bool support_overhangs_only);
+
 // The points as a C array; nothing is copied.
 const orca_infill_point* view(const Points &points);
 // The thick polyline as a C path pointing into it.
@@ -102,6 +110,16 @@ struct FieldSlices
     AdaptiveInfillMode                      mode;
 };
 FieldSlices     to_field_slices(const orca_infill_field_input &input);
+
+// The arguments of FillAdaptive::build_octree().
+struct OctreeMesh
+{
+    indexed_triangle_set mesh;
+    std::vector<Vec3d>   overhangs;
+    double               line_spacing;
+    bool                 support_overhangs_only;
+};
+OctreeMesh      to_octree_mesh(const orca_infill_octree_input &input);
 
 } // namespace BuiltinMirror
 } // namespace Slic3r

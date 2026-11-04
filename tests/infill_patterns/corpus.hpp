@@ -19,6 +19,8 @@
 #include "libslic3r/Surface.hpp"
 #include "libslic3r/libslic3r.h"
 
+struct indexed_triangle_set;
+
 namespace Slic3r {
 
 namespace FillAdaptive { struct Octree; }
@@ -103,6 +105,16 @@ public:
     FillAdaptive::Octree*      octree(State state);
     const AdaptiveInfillField* field(AdaptiveInfillMode mode);
     FillLightning::Generator*  lightning();
+
+    // The arguments of FillAdaptive::build_octree() the octree of state is built with.
+    struct OctreeInput
+    {
+        const indexed_triangle_set &mesh;
+        const std::vector<Vec3d>   &overhangs;
+        double                      line_spacing;
+        bool                        support_overhangs_only;
+    };
+    OctreeInput octree_input(State state);
 
     // The slices and the box the fields are built over.
     const std::vector<AdaptiveInfillField::Slice>& field_slices();

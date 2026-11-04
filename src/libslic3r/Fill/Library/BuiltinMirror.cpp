@@ -20,6 +20,11 @@ namespace {
 static_assert(std::is_same_v<coord_t, int64_t> && sizeof(Point) == sizeof(orca_infill_point) && alignof(Point) == alignof(orca_infill_point),
               "a Point is no longer laid out as an orca_infill_point");
 static_assert(std::is_same_v<decltype(ThickPolyline::width), std::vector<double>>, "ThickPolyline::width is no longer viewed as doubles");
+// The vertices, triangles and overhangs of an octree are viewed in place.
+static_assert(std::is_same_v<stl_vertex::Scalar, float> && sizeof(stl_vertex) == 3 * sizeof(float) &&
+              std::is_same_v<stl_triangle_vertex_indices::Scalar, int32_t> && sizeof(stl_triangle_vertex_indices) == 3 * sizeof(int32_t) &&
+              std::is_same_v<Vec3d::Scalar, double> && sizeof(Vec3d) == 3 * sizeof(double),
+              "a mesh or an overhang is no longer laid out as the arrays of orca_infill_octree_input");
 
 // FillParams: every field is carried but config.
 static_assert(boost::pfr::tuple_size_v<FillParams> == 35, "FillParams gained or lost a field: update orca_infill_fill_params");
@@ -331,6 +336,16 @@ orca_infill_field_input FieldInput::get(AdaptiveInfillMode mode) const
     return out;
 }
 
+orca_infill_octree_input octree_input(const indexed_triangle_set &mesh, const std::vector<Vec3d> &overhangs, double line_spacing,
+                                      bool support_overhangs_only)
+{
+    return { sizeof(orca_infill_octree_input),
+             mesh.vertices.empty() ? nullptr : reinterpret_cast<const float*>(mesh.vertices.data()), mesh.vertices.size(),
+             mesh.indices.empty() ? nullptr : reinterpret_cast<const int32_t*>(mesh.indices.data()), mesh.indices.size(),
+             overhangs.empty() ? nullptr : reinterpret_cast<const double*>(overhangs.data()), overhangs.size(),
+             line_spacing, uint8_t(support_overhangs_only) };
+}
+
 // ---- Library side ----
 
 Points to_points(const orca_infill_point *points, size_t count)
@@ -467,6 +482,24 @@ FieldSlices to_field_slices(const orca_infill_field_input &source)
     out.bbox.max     = Point(input.bbox.max.x, input.bbox.max.y);
     out.bbox.defined = input.bbox_defined != 0;
     out.mode         = AdaptiveInfillMode(input.mode);
+    return out;
+}
+
+OctreeMesh to_octree_mesh(const orca_infill_octree_input &source)
+{
+    const orca_infill_octree_input input = read(source);
+    OctreeMesh out;
+    out.mesh.vertices.reserve(input.vertex_count);
+    for (size_t i = 0; i < input.vertex_count; ++ i)
+        out.mesh.vertices.emplace_back(input.vertices[3 * i], input.vertices[3 * i + 1], input.vertices[3 * i + 2]);
+    out.mesh.indices.reserve(input.triangle_count);
+    for (size_t i = 0; i < input.triangle_count; ++ i)
+        out.mesh.indices.emplace_back(input.indices[3 * i], input.indices[3 * i + 1], input.indices[3 * i + 2]);
+    out.overhangs.reserve(input.overhang_vertex_count);
+    for (size_t i = 0; i < input.overhang_vertex_count; ++ i)
+        out.overhangs.emplace_back(input.overhangs[3 * i], input.overhangs[3 * i + 1], input.overhangs[3 * i + 2]);
+    out.line_spacing           = input.line_spacing;
+    out.support_overhangs_only = input.support_overhangs_only != 0;
     return out;
 }
 

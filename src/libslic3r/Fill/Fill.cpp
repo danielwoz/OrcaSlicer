@@ -31,7 +31,6 @@
 #include "ExtrusionEntity.hpp"
 #include "Fill.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
-#include "FillAdaptive.hpp"
 #include "FillRectilinear.hpp"
 #include "FillLightning.hpp"
 #include "FillConcentricInternal.hpp"
@@ -51,7 +50,6 @@
 #include "libslic3r/Slicing.hpp"
 #include "libslic3r/SurfaceCollection.hpp"
 
-namespace Slic3r::FillAdaptive { struct Octree; }
 namespace Slic3r::FillLightning { class Generator; }
 
 namespace Slic3r {
@@ -1368,7 +1366,7 @@ void export_group_fills_to_svg(const char *path, const std::vector<SurfaceFill> 
 #endif
 
 // friend to Layer
-void Layer::make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLightning::Generator* lightning_generator)
+void Layer::make_fills(const RegionOctrees* fill_octrees, FillLightning::Generator* lightning_generator)
 {
 	for (LayerRegion *layerm : m_regions)
 		layerm->fills.clear();
@@ -1401,10 +1399,10 @@ void Layer::make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLigh
         f->z 		= this->print_z;
         f->angle 	= surface_fill.params.angle;
         f->fixed_angle = surface_fill.params.fixed_angle;
-        const FillAdaptive::Octrees *octrees = fill_octrees ? fill_octrees->region(surface_fill.region_id) : nullptr;
+        const InfillPattern row     = sliced_infill_pattern(surface_fill.params.pattern).id;
+        const Octrees      *octrees = fill_octrees ? fill_octrees->region(surface_fill.region_id, row) : nullptr;
         f->adaptive_infill_field   = this->object()->adaptive_infill_field(surface_fill.params.adaptive_infill_mode);
-        f->object_state            = this->object()->infill_states().field(sliced_infill_pattern(surface_fill.params.pattern).id,
-                                                                           surface_fill.params.adaptive_infill_mode);
+        f->object_state            = this->object()->infill_states().field(row, surface_fill.params.adaptive_infill_mode);
         f->print_config        = &this->object()->print()->config();
         f->print_object_config = &this->object()->config();
         set_config_values(*f);
@@ -1492,7 +1490,8 @@ void Layer::make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLigh
             // Orca: Reuse the body box and octree used for bridge anchoring, resetting them for each surface.
             const int body = infill_body(*this, surface_fill, expoly);
             f->set_bounding_box(body >= 0 ? this->object()->separated_body_bboxes()[body] : bbox);
-            f->adapt_fill_octree = octrees ? octrees->get(body) : nullptr;
+            if (octrees != nullptr)
+                f->object_state = octrees->get(body);
 
             // Only the part of the layer-wide no-overlap area under this expolygon matters, so clip it to the
             // expolygon's box first (padded past the safety offset, which grows the clip side). The result is
@@ -1568,7 +1567,7 @@ void Layer::make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLigh
  * - For lightning/adaptive patterns, the respective generators are wired so their
  *   polylines match the final infill layout.
  */
-Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdaptive::RegionOctrees* fill_octrees, FillLightning::Generator* lightning_generator) const
+Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const RegionOctrees* fill_octrees, FillLightning::Generator* lightning_generator) const
 {
     LockRegionParam skin_inner_param;
     std::vector<SurfaceFill> surface_fills = group_fills(*this, skin_inner_param);
@@ -1599,10 +1598,10 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
         f->z        = this->print_z;
         f->angle    = surface_fill.params.angle;
         f->fixed_angle = surface_fill.params.fixed_angle;
-        const FillAdaptive::Octrees *octrees = fill_octrees ? fill_octrees->region(surface_fill.region_id) : nullptr;
+        const InfillPattern row     = sliced_infill_pattern(surface_fill.params.pattern).id;
+        const Octrees      *octrees = fill_octrees ? fill_octrees->region(surface_fill.region_id, row) : nullptr;
         f->adaptive_infill_field   = this->object()->adaptive_infill_field(surface_fill.params.adaptive_infill_mode);
-        f->object_state            = this->object()->infill_states().field(sliced_infill_pattern(surface_fill.params.pattern).id,
-                                                                           surface_fill.params.adaptive_infill_mode);
+        f->object_state            = this->object()->infill_states().field(row, surface_fill.params.adaptive_infill_mode);
         f->print_config        = &this->object()->print()->config();
         f->print_object_config = &this->object()->config();
         set_config_values(*f);
@@ -1658,7 +1657,8 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
             // Orca: Match the per-body box and octree of make_fills() before generating physical anchors.
             const int body = infill_body(*this, surface_fill, expoly);
             f->set_bounding_box(body >= 0 ? this->object()->separated_body_bboxes()[body] : bbox);
-            f->adapt_fill_octree = octrees ? octrees->get(body) : nullptr;
+            if (octrees != nullptr)
+                f->object_state = octrees->get(body);
             // Spacing is modified by the filler to indicate adjustments. Reset it for each expolygon.
             f->spacing                     = surface_fill.params.spacing;
             surface_fill.surface.expolygon = std::move(expoly);

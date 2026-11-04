@@ -1173,8 +1173,9 @@ const PrintRegionConfig& region_config()
 
 struct NativeStates::Set
 {
+    indexed_triangle_set                                         octree_mesh;
+    std::vector<Vec3d>                                           octree_overhangs;
     FillAdaptive::OctreePtr                                      adaptive_octree, support_octree;
-    bool                                                         octrees_built { false };
     std::vector<ExPolygons>                                      field_layers;
     std::vector<AdaptiveInfillField::Slice>                      field_slices;
     BoundingBox                                                  field_bbox;
@@ -1195,25 +1196,35 @@ NativeStates::Set& NativeStates::current()
     return *set;
 }
 
+NativeStates::OctreeInput NativeStates::octree_input(State state)
+{
+    Set &set = this->current();
+    if (set.octree_mesh.empty()) {
+        // A 20 mm cube standing on the bed with its centre over the origin, in the octree frame.
+        set.octree_mesh = its_make_cube(20., 20., 20.);
+        for (stl_vertex &v : set.octree_mesh.vertices)
+            v -= stl_vertex(10.f, 10.f, 0.f);
+        const Eigen::Matrix3d to_octree = FillAdaptive::transform_to_octree().toRotationMatrix();
+        its_transform(set.octree_mesh, Transform3d(to_octree), true);
+        // An internal bridge 12 mm above the bed.
+        set.octree_overhangs = triangulate_expolygon_3d(ExPolygon(rectangle_mm(-4., -5., 6., 3.)), 12.);
+        for (Vec3d &p : set.octree_overhangs)
+            p = (to_octree * p).eval();
+    }
+    static const std::vector<Vec3d> none;
+    const bool support = state == State::SupportOctree;
+    return { set.octree_mesh, support ? set.octree_overhangs : none, 2.2, support };
+}
+
 FillAdaptive::Octree* NativeStates::octree(State state)
 {
     Set &set = this->current();
-    if (! set.octrees_built) {
-        // A 20 mm cube standing on the bed with its centre over the origin, in the octree frame.
-        indexed_triangle_set mesh = its_make_cube(20., 20., 20.);
-        for (stl_vertex &v : mesh.vertices)
-            v -= stl_vertex(10.f, 10.f, 0.f);
-        const Eigen::Matrix3d to_octree = FillAdaptive::transform_to_octree().toRotationMatrix();
-        its_transform(mesh, Transform3d(to_octree), true);
-        // An internal bridge 12 mm above the bed.
-        std::vector<Vec3d> overhangs = triangulate_expolygon_3d(ExPolygon(rectangle_mm(-4., -5., 6., 3.)), 12.);
-        for (Vec3d &p : overhangs)
-            p = (to_octree * p).eval();
-        set.adaptive_octree = FillAdaptive::build_octree(mesh, {}, 2.2, false);
-        set.support_octree  = FillAdaptive::build_octree(mesh, overhangs, 2.2, true);
-        set.octrees_built   = true;
+    FillAdaptive::OctreePtr &octree = state == State::SupportOctree ? set.support_octree : set.adaptive_octree;
+    if (! octree) {
+        const OctreeInput input = this->octree_input(state);
+        octree = FillAdaptive::build_octree(input.mesh, input.overhangs, input.line_spacing, input.support_overhangs_only);
     }
-    return (state == State::SupportOctree ? set.support_octree : set.adaptive_octree).get();
+    return octree.get();
 }
 
 NativeStates::Set& NativeStates::fields()

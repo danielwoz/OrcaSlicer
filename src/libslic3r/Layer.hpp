@@ -31,10 +31,7 @@ class PrintRegion;
 class PrintRegionConfig;
 class PrintObject;
 class Print;
-
-namespace FillAdaptive {
-    struct RegionOctrees;
-};
+struct RegionOctrees;
 
 namespace FillLightning {
     class Generator;
@@ -208,8 +205,8 @@ public:
     void                    make_perimeters();
     // Phony version of make_fills() without parameters for Perl integration only.
     void                    make_fills() { this->make_fills(nullptr); }
-    void                    make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLightning::Generator* lightning_generator = nullptr);
-    Polylines               generate_sparse_infill_polylines_for_anchoring(const FillAdaptive::RegionOctrees *fill_octrees,
+    void                    make_fills(const RegionOctrees* fill_octrees, FillLightning::Generator* lightning_generator = nullptr);
+    Polylines               generate_sparse_infill_polylines_for_anchoring(const RegionOctrees *fill_octrees,
                                                                            FillLightning::Generator* lightning_generator) const;
     void 					make_ironing();
     // Returns the filament id (1-based) the region is ironed with, or -1 when the

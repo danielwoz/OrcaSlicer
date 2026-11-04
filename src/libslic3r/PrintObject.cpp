@@ -827,7 +827,7 @@ void PrintObject::infill()
             [this](const tbb::blocked_range<size_t>& range) {
                 for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++ layer_idx) {
                     m_print->throw_if_canceled();
-                    m_layers[layer_idx]->make_fills(&m_adaptive_fill_octrees, this->m_lightning_generator.get());
+                    m_layers[layer_idx]->make_fills(&m_infill_states.octrees, this->m_lightning_generator.get());
                 }
             }
         );
@@ -1169,7 +1169,7 @@ static std::vector<indexed_triangle_set> split_mesh_by_body(const PrintObject &o
     return bodies;
 }
 
-FillAdaptive::RegionOctrees PrintObject::prepare_adaptive_infill_data(
+RegionOctrees PrintObject::prepare_adaptive_infill_data(
     const std::vector<std::pair<const Surface *, const Layer *>> &surfaces_w_layer) const
 {
     using namespace FillAdaptive;
@@ -1181,15 +1181,18 @@ FillAdaptive::RegionOctrees PrintObject::prepare_adaptive_infill_data(
     octrees.region_set.assign(line_spacing.size(), -1);
     for (size_t region_id = 0; region_id < line_spacing.size(); ++ region_id)
         if (line_spacing[region_id] > 0.) {
-            const std::pair<double, bool> spacing(line_spacing[region_id], this->printing_region(region_id).config().sparse_infill_pattern == ipSupportCubic);
+            const InfillPattern           pattern = this->printing_region(region_id).config().sparse_infill_pattern.value;
+            const std::pair<double, bool> spacing(line_spacing[region_id], pattern == ipSupportCubic);
             const auto                    it = std::find(spacings.begin(), spacings.end(), spacing);
             octrees.region_set[region_id]    = int(it - spacings.begin());
-            if (it == spacings.end())
+            if (it == spacings.end()) {
                 spacings.push_back(spacing);
+                // The pattern library of the row the region slices builds the octrees of the set.
+                octrees.sets.push_back({ sliced_infill_pattern(pattern).id });
+            }
         }
     if (spacings.empty() || this->layers().empty())
         return {};
-    octrees.sets.resize(spacings.size());
 
     indexed_triangle_set mesh = this->model_object()->raw_indexed_triangle_set();
     // Rotate mesh and build octree on it with axis-aligned (standart base) cubes.
@@ -1254,9 +1257,12 @@ FillAdaptive::RegionOctrees PrintObject::prepare_adaptive_infill_data(
             m_print->throw_if_canceled();
             const auto [set, body] = to_build[i];
             const bool object      = body == num_bodies;
+            const orca_infill_octree_input input = BuiltinMirror::octree_input(object ? mesh : body_meshes[body],
+                                                                               object ? overhangs.front() : body_overhangs[body],
+                                                                               spacings[set].first, spacings[set].second);
             (object ? octrees.sets[set].object : octrees.sets[set].bodies[body]) =
-                build_octree(object ? mesh : body_meshes[body], object ? overhangs.front() : body_overhangs[body], spacings[set].first,
-                             spacings[set].second);
+                prepare_builtin_infill_state(octrees.sets[set].row, ORCA_INFILL_STATE_OCTREE, &input,
+                                             [this]() { m_print->throw_if_canceled(); });
         }
     });
     return octrees;
@@ -3388,7 +3394,7 @@ void PrintObject::bridge_over_infill()
             }
         }
 
-        this->m_adaptive_fill_octrees = this->prepare_adaptive_infill_data(surfaces_w_layer);
+        this->m_infill_states.octrees = this->prepare_adaptive_infill_data(surfaces_w_layer);
         this->prepare_adaptive_infill_fields();
 
         std::vector<size_t> layers_to_generate_infill;
@@ -3405,7 +3411,7 @@ void PrintObject::bridge_over_infill()
             for (size_t job_idx = r.begin(); job_idx < r.end(); job_idx++) {
                 size_t lidx = layers_to_generate_infill[job_idx];
                 infill_lines.at(
-                    lidx) = po->get_layer(lidx)->generate_sparse_infill_polylines_for_anchoring(&po->m_adaptive_fill_octrees,
+                    lidx) = po->get_layer(lidx)->generate_sparse_infill_polylines_for_anchoring(&po->m_infill_states.octrees,
                                                                                                 po->m_lightning_generator.get());
             }
         });
