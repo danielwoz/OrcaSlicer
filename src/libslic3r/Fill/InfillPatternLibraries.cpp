@@ -307,6 +307,10 @@ void open_file(BuiltinInfillLoad &load)
     std::string error;
     SharedLibrary::Handle library = SharedLibrary::open(load.path, error);
     if (library == nullptr) {
+        // The loader prefixes its message with the path, which the system information must not carry.
+        const std::string path = SharedLibrary::path_to_utf8(load.path) + ": ";
+        if (error.compare(0, path.size(), path) == 0)
+            error.erase(0, path.size());
         load.error = "cannot be loaded: " + error;
         return;
     }
@@ -342,6 +346,16 @@ bool                           s_loaded = false;
 std::vector<BuiltinInfillLoad> s_loads;
 fs::path                       s_folder;
 std::atomic<bool>              s_shut_down { false };
+
+// Where the libraries come from, for the log and the listing.
+std::string library_source()
+{
+#if ORCA_INFILL_PATTERN_LINKAGE_STATIC
+    return "libraries linked into the executable";
+#else
+    return "folder: " + (s_folder.empty() ? std::string("none found") : SharedLibrary::path_to_utf8(s_folder));
+#endif
+}
 
 // Binds the row of a library that passed every check, or records why it stays unbound.
 void bind(BuiltinInfillLoad &load)
@@ -451,22 +465,20 @@ void log_builtin_infill_pattern_loads()
         const std::string where = load.path.empty() ? load.file : SharedLibrary::path_to_utf8(load.path);
         if (load.error.empty()) {
             ++ bound;
-            BOOST_LOG_TRIVIAL(info) << "Loaded infill pattern library " << where << " in " << milliseconds(load.milliseconds);
+            BOOST_LOG_TRIVIAL(debug) << "Loaded infill pattern library " << where << " in " << milliseconds(load.milliseconds);
         } else {
             BOOST_LOG_TRIVIAL(error) << "Infill pattern library " << where << ": " << load.error;
         }
     }
-    BOOST_LOG_TRIVIAL(info) << "Infill pattern libraries: " << bound << " of " << s_loads.size() << " bound in " << milliseconds(total);
+    BOOST_LOG_TRIVIAL(info) << "Infill pattern libraries: " << bound << " of " << s_loads.size() << " bound in " << milliseconds(total)
+                            << ", " << library_source();
 }
 
-void print_builtin_infill_patterns(std::ostream &out)
+void print_builtin_infill_patterns(std::ostream &out, bool folder)
 {
     out << "# OrcaSlicer " << SoftFever_VERSION << ", infill pattern library build " << ORCA_INFILL_BUILD_ID << "\n";
-#if ORCA_INFILL_PATTERN_LINKAGE_STATIC
-    out << "# libraries linked into the executable\n";
-#else
-    out << "# folder: " << (s_folder.empty() ? std::string("none found") : SharedLibrary::path_to_utf8(s_folder)) << "\n";
-#endif
+    if (folder)
+        out << "# " << library_source() << "\n";
     out << "# value\ttoken\tfile\tstatus\tload time\n";
     double total = 0.;
     size_t rows = 0, bound = 0;
