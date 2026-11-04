@@ -14,6 +14,7 @@
 
 #include "../../ClipperUtils.hpp"
 #include "../../Geometry.hpp"
+#include "../../ParallelFor.hpp"
 #include "libslic3r/libslic3r.h"
 
 #include <cassert>
@@ -22,8 +23,6 @@
 #include <limits>
 #include <algorithm>
 #include <optional>
-#include <tbb/parallel_for.h>
-#include <tbb/blocked_range2d.h>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -170,9 +169,9 @@ GroundingLocation Layer::getBestGroundingLocation
 
         Point      current_dist_grid_addr{std::numeric_limits<coord_t>::lowest(), std::numeric_limits<coord_t>::lowest()};
         std::mutex current_dist_mutex;
-        tbb::parallel_for(tbb::blocked_range2d<coord_t>(region.min.y(), region.max.y(), region.min.x(), region.max.x()), [&current_dist, current_dist_copy = current_dist, &current_dist_mutex, &sub_tree, &current_dist_grid_addr, &exclude_tree = std::as_const(exclude_tree), &outline_locator = std::as_const(outline_locator), &supporting_radius = std::as_const(supporting_radius), &tree_node_locator = std::as_const(tree_node_locator), &unsupported_location = std::as_const(unsupported_location)](const tbb::blocked_range2d<coord_t> &range) -> void {
-            for (coord_t grid_addr_y = range.rows().begin(); grid_addr_y < range.rows().end(); ++grid_addr_y)
-                for (coord_t grid_addr_x = range.cols().begin(); grid_addr_x < range.cols().end(); ++grid_addr_x) {
+        parallel_for_2d(region.min.y(), region.max.y(), 1, region.min.x(), region.max.x(), 1, [&current_dist, current_dist_copy = current_dist, &current_dist_mutex, &sub_tree, &current_dist_grid_addr, &exclude_tree = std::as_const(exclude_tree), &outline_locator = std::as_const(outline_locator), &supporting_radius = std::as_const(supporting_radius), &tree_node_locator = std::as_const(tree_node_locator), &unsupported_location = std::as_const(unsupported_location)](int64_t row_begin, int64_t row_end, int64_t col_begin, int64_t col_end) -> void {
+            for (coord_t grid_addr_y = row_begin; grid_addr_y < row_end; ++grid_addr_y)
+                for (coord_t grid_addr_x = col_begin; grid_addr_x < col_end; ++grid_addr_x) {
                     const Point local_grid_addr{grid_addr_x, grid_addr_y};
                     NodeSPtr    local_sub_tree{nullptr};
                     coord_t     local_current_dist = current_dist_copy;

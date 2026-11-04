@@ -2705,7 +2705,8 @@ void TreeSupport::draw_circles()
             auto m_support_material_flow = support_material_flow(m_object, m_slicing_params.layer_height);
             coordf_t support_spacing = m_object_config->support_base_pattern_spacing.value + m_support_material_flow.spacing();
             coordf_t support_density = std::min(1., m_support_material_flow.spacing() / support_spacing * 2); // for lightning infill the density is defined differently, so need to double it
-            generator = std::make_unique<FillLightning::Generator>(m_object, contours, overhangs, []() {}, support_density);
+            generator = std::make_unique<FillLightning::Generator>(FillLightning::lightning_support_params(*m_object, support_density), contours,
+                                                                   overhangs, []() {});
         }
 
         else if (!with_infill) {
