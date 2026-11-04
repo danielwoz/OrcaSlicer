@@ -25,6 +25,7 @@
 #include "format.hpp"
 #include "libslic3r_version.h"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
+#include "libslic3r/Fill/InfillPatternLibraries.hpp"
 #include "libslic3r/Fill/InfillPlugins.hpp"
 #include "BuildCommit.hpp"
 #include "Downloader.hpp"
@@ -949,6 +950,19 @@ void GUI_App::post_init()
     // running, and so it precedes the first WebView creation (the setup wizard).
     init_webview_runtime();
 #endif
+
+    // Orca: built-in infill patterns whose pattern library is missing or damaged; nothing is sliced until reinstall.
+    if (const std::vector<InfillPattern> unbound = InfillPatternRegistry::unbound(); ! unbound.empty()) {
+        std::string files;
+        for (InfillPattern row : unbound) {
+            const InfillPatternBinding &binding = *InfillPatternRegistry::binding(row);
+            files += "\n" + binding.file + ": " + binding.error;
+        }
+        plater()->get_notification_manager()->push_notification(NotificationType::CustomNotification,
+            NotificationManager::NotificationLevel::ErrorNotificationLevel,
+            format(_L("These infill pattern libraries are missing or damaged, and nothing can be sliced until OrcaSlicer is reinstalled:%1%"),
+                   files));
+    }
 
     // Orca: report the infill plugins that could not be loaded, or only in part.
     for (const InfillPluginLoad &failure : infill_plugin_failures())
@@ -2989,6 +3003,7 @@ int GUI_App::OnExit()
         BOOST_LOG_TRIVIAL(error) << "Failed to clean up encrypt bbl network log file";
     }
 
+    shutdown_builtin_infill_patterns();
     return wxApp::OnExit();
 }
 
@@ -3468,8 +3483,9 @@ bool GUI_App::on_init_inner()
     }
 
     // Orca: the patterns of infill plugins are values of the pattern options, so the plugins of the data directory
-    // load before any preset or project is read; the pattern options stay unchanged afterwards. The plugins loaded
-    // at start-up, before the log file was opened, are logged first.
+    // load before any preset or project is read; the pattern options stay unchanged afterwards. The pattern libraries
+    // and plugins loaded at start-up, before the log file was opened, are logged first.
+    log_builtin_infill_pattern_loads();
     log_infill_plugin_loads();
     load_infill_plugins({ (boost::filesystem::path(data_dir()) / "infill_plugins").string() });
     InfillPatternRegistry::seal();

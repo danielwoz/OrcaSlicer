@@ -65,7 +65,8 @@ Surface         to_surface(const orca_infill_surface &surface);
 // Every field but config, which stays null.
 FillParams      to_fill_params(const orca_infill_fill_params &params);
 // Sets every member of fill that orca_infill_fill_state mirrors. print_config, print_object_config and the object state
-// members become null; the library attaches the state of state.state to the member its pattern reads.
+// members, object_state included, become null; the library attaches the state of state.state to the member its pattern
+// reads.
 void            apply_fill_state(const orca_infill_fill_state &state, Fill &fill);
 LockRegionParam to_lock_region_param(const orca_infill_lock &lock);
 

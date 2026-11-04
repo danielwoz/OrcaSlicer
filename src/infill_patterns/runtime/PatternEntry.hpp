@@ -11,7 +11,6 @@
 #include <cstring>
 #include <exception>
 #include <new>
-#include <string>
 
 #include "libslic3r/Fill/FillBase.hpp"
 #include "libslic3r/Fill/Library/BuiltinMirror.hpp"
@@ -54,21 +53,16 @@ template<class Row>
 class PatternEntry
 {
 public:
-    // ORCA_INFILL_BUILTIN_ENTRY_V1: the library, or nullptr after logging why when the host is of another build.
+    // ORCA_INFILL_BUILTIN_ENTRY_V1: the library, or nullptr after logging its own build id when the host is of another
+    // build.
     static const orca_infill_builtin_library* bind(const orca_infill_builtin_host *host) noexcept
     {
         if (host == nullptr || host->struct_size < sizeof(orca_infill_builtin_host))
             return nullptr;
         if (host->abi_major != ORCA_INFILL_BUILTIN_ABI_MAJOR || host->build_id == nullptr ||
             std::strcmp(host->build_id, Row::build_id) != 0) {
-            if (host->log != nullptr) {
-                try {
-                    const std::string message = std::string(Row::name) + " belongs to the build " + Row::build_id +
-                                                ", not to " + (host->build_id != nullptr ? host->build_id : "(none)");
-                    host->log(ORCA_INFILL_LOG_ERROR, message.c_str());
-                } catch (...) {
-                }
-            }
+            if (host->log != nullptr)
+                host->log(ORCA_INFILL_LOG_ERROR, Row::build_id);
             return nullptr;
         }
         s_host = host;

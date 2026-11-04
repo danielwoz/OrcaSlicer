@@ -38,7 +38,8 @@ static_assert(std::is_same_v<decltype(Fill::layer_id), size_t> && std::is_same_v
               std::is_same_v<decltype(Fill::bounding_box), BoundingBox> && std::is_same_v<decltype(Fill::no_overlap_expolygons), ExPolygons> &&
               std::is_same_v<decltype(Fill::dont_alternate_fill_direction), bool> &&
               std::is_same_v<decltype(Fill::min_nozzle_diameter), double> &&
-              std::is_same_v<decltype(Fill::calib_flowrate_topinfill_special_order), bool>,
+              std::is_same_v<decltype(Fill::calib_flowrate_topinfill_special_order), bool> &&
+              std::is_same_v<decltype(Fill::object_state), const InfillObjectState*>,
               "a member of Fill changed its type: update orca_infill_fill_state");
 static_assert(std::is_same_v<decltype(Surface::thickness), double> && std::is_same_v<decltype(Surface::bridge_angle), double> &&
               std::is_same_v<decltype(Surface::thickness_layers), uint16_t> && std::is_same_v<decltype(Surface::extra_perimeters), uint16_t>,
@@ -61,6 +62,7 @@ struct FillLayout
     // Not mirrored: the object state, the configurations and the values taken from them come in their own fields.
     FillAdaptive::Octree      *adapt_fill_octree;
     const AdaptiveInfillField *adaptive_infill_field;
+    const InfillObjectState   *object_state;
     const PrintConfig         *print_config;
     const PrintObjectConfig   *print_object_config;
     double                     min_nozzle_diameter;
@@ -411,6 +413,7 @@ void apply_fill_state(const orca_infill_fill_state &source, Fill &fill)
     fill.bounding_box.defined                   = f.bounding_box_defined != 0;
     fill.adapt_fill_octree                      = nullptr;
     fill.adaptive_infill_field                  = nullptr;
+    fill.object_state                           = nullptr;
     fill.print_config                           = nullptr;
     fill.print_object_config                    = nullptr;
     fill.min_nozzle_diameter                    = f.min_nozzle_diameter;

@@ -1,2 +1,5 @@
 #cmakedefine SLIC3R_FHS @SLIC3R_FHS@
 #define SLIC3R_FHS_RESOURCES "@SLIC3R_FHS_RESOURCES@"
+// The library folder below the installation prefix, from GNUInstallDirs; the built-in infill pattern libraries are
+// installed in <libdir>/orca-slicer/infill_patterns.
+#define SLIC3R_FHS_LIBDIR "@CMAKE_INSTALL_LIBDIR@"

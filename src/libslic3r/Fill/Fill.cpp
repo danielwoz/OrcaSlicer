@@ -1338,6 +1338,14 @@ static int infill_body(const Layer &layer, const SurfaceFill &fill, const ExPoly
     return body;
 }
 
+// The values of print_config and print_object_config that the fillers of a pattern library receive in their place.
+static void set_config_values(Fill &f)
+{
+    const std::vector<double> &nozzles = f.print_config->nozzle_diameter.values;
+    f.min_nozzle_diameter                    = nozzles.empty() ? 0. : *std::min_element(nozzles.begin(), nozzles.end());
+    f.calib_flowrate_topinfill_special_order = f.print_object_config->calib_flowrate_topinfill_special_order.value;
+}
+
 #ifdef SLIC3R_DEBUG_SLICE_PROCESSING
 void export_group_fills_to_svg(const char *path, const std::vector<SurfaceFill> &fills)
 {
@@ -1397,6 +1405,7 @@ void Layer::make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLigh
         f->adaptive_infill_field   = this->object()->adaptive_infill_field(surface_fill.params.adaptive_infill_mode);
         f->print_config        = &this->object()->print()->config();
         f->print_object_config = &this->object()->config();
+        set_config_values(*f);
         if (surface_fill.params.pattern == ipLightning)
             dynamic_cast<FillLightning::Filler*>(f.get())->generator = lightning_generator;
         // calculate flow spacing for infill pattern generation
@@ -1592,6 +1601,7 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
         f->adaptive_infill_field   = this->object()->adaptive_infill_field(surface_fill.params.adaptive_infill_mode);
         f->print_config        = &this->object()->print()->config();
         f->print_object_config = &this->object()->config();
+        set_config_values(*f);
 
         if (surface_fill.params.pattern == ipLightning)
             dynamic_cast<FillLightning::Filler *>(f.get())->generator = lightning_generator;

@@ -270,11 +270,6 @@ void disable_multi_threading()
 #endif // TBB_HAS_GLOBAL_CONTROL
 }
 
-void set_scaling_factor(double scaling_factor)
-{
-    SCALING_FACTOR = scaling_factor;
-}
-
 static std::string g_var_dir;
 
 void set_var_dir(const std::string &dir)

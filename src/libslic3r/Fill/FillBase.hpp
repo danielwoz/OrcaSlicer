@@ -35,6 +35,7 @@ namespace Slic3r {
 
 class Surface;
 class AdaptiveInfillField;
+struct InfillObjectState;
 enum InfillPattern : int;
 
 namespace FillAdaptive {
@@ -173,6 +174,10 @@ public:
 
     // Radial coordinate inside the object for the adaptive TPMS infill
     const AdaptiveInfillField* adaptive_infill_field = nullptr;
+
+    // The object state of a pattern served by its pattern library (Fill/InfillObjectState.hpp), in place of the two
+    // members above.
+    const InfillObjectState* object_state = nullptr;
 
     // PrintConfig and PrintObjectConfig are used by infills that use Arachne (Concentric and FillEnsuring).
     // Orca: also used by gap fill function.

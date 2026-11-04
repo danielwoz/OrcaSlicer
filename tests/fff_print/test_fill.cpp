@@ -45,6 +45,7 @@
 #include "libslic3r/Fill/FillConcentricInternal.hpp"
 #include "libslic3r/Fill/FillCrossHatch.hpp"
 #include "libslic3r/Fill/FillHoneycomb.hpp"
+#include "libslic3r/Fill/FillLibrary.hpp"
 #include "libslic3r/Fill/FillLightning.hpp"
 #include "libslic3r/Fill/FillLine.hpp"
 #include "libslic3r/Fill/FillPlanePath.hpp"
@@ -2540,6 +2541,8 @@ TEST_CASE("Monotonic line top surfaces print their gap fill next to their lines 
 
 TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]")
 {
+    // The Fill class of each row; a row a pattern library serves creates a FillLibrary, which runs that class in the
+    // library (tests/infill_patterns/test_builtin_equivalence.cpp).
     const std::map<InfillPattern, std::type_index> classes{
         {ipMonotonic, typeid(FillMonotonic)},
         {ipMonotonicLine, typeid(FillMonotonicLines)},
@@ -2593,7 +2596,13 @@ TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]
         if (pattern.available()) {
             const auto it = classes.find(pattern.id);
             REQUIRE(it != classes.end());
-            CHECK(created == it->second);
+            if (InfillPatternRegistry::binding(pattern.id) != nullptr) {
+                CHECK(created == std::type_index(typeid(FillLibrary)));
+                const std::unique_ptr<Fill> filler(Fill::new_from_type(pattern.id));
+                CHECK(static_cast<const FillLibrary&>(*filler).pattern() == pattern.id);
+            } else {
+                CHECK(created == it->second);
+            }
         }
         if (! pattern.internal()) {
             CAPTURE(pattern.key);

@@ -1594,10 +1594,15 @@ void Choice::BUILD()
             for (auto el : m_opt.enum_labels) {
                 auto icon_name = "param_" + m_opt.enum_values[i];
                 wxString label = _(el);
-                // Orca: an infill pattern this build leaves out stays selectable and prints with its fallback.
+                // Orca: an infill pattern this build leaves out stays selectable and prints with its fallback; one whose
+                // pattern library is missing stays selectable too, and nothing slices until it is reinstalled.
                 if (m_opt.enum_keys_map == &ConfigOptionEnum<InfillPattern>::get_enum_values())
-                    if (const InfillPatternDescriptor *pattern = InfillPatternRegistry::find(m_opt.enum_values[i]); pattern != nullptr && ! pattern->available())
-                        label += " (" + _L("not included in this build") + ")";
+                    if (const InfillPatternDescriptor *pattern = InfillPatternRegistry::find(m_opt.enum_values[i]); pattern != nullptr) {
+                        if (! pattern->available())
+                            label += " (" + _L("not included in this build") + ")";
+                        else if (const InfillPatternBinding *binding = InfillPatternRegistry::binding(pattern->id); binding != nullptr && binding->library == nullptr)
+                            label += " (" + _L("library missing") + ")";
+                    }
                 if (boost::filesystem::exists(image_path / (icon_name + ".svg"))) {
                     ScalableBitmap bm(temp, icon_name, 24);
 				    temp->Append(label, bm.bmp());

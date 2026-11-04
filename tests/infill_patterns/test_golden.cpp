@@ -18,6 +18,7 @@
 #include "libslic3r/libslic3r.h"
 
 #include "corpus.hpp"
+#include "native_fillers.hpp"
 
 using namespace Slic3r;
 
@@ -58,16 +59,16 @@ std::string golden_line(const InfillCorpus::Case &c, const InfillCorpus::Digest 
 
 TEST_CASE("Native fillers reproduce the golden corpus", "[InfillPatterns][Golden]")
 {
-    // Every case runs on a fresh native filler under its own scaling factor.
+    // Every case runs on a fresh native filler under its own scaling factor, also for a row a pattern library serves.
     InfillCorpus::NativeStates states;
     std::vector<std::string>   lines;
     const double               saved = SCALING_FACTOR;
     for (const InfillCorpus::Case &c : InfillCorpus::cases()) {
         // A row this build leaves out has no digest to check.
-        if (! InfillPatternRegistry::builtins()[size_t(c.pattern)].available())
+        std::unique_ptr<Fill> filler = InfillCorpus::native_filler(c.pattern);
+        if (filler == nullptr || ! InfillPatternRegistry::builtins()[size_t(c.pattern)].available())
             continue;
         set_scaling_factor(c.scaling_factor);
-        std::unique_ptr<Fill> filler(Fill::new_from_type(c.pattern));
         InfillCorpus::apply_members(c, *filler);
         states.attach(c, *filler);
         lines.emplace_back(golden_line(c, InfillCorpus::digest(c, InfillCorpus::run(c, *filler))));
