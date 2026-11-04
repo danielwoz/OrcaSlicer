@@ -889,14 +889,14 @@ add_library(libslic3r_fillkit_host STATIC Fill/Library/KitLogHost.cpp ParallelFo
 target_link_libraries(libslic3r_fillkit_host PRIVATE libslic3r_compile_settings)
 encoding_check(libslic3r_fillkit_host)
 
-# The sources of the infill patterns, an object library per group of rows of src/infill_patterns. libslic3r links
-# every one of them; a pattern library links those of its row.
-set(libslic3r_pattern_objects "")
+# The sources of the infill patterns, an object library per group of rows of src/infill_patterns, listed in the global
+# property ORCA_INFILL_PATTERN_OBJECTS. A pattern library links those of its row. libslic3r links none of them, unless
+# ORCA_INFILL_PATTERN_LINKAGE is STATIC: then it links all of them with the entries of the libraries.
 function(libslic3r_add_pattern_objects target)
     add_library(${target} OBJECT ${ARGN})
     source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${ARGN})
     libslic3r_shared_sources(${target})
-    set(libslic3r_pattern_objects ${libslic3r_pattern_objects} ${target} PARENT_SCOPE)
+    set_property(GLOBAL APPEND PROPERTY ORCA_INFILL_PATTERN_OBJECTS ${target})
 endfunction()
 libslic3r_add_pattern_objects(orca_fill_rectilinear_obj Fill/FillRectilinear.cpp Fill/FillRectilinear.hpp)
 if (ORCA_INFILL_LINE)
@@ -931,7 +931,7 @@ libslic3r_add_pattern_objects(orca_fill_lightning_obj
     Fill/Lightning/TreeNode.hpp)
 
 # libslic3r_compile_settings first, so that libslic3r's own include directories come before those of its dependencies.
-target_link_libraries(libslic3r PRIVATE libslic3r_compile_settings ${libslic3r_pattern_objects})
+target_link_libraries(libslic3r PRIVATE libslic3r_compile_settings)
 target_link_libraries(libslic3r PUBLIC libslic3r_public_settings libslic3r_fillkit libslic3r_fillkit_host)
 # libnest2d links libslic3r back, so it stays out of the settings the shared sources and the pattern libraries link;
 # none of those sources includes it.

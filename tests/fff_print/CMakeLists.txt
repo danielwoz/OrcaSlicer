@@ -41,6 +41,8 @@ add_executable(${_TEST_NAME}_tests
 	test_wipe_tower.cpp
 	)
 target_link_libraries(${_TEST_NAME}_tests test_common libslic3r Catch2::Catch2WithMain)
+# test_fill.cpp runs the Fill classes of the patterns and the adaptive infill field itself.
+orca_link_infill_pattern_objects(${_TEST_NAME}_tests)
 if (SLIC3R_PCH AND NOT SLIC3R_SYNTAXONLY)
     add_precompiled_header(${_TEST_NAME}_tests ${CMAKE_SOURCE_DIR}/src/libslic3r/pchheader.hpp FORCEINCLUDE)
 endif ()
