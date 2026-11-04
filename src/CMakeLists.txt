@@ -11,7 +11,21 @@ add_subdirectory(dev-utils)
 
 find_package(libnoise REQUIRED)
 
+# git_commit_hash.h, which the GUI (src/slic3r) and the build id of the built-in infill pattern libraries
+# (orca_infill_build_id.h) include. A custom target runs at the start of every build and rewrites the header only when
+# the commit changes.
+set(_git_commit_hash_header "${CMAKE_CURRENT_BINARY_DIR}/slic3r/git_commit_hash.h")
+add_custom_target(git_commit_hash_header
+    BYPRODUCTS "${_git_commit_hash_header}"
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DOUT_FILE=${_git_commit_hash_header}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/slic3r/GitCommitHash.cmake"
+    COMMENT "Resolving the git commit hash")
+
 add_subdirectory(libslic3r)
+# The libraries that carry the built-in infill patterns.
+add_subdirectory(infill_patterns)
 
 if (SLIC3R_GUI)
     add_subdirectory(glad)
@@ -175,6 +189,7 @@ if (NOT WIN32 AND NOT APPLE)
 endif ()
 
 target_link_libraries(OrcaSlicer libslic3r cereal::cereal)
+orca_stage_builtin_infill_libraries(OrcaSlicer)
 # target_include_directories(OrcaSlicer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/slic3r)
 if (APPLE)
 #    add_compile_options(-stdlib=libc++)
