@@ -358,8 +358,6 @@ const std::string& custom_gcodes_dir()
     return g_custom_gcodes_dir;
 }
 
-// Translate function callback, to call wxWidgets translate function to convert non-localized UTF8 string to a localized one.
-Slic3r::I18N::translate_fn_type Slic3r::I18N::translate_fn = nullptr;
 static std::string g_data_dir;
 
 void set_data_dir(const std::string &dir)

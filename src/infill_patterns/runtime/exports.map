@@ -1,0 +1,4 @@
+{
+    global: orca_infill_builtin_entry_v1;
+    local: *;
+};

@@ -1,3 +1,5 @@
 #pragma once
 // Infill patterns included in this build (1) or left out (0), set by the ORCA_INFILL_<NAME> CMake options.
 @ORCA_INFILL_PATTERN_DEFINES@
+// ORCA_INFILL_LIBRARY_<ROW>: the rows served by a built-in pattern library (src/infill_patterns).
+#include "orca_infill_libraries.h"
