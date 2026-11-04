@@ -1287,13 +1287,11 @@ InfillObjectStatePtr PrintObject::prepare_lightning_infill_data()
 
 void PrintObject::prepare_adaptive_infill_fields()
 {
-    m_adaptive_infill_fields = {};
     m_infill_states.fields.clear();
-    // A field is built for every mode a region grades below 100 %; every graded region of the mode reads it. A pattern
-    // library builds the field of its own row, the Fill classes compiled into libslic3r share one per mode.
+    // A field is built for every mode a region grades below 100 %; every graded region of the mode reads it. The pattern
+    // library of each row the regions slice in the mode builds the field of that row.
     std::array<bool, size_t(AdaptiveInfillMode::Count)> modes{};
-    std::vector<std::pair<InfillPattern, AdaptiveInfillMode>> library_fields;
-    bool native_rows = false;
+    std::vector<std::pair<InfillPattern, AdaptiveInfillMode>> fields;
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id)
         if (const PrintRegionConfig &config = this->printing_region(region_id).config();
             config.sparse_infill_density > 0 && is_adaptive_infill_pattern(config.sparse_infill_pattern)) {
@@ -1301,10 +1299,8 @@ void PrintObject::prepare_adaptive_infill_fields()
             if (config.sparse_infill_density < 100)
                 modes[size_t(mode)] = true;
             const std::pair<InfillPattern, AdaptiveInfillMode> key(sliced_infill_pattern(config.sparse_infill_pattern).id, mode);
-            if (InfillPatternRegistry::binding(key.first) == nullptr)
-                native_rows = true;
-            else if (std::find(library_fields.begin(), library_fields.end(), key) == library_fields.end())
-                library_fields.push_back(key);
+            if (std::find(fields.begin(), fields.end(), key) == fields.end())
+                fields.push_back(key);
         }
     modes[size_t(AdaptiveInfillMode::Disabled)] = false;
     if (std::find(modes.begin(), modes.end(), true) == modes.end() || m_layers.empty())
@@ -1319,20 +1315,11 @@ void PrintObject::prepare_adaptive_infill_fields()
     }
     if (!bbox.defined)
         return;
-    for (size_t mode = 0; native_rows && mode < modes.size(); ++mode) {
-        if (!modes[mode])
-            continue;
-        // Without a field, the infill falls back to the regular pattern.
-        auto field = std::make_unique<AdaptiveInfillField>(slices, bbox, AdaptiveInfillMode(mode), [this]() { m_print->throw_if_canceled(); });
-        if (!field->empty())
-            m_adaptive_infill_fields[mode] = std::move(field);
-    }
-    if (library_fields.empty())
-        return;
     const BuiltinMirror::FieldInput input(slices, bbox);
-    for (const auto &[row, mode] : library_fields) {
+    for (const auto &[row, mode] : fields) {
         if (!modes[size_t(mode)])
             continue;
+        // An empty field gives no state, and the infill falls back to the regular pattern.
         const orca_infill_field_input field = input.get(mode);
         if (InfillObjectStatePtr state = prepare_builtin_infill_state(row, ORCA_INFILL_STATE_ADAPTIVE_FIELD, &field,
                                                                       [this]() { m_print->throw_if_canceled(); }))

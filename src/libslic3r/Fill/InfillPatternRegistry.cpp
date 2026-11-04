@@ -10,21 +10,7 @@
 #include "libslic3r_infill_patterns.h"      // generated: ORCA_INFILL_<NAME> and ORCA_INFILL_LIBRARY_<ROW> 0/1
 #include "orca_infill_manifest.h"           // generated: the pattern libraries of this build
 #include "../Exception.hpp"
-#include "Fill3DHoneycomb.hpp"
-#include "FillAdaptive.hpp"
-#include "FillConcentric.hpp"
-#include "FillConcentricInternal.hpp"
-#include "FillCrossHatch.hpp"
-#include "FillGyroid.hpp"
-#include "FillHoneycomb.hpp"
 #include "FillLibrary.hpp"
-#include "FillLightning.hpp"
-#include "FillLine.hpp"
-#include "FillPlanePath.hpp"
-#include "FillRectilinear.hpp"
-#include "FillSpiralInset.hpp"
-#include "FillTpmsD.hpp"
-#include "FillTpmsFK.hpp"
 
 // Marks the labels for translation; they are translated where they are shown.
 #define L(s) (s)
@@ -32,26 +18,16 @@
 namespace Slic3r {
 namespace {
 
-template<class T> Fill* make_fill(const InfillPatternDescriptor &) { return new T(); }
+// The filler of a row: the one of the pattern library that serves it (ORCA_INFILL_LIBRARY_<ROW>, src/infill_patterns),
+// which runs the Fill class of the row; libslic3r compiles none of these classes. builtins_are_consistent() fails for
+// a row that is always built and has no library.
+template<int Library> constexpr InfillFactory builtin_fill() { return Library != 0 ? &FillLibrary::create : nullptr; }
 
-// The filler of a row: the one of the pattern library that serves it (ORCA_INFILL_LIBRARY_<ROW>), or the class itself.
-// A discarded branch is never instantiated, so libslic3r does not create the class of a row a library serves.
-template<int Library, class T> constexpr InfillFactory builtin_fill()
+// nullptr when the build leaves the pattern out (ORCA_INFILL_<NAME>=OFF), which then builds no library for it.
+template<int Built, int Library> constexpr InfillFactory optional_fill()
 {
-    if constexpr (Library != 0)
-        return &FillLibrary::create;
-    else
-        return &make_fill<T>;
-}
-
-// nullptr when the build leaves the pattern out, so the class only needs to be declared and its implementation file
-// may be left out of the build.
-template<int Built, int Library, class T> constexpr InfillFactory optional_fill()
-{
-    if constexpr (Built != 0)
-        return builtin_fill<Library, T>();
-    else
-        return nullptr;
+    static_assert(Built == Library, "an optional infill pattern has a pattern library exactly when the build includes it");
+    return builtin_fill<Library>();
 }
 
 constexpr const char *zigzag_options[]            = { "symmetric_infill_y_axis", nullptr };
@@ -74,98 +50,98 @@ constexpr std::array<InfillPatternDescriptor, size_t(ipCount)> s_builtins {{
     //     void area factor, combine clearance factor, optional, fallback, options, factory
     { ipMonotonic, "monotonic", L("Monotonic"), ipsSurface,
       ipfSeparable | ipfLineBasedSolid | ipfSmallAreaFlowComp | ipfNoSort,
-      1., 1.5f, false, ipMonotonic, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_MONOTONIC, FillMonotonic>() },
+      1., 1.5f, false, ipMonotonic, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_MONOTONIC>() },
     { ipMonotonicLine, "monotonicline", L("Monotonic line"), ipsSurface,
       ipfSeparable | ipfLineBasedSolid | ipfSmallAreaFlowComp | ipfNoSort,
-      1., 0.5f, false, ipMonotonicLine, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_MONOTONICLINE, FillMonotonicLines>() },
+      1., 0.5f, false, ipMonotonicLine, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_MONOTONICLINE>() },
     { ipRectilinear, "rectilinear", L("Rectilinear"), ipsSparse | ipsSurface | ipsIroning,
       ipfSeparable | ipfMultiline | ipfLineBasedSolid | ipfRotateTemplateSafe | ipfSmallAreaFlowComp,
-      1., 1.5f, false, ipRectilinear, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_RECTILINEAR, FillRectilinear>() },
+      1., 1.5f, false, ipRectilinear, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_RECTILINEAR>() },
     { ipAlignedRectilinear, "alignedrectilinear", L("Aligned Rectilinear"), ipsSparse | ipsSurface,
       ipfSeparable | ipfMultiline | ipfLineBasedSolid | ipfSmallAreaFlowComp,
-      1., 0.5f, false, ipAlignedRectilinear, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_ALIGNEDRECTILINEAR, FillAlignedRectilinear>() },
+      1., 0.5f, false, ipAlignedRectilinear, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_ALIGNEDRECTILINEAR>() },
     { ipZigZag, "zigzag", L("Zig Zag"), ipsSparse,
       ipfSeparable | ipfRotateTemplateSafe,
-      1., 0.5f, true, ipRectilinear, zigzag_options, optional_fill<ORCA_INFILL_ZIGZAG, ORCA_INFILL_LIBRARY_ZIGZAG, FillZigZag>() },
+      1., 0.5f, true, ipRectilinear, zigzag_options, optional_fill<ORCA_INFILL_ZIGZAG, ORCA_INFILL_LIBRARY_ZIGZAG>() },
     { ipCrossZag, "crosszag", L("Cross Zag"), ipsSparse,
       ipfSeparable | ipfRotateTemplateSafe,
-      1., 0.5f, true, ipRectilinear, crosszag_options, optional_fill<ORCA_INFILL_CROSSZAG, ORCA_INFILL_LIBRARY_CROSSZAG, FillCrossZag>() },
+      1., 0.5f, true, ipRectilinear, crosszag_options, optional_fill<ORCA_INFILL_CROSSZAG, ORCA_INFILL_LIBRARY_CROSSZAG>() },
     { ipLockedZag, "lockedzag", L("Locked Zag"), ipsSparse,
       ipfSeparable | ipfRotateTemplateSafe,
-      1., 0.5f, true, ipRectilinear, lockedzag_options, optional_fill<ORCA_INFILL_LOCKEDZAG, ORCA_INFILL_LIBRARY_LOCKEDZAG, FillLockedZag>() },
+      1., 0.5f, true, ipRectilinear, lockedzag_options, optional_fill<ORCA_INFILL_LOCKEDZAG, ORCA_INFILL_LIBRARY_LOCKEDZAG>() },
     { ipLine, "line", L("Line"), ipsSparse,
       ipfSeparable | ipfNoAnchorMax | ipfRotateTemplateSafe,
-      1., 1.5f, true, ipRectilinear, nullptr, optional_fill<ORCA_INFILL_LINE, ORCA_INFILL_LIBRARY_LINE, FillLine>() },
+      1., 1.5f, true, ipRectilinear, nullptr, optional_fill<ORCA_INFILL_LINE, ORCA_INFILL_LIBRARY_LINE>() },
     { ipGrid, "grid", L("Grid"), ipsSparse,
       ipfSeparable | ipfMultiline | ipfSmoothableMultiline | ipfNoReverse,
-      4., 1.5f, false, ipGrid, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_GRID, FillGrid>() },
+      4., 1.5f, false, ipGrid, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_GRID>() },
     { ipTriangles, "triangles", L("Triangles"), ipsSparse,
       ipfSeparable | ipfMultiline | ipfSmoothableMultiline,
-      4.5, 0.5f, false, ipTriangles, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_TRIANGLES, FillTriangles>() },
+      4.5, 0.5f, false, ipTriangles, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_TRIANGLES>() },
     { ipStars, "tri-hexagon", L("Tri-hexagon"), ipsSparse,
       ipfSeparable | ipfMultiline | ipfSmoothableMultiline,
-      4.5, 0.5f, true, ipTriangles, nullptr, optional_fill<ORCA_INFILL_TRIHEXAGON, ORCA_INFILL_LIBRARY_TRIHEXAGON, FillStars>() },
+      4.5, 0.5f, true, ipTriangles, nullptr, optional_fill<ORCA_INFILL_TRIHEXAGON, ORCA_INFILL_LIBRARY_TRIHEXAGON>() },
     { ipCubic, "cubic", L("Cubic"), ipsSparse,
       ipfSeparable | ipfMultiline | ipfSmoothableMultiline,
-      4.5, 0.5f, false, ipCubic, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_CUBIC, FillCubic>() },
+      4.5, 0.5f, false, ipCubic, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_CUBIC>() },
     { ipAdaptiveCubic, "adaptivecubic", L("Adaptive Cubic"), ipsSparse,
       ipfOctree | ipfMultiline,
-      4.5, 0.5f, false, ipAdaptiveCubic, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_ADAPTIVECUBIC, FillAdaptive::Filler>() },
+      4.5, 0.5f, false, ipAdaptiveCubic, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_ADAPTIVECUBIC>() },
     { ipQuarterCubic, "quartercubic", L("Quarter Cubic"), ipsSparse,
       ipfSeparable | ipfMultiline,
-      1., 0.5f, true, ipCubic, nullptr, optional_fill<ORCA_INFILL_QUARTERCUBIC, ORCA_INFILL_LIBRARY_QUARTERCUBIC, FillQuarterCubic>() },
+      1., 0.5f, true, ipCubic, nullptr, optional_fill<ORCA_INFILL_QUARTERCUBIC, ORCA_INFILL_LIBRARY_QUARTERCUBIC>() },
     { ipSupportCubic, "supportcubic", L("Support Cubic"), ipsSparse,
       ipfOctree | ipfMultiline,
-      4.5, 0.5f, true, ipAdaptiveCubic, nullptr, optional_fill<ORCA_INFILL_SUPPORTCUBIC, ORCA_INFILL_LIBRARY_SUPPORTCUBIC, FillAdaptive::Filler>() },
+      4.5, 0.5f, true, ipAdaptiveCubic, nullptr, optional_fill<ORCA_INFILL_SUPPORTCUBIC, ORCA_INFILL_LIBRARY_SUPPORTCUBIC>() },
     { ipLightning, "lightning", L("Lightning"), ipsSparse,
       ipfMultiline | ipfSmoothable,
-      4., 0.5f, false, ipLightning, lightning_options, builtin_fill<ORCA_INFILL_LIBRARY_LIGHTNING, FillLightning::Filler>() },
+      4., 0.5f, false, ipLightning, lightning_options, builtin_fill<ORCA_INFILL_LIBRARY_LIGHTNING>() },
     { ipHoneycomb, "honeycomb", L("Honeycomb"), ipsSparse,
       ipfSeparable | ipfMultiline | ipfSmoothable,
-      4., 1.5f, false, ipHoneycomb, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_HONEYCOMB, FillHoneycomb>() },
+      4., 1.5f, false, ipHoneycomb, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_HONEYCOMB>() },
     { ip3DHoneycomb, "3dhoneycomb", L("3D Honeycomb"), ipsSparse,
       ipfSeparable | ipfMultiline | ipfSmoothable,
-      1., 0.5f, false, ip3DHoneycomb, honeycomb_3d_options, builtin_fill<ORCA_INFILL_LIBRARY_3DHONEYCOMB, Fill3DHoneycomb>() },
+      1., 0.5f, false, ip3DHoneycomb, honeycomb_3d_options, builtin_fill<ORCA_INFILL_LIBRARY_3DHONEYCOMB>() },
     { ipLateralHoneycomb, "lateral-honeycomb", L("Lateral Honeycomb"), ipsSparse,
       ipfSeparable | ipfMultiline,
       1., 1.5f, true, ipHoneycomb, lateral_honeycomb_options,
-      optional_fill<ORCA_INFILL_LATERALHONEYCOMB, ORCA_INFILL_LIBRARY_LATERALHONEYCOMB, FillLateralHoneycomb>() },
+      optional_fill<ORCA_INFILL_LATERALHONEYCOMB, ORCA_INFILL_LIBRARY_LATERALHONEYCOMB>() },
     { ipLateralLattice, "lateral-lattice", L("Lateral Lattice"), ipsSparse,
       ipfSeparable | ipfMultiline,
       4., 1.5f, true, ipGrid, lateral_lattice_options,
-      optional_fill<ORCA_INFILL_LATERALLATTICE, ORCA_INFILL_LIBRARY_LATERALLATTICE, FillLateralLattice>() },
+      optional_fill<ORCA_INFILL_LATERALLATTICE, ORCA_INFILL_LIBRARY_LATERALLATTICE>() },
     { ipCrossHatch, "crosshatch", L("Cross Hatch"), ipsSparse,
       ipfSeparable | ipfMultiline | ipfSmoothable,
-      1., 0.5f, false, ipCrossHatch, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_CROSSHATCH, FillCrossHatch>() },
+      1., 0.5f, false, ipCrossHatch, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_CROSSHATCH>() },
     { ipTpmsD, "tpmsd", L("TPMS-D"), ipsSparse,
       ipfSeparable | ipfMultiline | ipfAdaptiveDensity,
-      1., 0.5f, true, ipGyroid, nullptr, optional_fill<ORCA_INFILL_TPMSD, ORCA_INFILL_LIBRARY_TPMSD, FillTpmsD>() },
+      1., 0.5f, true, ipGyroid, nullptr, optional_fill<ORCA_INFILL_TPMSD, ORCA_INFILL_LIBRARY_TPMSD>() },
     { ipTpmsFK, "tpmsfk", L("TPMS-FK"), ipsSparse,
       ipfSeparable | ipfMultiline | ipfAdaptiveDensity,
-      1., 0.5f, true, ipGyroid, nullptr, optional_fill<ORCA_INFILL_TPMSFK, ORCA_INFILL_LIBRARY_TPMSFK, FillTpmsFK>() },
+      1., 0.5f, true, ipGyroid, nullptr, optional_fill<ORCA_INFILL_TPMSFK, ORCA_INFILL_LIBRARY_TPMSFK>() },
     { ipGyroid, "gyroid", L("Gyroid"), ipsSparse,
       ipfSeparable | ipfMultiline | ipfAdaptiveDensity,
-      1., 0.5f, false, ipGyroid, gyroid_options, builtin_fill<ORCA_INFILL_LIBRARY_GYROID, FillGyroid>() },
+      1., 0.5f, false, ipGyroid, gyroid_options, builtin_fill<ORCA_INFILL_LIBRARY_GYROID>() },
     { ipConcentric, "concentric", L("Concentric"), ipsSparse | ipsSurface | ipsIroning,
       ipfMultiline | ipfSmoothable | ipfNoAnchors | ipfFillOrder | ipfArachne | ipfNoSort,
-      1., 0.5f, false, ipConcentric, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_CONCENTRIC, FillConcentric>() },
+      1., 0.5f, false, ipConcentric, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_CONCENTRIC>() },
     { ipSpiralInset, "spiralinset", L("Spiral Inset"), ipsSurface,
       ipfNoAnchors | ipfFillOrder | ipfArachne | ipfNoSort,
-      1., 0.5f, false, ipSpiralInset, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_SPIRALINSET, FillSpiralInset>() },
+      1., 0.5f, false, ipSpiralInset, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_SPIRALINSET>() },
     { ipHilbertCurve, "hilbertcurve", L("Hilbert Curve"), ipsSparse | ipsSurface,
       ipfSeparable | ipfMultiline | ipfSmoothable | ipfNoSurfaceRetract | ipfCurvedBridgeAnchors,
-      1., 0.5f, true, ipRectilinear, nullptr, optional_fill<ORCA_INFILL_HILBERTCURVE, ORCA_INFILL_LIBRARY_HILBERTCURVE, FillHilbertCurve>() },
+      1., 0.5f, true, ipRectilinear, nullptr, optional_fill<ORCA_INFILL_HILBERTCURVE, ORCA_INFILL_LIBRARY_HILBERTCURVE>() },
     { ipArchimedeanChords, "archimedeanchords", L("Archimedean Chords"), ipsSparse | ipsSurface,
       ipfSeparable | ipfMultiline | ipfFillOrder | ipfCenteredSurface,
-      1., 0.5f, false, ipArchimedeanChords, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_ARCHIMEDEANCHORDS, FillArchimedeanChords>() },
+      1., 0.5f, false, ipArchimedeanChords, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_ARCHIMEDEANCHORDS>() },
     { ipOctagramSpiral, "octagramspiral", L("Octagram Spiral"), ipsSparse | ipsSurface,
       ipfSeparable | ipfMultiline | ipfSmoothable | ipfFillOrder | ipfCenteredSurface | ipfCurvedBridgeAnchors,
-      1., 0.5f, true, ipArchimedeanChords, nullptr, optional_fill<ORCA_INFILL_OCTAGRAMSPIRAL, ORCA_INFILL_LIBRARY_OCTAGRAMSPIRAL, FillOctagramSpiral>() },
+      1., 0.5f, true, ipArchimedeanChords, nullptr, optional_fill<ORCA_INFILL_OCTAGRAMSPIRAL, ORCA_INFILL_LIBRARY_OCTAGRAMSPIRAL>() },
     // Used by the slicer only: support base, and narrow internal solid areas.
     { ipSupportBase, nullptr, nullptr, 0, 0,
-      1., 0.5f, false, ipSupportBase, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_SUPPORTBASE, FillSupportBase>() },
+      1., 0.5f, false, ipSupportBase, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_SUPPORTBASE>() },
     { ipConcentricInternal, nullptr, nullptr, 0, ipfArachne | ipfNoSort,
-      1., 0.5f, false, ipConcentricInternal, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_CONCENTRICINTERNAL, FillConcentricInternal>() },
+      1., 0.5f, false, ipConcentricInternal, nullptr, builtin_fill<ORCA_INFILL_LIBRARY_CONCENTRICINTERNAL>() },
 }};
 
 // The descriptor of a value that names no pattern: void area factor 1, combine clearance factor 0.5.

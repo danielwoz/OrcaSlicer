@@ -10,8 +10,6 @@
 #include "Geometry.hpp"
 #include "CommonDefs.hpp"
 #include "PrintBase.hpp"
-#include "Fill/FillAdaptive.hpp"
-#include "Fill/AdaptiveInfillField.hpp"
 #include "Fill/InfillObjectState.hpp"
 
 #include "BoundingBox.hpp"
@@ -89,12 +87,6 @@ enum SupportNecessaryType {
     SharpTail,
     Cantilever,
     LargeOverhang,
-};
-
-namespace FillAdaptive {
-    struct Octree;
-    struct OctreeDeleter;
-    using OctreePtr = std::unique_ptr<Octree, OctreeDeleter>;
 };
 
 // Print step IDs for keeping track of the print state.
@@ -401,8 +393,6 @@ public:
     double                      max_z() const         { return m_max_z; }
     // Centering offset of the sliced mesh from the scaled and rotated mesh of the model.
     const Point& 			     center_offset() const  { return m_center_offset; }
-    // The adaptive infill field of mode for the Fill classes compiled into libslic3r.
-    const AdaptiveInfillField*       adaptive_infill_field(AdaptiveInfillMode mode) const { return m_adaptive_infill_fields[size_t(mode)].get(); }
     // The object states of the rows served by pattern libraries (Fill::object_state).
     const InfillObjectStates&        infill_states() const { return m_infill_states; }
 
@@ -702,7 +692,6 @@ private:
     bool                    				m_typed_slices = false;
 
     std::vector<BoundingBox>                m_separated_body_bboxes;
-    AdaptiveInfillFields m_adaptive_infill_fields;
     InfillObjectStates   m_infill_states;
 
     std::vector < VolumeSlices >            firstLayerObjSliceByVolume;
