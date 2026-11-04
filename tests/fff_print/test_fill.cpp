@@ -40,11 +40,8 @@
 #include "libslic3r/Fill/FillAdaptive.hpp"
 #include "libslic3r/Fill/FillGyroid.hpp"
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
-#include "libslic3r/Fill/Fill3DHoneycomb.hpp"
-#include "libslic3r/Fill/FillHoneycomb.hpp"
 #include "libslic3r/Fill/FillLibrary.hpp"
 #include "libslic3r/Fill/FillLightning.hpp"
-#include "libslic3r/Fill/FillPlanePath.hpp"
 #include "libslic3r/Fill/FillTpmsD.hpp"
 #include "libslic3r/Fill/FillTpmsFK.hpp"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
@@ -2543,8 +2540,6 @@ TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]
         {ipAdaptiveCubic, typeid(FillAdaptive::Filler)},
         {ipSupportCubic, typeid(FillAdaptive::Filler)},
         {ipLightning, typeid(FillLightning::Filler)},
-        {ipHoneycomb, typeid(FillHoneycomb)},
-        {ip3DHoneycomb, typeid(Fill3DHoneycomb)},
         // The type information of these classes is emitted with their first virtual function, in a file a build may
         // leave out.
 #if ORCA_INFILL_TPMSD
@@ -2553,10 +2548,7 @@ TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]
 #if ORCA_INFILL_TPMSFK
         {ipTpmsFK, typeid(FillTpmsFK)},
 #endif
-        {ipGyroid, typeid(FillGyroid)},
-        {ipHilbertCurve, typeid(FillHilbertCurve)},
-        {ipArchimedeanChords, typeid(FillArchimedeanChords)},
-        {ipOctagramSpiral, typeid(FillOctagramSpiral)}};
+        {ipGyroid, typeid(FillGyroid)}};
 
     auto filler_class = [](Fill *created) {
         const std::unique_ptr<Fill> filler(created);

@@ -1,6 +1,7 @@
 // The built-in pattern libraries against the Fill classes they carry: on every case of the corpus of a row a library
 // serves, the filler of the row (Fill::new_from_type(), which runs in the library) returns what the class itself
-// returns, bit for bit, under both scaling factors and when the cases run in any order on several threads at once.
+// returns, bit for bit, under both scaling factors, when the cases run in any order on several threads at once, and
+// when one filler runs every case of its row in turn.
 // This file is compiled with ORCA_INFILL_PATTERN_MODULE=0, so that it can link an entry of its own (PatternEntry.hpp).
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -164,6 +165,45 @@ TEST_CASE("Pattern libraries reproduce the Fill classes they carry", "[InfillPat
     for (const InfillPatternLibraryRow &row : InfillPatternRegistry::library_rows()) {
         CAPTURE(row.name);
         CHECK(per_row[row.pattern] > 0);
+    }
+}
+
+TEST_CASE("Pattern library fillers keep their state between calls", "[InfillPatterns][BuiltinEquivalence]")
+{
+    // The slicer reuses a filler: make_fills() for every island of a surface fill, the supports for every layer one
+    // thread fills, ironing for every region of a layer. A library holds one instance of the class per filler, so that
+    // what an instance keeps from one call to the next carries over as in the class.
+    ScalingFactorGuard guard;
+    set_scaling_factor(SCALING_FACTOR_INTERNAL);
+    // Runs c on the reused native and library fillers, checks that they agree and returns the output of the class.
+    auto reuse = [](const Case &c, Fill &native, Fill &served) {
+        CAPTURE(c.name);
+        apply_members(c, native);
+        apply_members(c, served);
+        Output expected = run(c, native);
+        CHECK(difference(c, expected, run(c, served)).empty());
+        return expected;
+    };
+    for (const InfillPatternLibraryRow &row : InfillPatternRegistry::library_rows()) {
+        CAPTURE(row.name);
+        const std::unique_ptr<Fill> native = native_filler(row.pattern), served(Fill::new_from_type(row.pattern));
+        for (const Case &c : cases())
+            if (c.pattern == row.pattern && c.scaling_factor == SCALING_FACTOR_INTERNAL)
+                reuse(c, *native, *served);
+    }
+
+    // Honeycomb caches its cell by density and spacing only, so a call with two lines per cell side after one with a
+    // single line reuses the cell of the first call.
+    if (InfillPatternRegistry::bound(ipHoneycomb)) {
+        const Case &one = *std::find_if(cases().begin(), cases().end(),
+                                        [](const Case &c) { return c.name == "honeycomb/base"; });
+        Case two = one;
+        two.params.multiline = 2;
+        const std::unique_ptr<Fill> native = native_filler(ipHoneycomb), served(Fill::new_from_type(ipHoneycomb));
+        reuse(one, *native, *served);
+        const Output reused = reuse(two, *native, *served);
+        // A filler of its own computes the cell of two lines.
+        CHECK(! difference(two, run_native(two), reused).empty());
     }
 }
 
