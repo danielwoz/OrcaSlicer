@@ -20,7 +20,8 @@ get_property(_runtime_dir GLOBAL PROPERTY ORCA_INFILL_RUNTIME_DIR)
 set_source_files_properties(test_builtin_equivalence.cpp PROPERTIES COMPILE_DEFINITIONS ORCA_INFILL_PATTERN_MODULE=0
                                                                      INCLUDE_DIRECTORIES "${_runtime_dir}")
 orca_use_infill_build_id(${_TEST_NAME}_tests)
-# The entries of the libraries linked into the executable, as ORCA_INFILL_PATTERN_LINKAGE=STATIC links them.
+# The entries of the libraries linked into the executable, as ORCA_INFILL_PATTERN_LINKAGE=STATIC links them, and the
+# pattern objects, whose Fill classes are the reference of the libraries.
 orca_link_builtin_infill_patterns(${_TEST_NAME}_tests)
 target_link_libraries(${_TEST_NAME}_tests test_common libslic3r Catch2::Catch2WithMain)
 

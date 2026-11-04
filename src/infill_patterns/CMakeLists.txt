@@ -100,8 +100,9 @@ if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "MODULE")
 endif ()
 
 # The entry of every library once more, under a name of its own and linked into an executable, with the table the
-# loader binds them from (runtime/LinkedLibraries.cpp). With ORCA_INFILL_PATTERN_LINKAGE=STATIC libslic3r links it in
-# place of the files; otherwise orca_link_builtin_infill_patterns() links it into the tools that ship as a single file.
+# loader binds them from (runtime/LinkedLibraries.cpp). With ORCA_INFILL_PATTERN_LINKAGE=STATIC libslic3r links it and
+# the pattern objects in place of the files; otherwise orca_link_builtin_infill_patterns() links them into the tools
+# that ship as a single file.
 add_library(orca_infill_patterns_linked OBJECT runtime/LinkedLibraries.cpp runtime/PatternEntry.hpp)
 target_link_libraries(orca_infill_patterns_linked PRIVATE libslic3r_compile_settings)
 target_compile_definitions(orca_infill_patterns_linked PRIVATE ORCA_INFILL_PATTERN_MODULE=0)
@@ -237,22 +238,37 @@ foreach (_row IN LISTS ORCA_INFILL_ROWS)
 endforeach ()
 set_property(GLOBAL PROPERTY ORCA_INFILL_PATTERN_FILES "${_files}")
 
-# Builds the pattern libraries; with ORCA_INFILL_PATTERN_LINKAGE=STATIC there are none, and libslic3r links the entries.
+# Builds the pattern libraries; with ORCA_INFILL_PATTERN_LINKAGE=STATIC there are none, and libslic3r links the entries
+# and the pattern objects (src/libslic3r/CMakeLists.txt).
 get_property(_targets GLOBAL PROPERTY ORCA_INFILL_PATTERN_TARGETS)
 add_custom_target(orca_infill_patterns)
 if (_targets)
     add_dependencies(orca_infill_patterns ${_targets})
 endif ()
 if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "STATIC")
-    target_link_libraries(libslic3r PRIVATE orca_infill_patterns_linked)
+    get_property(_objects GLOBAL PROPERTY ORCA_INFILL_PATTERN_OBJECTS)
+    target_link_libraries(libslic3r PRIVATE orca_infill_patterns_linked ${_objects})
 endif ()
 
-# Links the entries of the pattern libraries into target, an executable that ships without the library files and binds
-# them with bind_builtin_infill_patterns(linked_builtin_infill_patterns()) (Fill/InfillPatternLibraries.hpp).
+# Links the pattern objects into target, which runs the Fill classes of the rows itself, as the tests do that compare
+# the libraries with them or test the classes. With ORCA_INFILL_PATTERN_LINKAGE=STATIC libslic3r holds them already.
 # The objects are added as sources, so that the target may use either signature of target_link_libraries().
+function(orca_link_infill_pattern_objects target)
+    if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "MODULE")
+        get_property(_objects GLOBAL PROPERTY ORCA_INFILL_PATTERN_OBJECTS)
+        foreach (_object IN LISTS _objects)
+            target_sources(${target} PRIVATE $<TARGET_OBJECTS:${_object}>)
+        endforeach ()
+    endif ()
+endfunction()
+
+# Links the entries of the pattern libraries and the pattern objects into target, an executable that ships without the
+# library files and binds them with bind_builtin_infill_patterns(linked_builtin_infill_patterns())
+# (Fill/InfillPatternLibraries.hpp).
 function(orca_link_builtin_infill_patterns target)
     if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "MODULE")
         target_sources(${target} PRIVATE $<TARGET_OBJECTS:orca_infill_patterns_linked>)
+        orca_link_infill_pattern_objects(${target})
     endif ()
 endfunction()
 
