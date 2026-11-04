@@ -21,6 +21,7 @@ class Generator;
 struct GeneratorDeleter { void operator()(Generator *p); };
 using  GeneratorPtr = std::unique_ptr<Generator, GeneratorDeleter>;
 
+// The generator of the lightning infill of print_object (Fill/LightningParams.cpp).
 GeneratorPtr build_generator(const PrintObject &print_object, const std::function<void()> &throw_on_cancel_callback);
 
 class Filler : public Slic3r::Fill

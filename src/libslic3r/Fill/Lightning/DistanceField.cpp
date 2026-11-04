@@ -4,6 +4,7 @@
 #include "DistanceField.hpp" //Class we're implementing.
 #include "../FillRectilinear.hpp"
 #include "../../ClipperUtils.hpp"
+#include "../../ParallelFor.hpp"
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Polygon.hpp"
 #include "libslic3r/BoundingBox.hpp"
@@ -18,7 +19,6 @@
 #include <cmath>
 #include <cassert>
 #include <cstdlib>
-#include <tbb/parallel_for.h>
 #include <utility>
 
 #ifdef LIGHTNING_DISTANCE_FIELD_DEBUG_OUTPUT
@@ -63,8 +63,8 @@ DistanceField::DistanceField(const coord_t& radius, const Polygons& current_outl
         const size_t unsupported_points_prev_size = m_unsupported_points.size();
         m_unsupported_points.resize(unsupported_points_prev_size + sampled_points.size());
 
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, sampled_points.size()), [&self = *this, &expoly = std::as_const(expoly), &sampled_points = std::as_const(sampled_points), &unsupported_points_prev_size = std::as_const(unsupported_points_prev_size)](const tbb::blocked_range<size_t> &range) -> void {
-            for (size_t sp_idx = range.begin(); sp_idx < range.end(); ++sp_idx) {
+        parallel_for(0, int64_t(sampled_points.size()), 1, [&self = *this, &expoly = std::as_const(expoly), &sampled_points = std::as_const(sampled_points), &unsupported_points_prev_size = std::as_const(unsupported_points_prev_size)](int64_t begin, int64_t end) -> void {
+            for (size_t sp_idx = size_t(begin); sp_idx < size_t(end); ++sp_idx) {
                 const Point &sp = sampled_points[sp_idx];
                 // Find a squared distance to the source expolygon boundary.
                 double d2 = std::numeric_limits<double>::max();
