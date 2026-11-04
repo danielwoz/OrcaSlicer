@@ -342,6 +342,8 @@ namespace ClipperUtils {
         std::vector<size_t> members;
     };
     [[nodiscard]] std::vector<ExPolygonsTile> tile_expolygons(const ExPolygons &expolygons, size_t per_tile);
+    // The ExPolygons Clipper makes of clipType applied to subject and clip, as diff_ex() and intersection_ex() do.
+    [[nodiscard]] ExPolygons clip_ex(ClipType clipType, const ExPolygons &subject, const Polygons &clip, ApplySafetyOffset do_safety_offset);
 
     // A grid point strictly inside the polygon, or none if the polygon is at most a few units thick everywhere.
     // Decides on which side of another path a path lies when every one of its vertices touches that path.

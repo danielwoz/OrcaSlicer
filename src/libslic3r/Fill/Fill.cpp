@@ -1397,17 +1397,7 @@ void Layer::make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLigh
         f->adaptive_infill_field   = this->object()->adaptive_infill_field(surface_fill.params.adaptive_infill_mode);
         f->print_config        = &this->object()->print()->config();
         f->print_object_config = &this->object()->config();
-		if (surface_fill.params.pattern == ipConcentricInternal) {
-            FillConcentricInternal *fill_concentric = dynamic_cast<FillConcentricInternal *>(f.get());
-            assert(fill_concentric != nullptr);
-            fill_concentric->print_config        = &this->object()->print()->config();
-            fill_concentric->print_object_config = &this->object()->config();
-        } else if (surface_fill.params.pattern == ipConcentric) {
-            FillConcentric *fill_concentric = dynamic_cast<FillConcentric *>(f.get());
-            assert(fill_concentric != nullptr);
-            fill_concentric->print_config = &this->object()->print()->config();
-            fill_concentric->print_object_config = &this->object()->config();
-        } else if (surface_fill.params.pattern == ipLightning)
+        if (surface_fill.params.pattern == ipLightning)
             dynamic_cast<FillLightning::Filler*>(f.get())->generator = lightning_generator;
         // calculate flow spacing for infill pattern generation
         bool using_internal_flow = ! surface_fill.surface.is_solid() && ! surface_fill.params.bridge;
