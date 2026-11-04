@@ -94,6 +94,8 @@ add_subdirectory(slic3rutils)
 add_subdirectory(fff_print)
 # Loads infill pattern plugins, which extend process-wide option lists; kept apart from the other suites.
 add_subdirectory(infill_plugin)
+# Runs every built-in infill pattern on a shared corpus of filler calls.
+add_subdirectory(infill_patterns)
 add_subdirectory(sla_print)
 add_subdirectory(filament_group)
 
