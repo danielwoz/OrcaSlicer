@@ -149,6 +149,25 @@ template<class T> T read(const T &source)
 
 orca_infill_path path_view(const Points &points) { return { view(points), points.size() }; }
 
+// Views of expolygons whose holes are appended to holes, and the expolygons to regions; both have the capacity.
+orca_infill_region region_view(const ExPolygon &expolygon, std::vector<orca_infill_path> &holes)
+{
+    assert(holes.size() + expolygon.holes.size() <= holes.capacity());
+    const size_t first = holes.size();
+    for (const Polygon &hole : expolygon.holes)
+        holes.push_back(path_view(hole.points));
+    return { path_view(expolygon.contour.points), expolygon.holes.empty() ? nullptr : holes.data() + first, expolygon.holes.size() };
+}
+
+orca_infill_regions regions_view(const ExPolygons &expolygons, std::vector<orca_infill_path> &holes, std::vector<orca_infill_region> &regions)
+{
+    assert(regions.size() + expolygons.size() <= regions.capacity());
+    const size_t first = regions.size();
+    for (const ExPolygon &expolygon : expolygons)
+        regions.push_back(region_view(expolygon, holes));
+    return { expolygons.empty() ? nullptr : regions.data() + first, expolygons.size() };
+}
+
 orca_infill_bbox to_c(const BoundingBox &bbox) { return { { bbox.min.x(), bbox.min.y() }, { bbox.max.x(), bbox.max.y() } }; }
 
 float key(const orca_infill_density_regions &entry) { return entry.density; }
@@ -284,22 +303,32 @@ Request::Request(int32_t call, const Surface &surface, const FillParams &params,
     m_request = { sizeof(m_request), call, SCALING_FACTOR, &m_surface, &m_params, &m_fill, lock != nullptr ? &m_lock : nullptr };
 }
 
-orca_infill_region Request::view(const ExPolygon &expolygon)
+orca_infill_region Request::view(const ExPolygon &expolygon) { return region_view(expolygon, m_holes); }
+
+orca_infill_regions Request::view(const ExPolygons &expolygons) { return regions_view(expolygons, m_holes, m_regions); }
+
+FieldInput::FieldInput(const std::vector<AdaptiveInfillField::Slice> &slices, const BoundingBox &bbox)
 {
-    assert(m_holes.size() + expolygon.holes.size() <= m_holes.capacity());
-    const size_t first = m_holes.size();
-    for (const Polygon &hole : expolygon.holes)
-        m_holes.push_back(path_view(hole.points));
-    return { path_view(expolygon.contour.points), expolygon.holes.empty() ? nullptr : m_holes.data() + first, expolygon.holes.size() };
+    size_t holes = 0, regions = 0;
+    for (const AdaptiveInfillField::Slice &slice : slices) {
+        regions += slice.expolygons->size();
+        for (const ExPolygon &expolygon : *slice.expolygons)
+            holes += expolygon.holes.size();
+    }
+    m_holes.reserve(holes);
+    m_regions.reserve(regions);
+    m_slices.reserve(slices.size());
+    for (const AdaptiveInfillField::Slice &slice : slices)
+        m_slices.push_back({ slice.bottom_z, slice.top_z, regions_view(*slice.expolygons, m_holes, m_regions) });
+    m_input = { sizeof(m_input), m_slices.empty() ? nullptr : m_slices.data(), m_slices.size(), to_c(bbox), uint8_t(bbox.defined),
+                ORCA_INFILL_ADAPTIVE_DISABLED };
 }
 
-orca_infill_regions Request::view(const ExPolygons &expolygons)
+orca_infill_field_input FieldInput::get(AdaptiveInfillMode mode) const
 {
-    assert(m_regions.size() + expolygons.size() <= m_regions.capacity());
-    const size_t first = m_regions.size();
-    for (const ExPolygon &expolygon : expolygons)
-        m_regions.push_back(this->view(expolygon));
-    return { expolygons.empty() ? nullptr : m_regions.data() + first, expolygons.size() };
+    orca_infill_field_input out = m_input;
+    out.mode                    = int32_t(mode);
+    return out;
 }
 
 // ---- Library side ----
@@ -420,6 +449,25 @@ void apply_fill_state(const orca_infill_fill_state &source, Fill &fill)
     fill.calib_flowrate_topinfill_special_order = f.calib_flowrate_topinfill_special_order != 0;
     fill.no_overlap_expolygons                  = to_expolygons(f.no_overlap);
     fill.dont_alternate_fill_direction          = f.dont_alternate_fill_direction != 0;
+}
+
+void* to_state(const orca_infill_fill_state &state) { return read(state).state; }
+
+FieldSlices to_field_slices(const orca_infill_field_input &source)
+{
+    const orca_infill_field_input input = read(source);
+    FieldSlices out;
+    out.expolygons.reserve(input.slice_count);
+    for (size_t i = 0; i < input.slice_count; ++ i)
+        out.expolygons.emplace_back(to_expolygons(input.slices[i].lslices));
+    out.slices.reserve(input.slice_count);
+    for (size_t i = 0; i < input.slice_count; ++ i)
+        out.slices.push_back({ input.slices[i].bottom_z, input.slices[i].print_z, &out.expolygons[i] });
+    out.bbox.min     = Point(input.bbox.min.x, input.bbox.min.y);
+    out.bbox.max     = Point(input.bbox.max.x, input.bbox.max.y);
+    out.bbox.defined = input.bbox_defined != 0;
+    out.mode         = AdaptiveInfillMode(input.mode);
+    return out;
 }
 
 LockRegionParam to_lock_region_param(const orca_infill_lock &source)

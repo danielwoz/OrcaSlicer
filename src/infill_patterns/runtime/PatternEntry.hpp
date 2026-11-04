@@ -11,11 +11,14 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <functional>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
+#include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
 #include "libslic3r/Fill/Library/BuiltinMirror.hpp"
 #include "libslic3r/Fill/Library/orca_infill_builtin.h"
@@ -24,6 +27,9 @@
 
 namespace Slic3r {
 namespace PatternLibrary {
+
+// Thrown in a library when the host cancels the job of prepare_state(), which then returns ORCA_INFILL_ERR_CANCELED.
+struct JobCanceled {};
 
 #if ORCA_INFILL_PATTERN_MODULE
 // Routes the log and the parallel loops of this library to host (ModuleSeams.cpp).
@@ -44,6 +50,42 @@ private:
 };
 #endif
 
+// The object state of the rows whose library prepares the kinds Kinds, (1u << ORCA_INFILL_STATE_*) for each:
+//   using Type;                                  the state
+//   static orca_infill_status prepare(int32_t kind, const void *data, const std::function<void()> &throw_if_canceled,
+//                                     std::unique_ptr<Type> &state);
+//                                                builds the state of the input data of kind; leaves it null when there is
+//                                                nothing to build. throw_if_canceled throws JobCanceled.
+//   static void attach(Fill &filler, const Type *state);
+//                                                gives the state, or null, to the member of the filler that reads it
+//   static constexpr uint32_t queries;           (1u << ORCA_INFILL_QUERY_*) for each query query_state() answers, and,
+//                                                when there are any,
+//   static orca_infill_status query(const Type &state, const orca_infill_state_query &query, Polylines &lines);
+template<uint32_t Kinds> struct ObjectState;
+
+// The adaptive infill field of the TPMS rows. An empty field is no state, so that the filler lays its regular pattern.
+template<> struct ObjectState<1u << ORCA_INFILL_STATE_ADAPTIVE_FIELD>
+{
+    using Type = AdaptiveInfillField;
+    static constexpr uint32_t queries = 0;
+
+    static orca_infill_status prepare(int32_t, const void *data, const std::function<void()> &throw_if_canceled,
+                                      std::unique_ptr<Type> &state)
+    {
+        const BuiltinMirror::FieldSlices field = BuiltinMirror::to_field_slices(*static_cast<const orca_infill_field_input*>(data));
+        if (field.mode <= AdaptiveInfillMode::Disabled || field.mode >= AdaptiveInfillMode::Count)
+            return ORCA_INFILL_ERR_INVALID;
+        if (field.slices.empty() || ! field.bbox.defined)
+            return ORCA_INFILL_OK;
+        state = std::make_unique<Type>(field.slices, field.bbox, field.mode, throw_if_canceled);
+        if (state->empty())
+            state.reset();
+        return ORCA_INFILL_OK;
+    }
+
+    static void attach(Fill &filler, const Type *state) { filler.adaptive_infill_field = state; }
+};
+
 // Row describes the row, as entry.cpp.in declares it:
 //   using Filler;                                the Fill class of the row
 //   static constexpr int32_t     pattern;        its InfillPattern value
@@ -52,7 +94,8 @@ private:
 //   static constexpr const char *build_id;       ORCA_INFILL_BUILD_ID
 //   static constexpr uint32_t    calls;          (1u << ORCA_INFILL_CALL_*) for each call run() accepts
 //   static constexpr uint32_t    traits;         ORCA_INFILL_TRAIT_*
-//   static constexpr uint32_t    state_kinds;    (1u << ORCA_INFILL_STATE_*) for each state prepare_state() builds
+//   static constexpr uint32_t    state_kinds;    (1u << ORCA_INFILL_STATE_*) for each state prepare_state() builds;
+//                                                ObjectState<state_kinds> describes them
 template<class Row>
 class PatternEntry
 {
@@ -86,7 +129,9 @@ private:
                   "concentric_internal_lines()");
     static constexpr bool locked_zag          = (Row::calls & (1u << ORCA_INFILL_CALL_LOCKED_ZAG)) != 0;
     static constexpr bool concentric_internal = (Row::calls & (1u << ORCA_INFILL_CALL_CONCENTRIC_INTERNAL)) != 0;
-    static_assert(Row::state_kinds == 0, "PatternEntry prepares no object state");
+
+    static constexpr bool has_state = Row::state_kinds != 0;
+    using State                     = ObjectState<Row::state_kinds>;
 
     static void ORCA_INFILL_CALL set_scaling_factor(double scaling_factor) noexcept { SCALING_FACTOR = scaling_factor; }
 
@@ -122,6 +167,8 @@ private:
             const Surface    surface = BuiltinMirror::to_surface(*request->surface);
             const FillParams params  = BuiltinMirror::to_fill_params(*request->params);
             BuiltinMirror::apply_fill_state(*request->fill, filler);
+            if constexpr (has_state)
+                State::attach(filler, static_cast<const typename State::Type*>(BuiltinMirror::to_state(*request->fill)));
             if (request->lock != nullptr)
                 filler.set_lock_region_param(BuiltinMirror::to_lock_region_param(*request->lock));
             if (request->call == ORCA_INFILL_CALL_FILL_SURFACE) {
@@ -165,6 +212,91 @@ private:
         } catch (...) {
             return ORCA_INFILL_ERR_EXCEPTION;
         }
+    }
+
+    static orca_infill_status ORCA_INFILL_CALL prepare_state(int32_t pattern, const orca_infill_state_input *input, orca_infill_job *job,
+                                                             void **state) noexcept
+    {
+        const orca_infill_builtin_host *host = s_host;
+        if (state == nullptr)
+            return ORCA_INFILL_ERR_INVALID;
+        *state = nullptr;
+        if (host == nullptr || pattern != Row::pattern || input == nullptr || input->struct_size < sizeof(orca_infill_state_input) ||
+            input->kind < 0 || input->kind >= 32 || (Row::state_kinds & (1u << input->kind)) == 0 || input->data == nullptr)
+            return ORCA_INFILL_ERR_INVALID;
+        try {
+#if ORCA_INFILL_PATTERN_MODULE
+            CurrentJob scope(job);
+#endif
+            std::unique_ptr<typename State::Type> built;
+            const orca_infill_status status = State::prepare(input->kind, input->data, [host, job] {
+                if (host->is_canceled(job) != 0)
+                    throw JobCanceled();
+            }, built);
+            *state = built.release();
+            return status;
+        } catch (const JobCanceled &) {
+            return ORCA_INFILL_ERR_CANCELED;
+        } catch (const std::bad_alloc &) {
+            return ORCA_INFILL_ERR_NOMEM;
+        } catch (const std::exception &ex) {
+            // prepare_state() has no sink: the host takes the message of the failure from this line.
+            if (host->log != nullptr)
+                host->log(ORCA_INFILL_LOG_ERROR, ex.what());
+            return ORCA_INFILL_ERR_EXCEPTION;
+        } catch (...) {
+            return ORCA_INFILL_ERR_EXCEPTION;
+        }
+    }
+
+    static void ORCA_INFILL_CALL release_state(void *state) noexcept { delete static_cast<typename State::Type*>(state); }
+
+    static orca_infill_status ORCA_INFILL_CALL query_state(void *state, const orca_infill_state_query *query, orca_infill_sink *sink) noexcept
+    {
+        const orca_infill_builtin_host *host = s_host;
+        if (host == nullptr || state == nullptr || query == nullptr || sink == nullptr || query->struct_size < sizeof(orca_infill_state_query) ||
+            query->kind < 0 || query->kind >= 32 || (State::queries & (1u << query->kind)) == 0)
+            return ORCA_INFILL_ERR_INVALID;
+        try {
+            Polylines lines;
+            if (orca_infill_status status = State::query(*static_cast<const typename State::Type*>(state), *query, lines);
+                status != ORCA_INFILL_OK)
+                return status;
+            return emit(host, sink, lines);
+        } catch (const std::bad_alloc &) {
+            return ORCA_INFILL_ERR_NOMEM;
+        } catch (const std::exception &ex) {
+            host->set_error(sink, ex.what());
+            return ORCA_INFILL_ERR_EXCEPTION;
+        } catch (...) {
+            return ORCA_INFILL_ERR_EXCEPTION;
+        }
+    }
+
+    // The object state functions of the library, null without states, and query_state() also without queries.
+    static constexpr auto prepare_state_function()
+    {
+        if constexpr (has_state)
+            return &prepare_state;
+        else
+            return decltype(&prepare_state)(nullptr);
+    }
+    static constexpr auto release_state_function()
+    {
+        if constexpr (has_state)
+            return &release_state;
+        else
+            return decltype(&release_state)(nullptr);
+    }
+    static constexpr auto query_state_function()
+    {
+        if constexpr (has_state) {
+            if constexpr (State::queries != 0)
+                return &query_state;
+            else
+                return decltype(&query_state)(nullptr);
+        } else
+            return decltype(&query_state)(nullptr);
     }
 
     static orca_infill_status emit(const orca_infill_builtin_host *host, orca_infill_sink *sink, const Polylines &lines)
@@ -225,9 +357,9 @@ private:
         &create,
         &destroy,
         &run,
-        nullptr, // prepare_state
-        nullptr, // release_state
-        nullptr, // query_state
+        prepare_state_function(),
+        release_state_function(),
+        query_state_function(),
     };
 };
 

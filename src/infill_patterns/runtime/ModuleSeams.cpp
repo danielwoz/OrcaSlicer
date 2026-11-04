@@ -17,7 +17,6 @@
 #include "libslic3r/Fill/FillBase.hpp"
 #include "libslic3r/Fill/Library/KitLog.hpp"
 #include "libslic3r/ParallelFor.hpp"
-#include "libslic3r/PrintBase.hpp"
 
 namespace Slic3r {
 
@@ -69,7 +68,7 @@ template<class Body> struct Trampoline
         if (error)
             std::rethrow_exception(error);
         if (status == ORCA_INFILL_ERR_CANCELED)
-            throw CanceledException();
+            throw PatternLibrary::JobCanceled();
         if (status == ORCA_INFILL_ERR_NOMEM)
             throw std::bad_alloc();
         if (status != ORCA_INFILL_OK)

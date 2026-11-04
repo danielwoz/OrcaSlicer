@@ -10,6 +10,7 @@
 
 #include "orca_infill_builtin.h"
 
+#include "../AdaptiveInfillField.hpp"
 #include "../FillBase.hpp"
 #include "../../Surface.hpp"
 
@@ -47,6 +48,26 @@ private:
     std::vector<orca_infill_flow_regions>    m_flows;     // skeleton, then skin
 };
 
+// The C input of the adaptive infill fields over slices (ORCA_INFILL_STATE_ADAPTIVE_FIELD). It points into the slices,
+// which must outlive it unchanged.
+class FieldInput
+{
+public:
+    FieldInput(const std::vector<AdaptiveInfillField::Slice> &slices, const BoundingBox &bbox);
+    FieldInput(const FieldInput &) = delete;
+    FieldInput& operator=(const FieldInput &) = delete;
+
+    // The input of the field of mode.
+    orca_infill_field_input get(AdaptiveInfillMode mode) const;
+
+private:
+    // Reserved to their final size before the first view is taken, so that no view moves.
+    std::vector<orca_infill_path>        m_holes;
+    std::vector<orca_infill_region>      m_regions;
+    std::vector<orca_infill_field_slice> m_slices;
+    orca_infill_field_input              m_input {};
+};
+
 // The points as a C array; nothing is copied.
 const orca_infill_point* view(const Points &points);
 // The thick polyline as a C path pointing into it.
@@ -68,7 +89,19 @@ FillParams      to_fill_params(const orca_infill_fill_params &params);
 // members, object_state included, become null; the library attaches the state of state.state to the member its pattern
 // reads.
 void            apply_fill_state(const orca_infill_fill_state &state, Fill &fill);
+// The object state of the call: from prepare_state() of the library, or null.
+void*           to_state(const orca_infill_fill_state &state);
 LockRegionParam to_lock_region_param(const orca_infill_lock &lock);
+
+// The slices, box and mode of an adaptive infill field. The slices point into expolygons, so it is moved, never copied.
+struct FieldSlices
+{
+    std::vector<ExPolygons>                 expolygons;
+    std::vector<AdaptiveInfillField::Slice> slices;
+    BoundingBox                             bbox;
+    AdaptiveInfillMode                      mode;
+};
+FieldSlices     to_field_slices(const orca_infill_field_input &input);
 
 } // namespace BuiltinMirror
 } // namespace Slic3r

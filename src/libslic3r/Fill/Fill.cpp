@@ -1403,6 +1403,8 @@ void Layer::make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLigh
         f->fixed_angle = surface_fill.params.fixed_angle;
         const FillAdaptive::Octrees *octrees = fill_octrees ? fill_octrees->region(surface_fill.region_id) : nullptr;
         f->adaptive_infill_field   = this->object()->adaptive_infill_field(surface_fill.params.adaptive_infill_mode);
+        f->object_state            = this->object()->infill_states().field(sliced_infill_pattern(surface_fill.params.pattern).id,
+                                                                           surface_fill.params.adaptive_infill_mode);
         f->print_config        = &this->object()->print()->config();
         f->print_object_config = &this->object()->config();
         set_config_values(*f);
@@ -1599,6 +1601,8 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const FillAdapti
         f->fixed_angle = surface_fill.params.fixed_angle;
         const FillAdaptive::Octrees *octrees = fill_octrees ? fill_octrees->region(surface_fill.region_id) : nullptr;
         f->adaptive_infill_field   = this->object()->adaptive_infill_field(surface_fill.params.adaptive_infill_mode);
+        f->object_state            = this->object()->infill_states().field(sliced_infill_pattern(surface_fill.params.pattern).id,
+                                                                           surface_fill.params.adaptive_infill_mode);
         f->print_config        = &this->object()->print()->config();
         f->print_object_config = &this->object()->config();
         set_config_values(*f);

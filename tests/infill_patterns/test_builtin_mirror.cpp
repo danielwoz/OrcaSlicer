@@ -251,6 +251,7 @@ TEST_CASE("Built-in mirror: every Fill member round trips", "[InfillPatterns][Bu
             const Mirror::Request request(call, Surface(), FillParams(), *host, nullptr, &state);
             REQUIRE(request.get().fill != nullptr);
             CHECK(request.get().fill->state == &state);
+            CHECK(Mirror::to_state(*request.get().fill) == &state);
             CHECK(request.get().lock == nullptr);
             Mirror::apply_fill_state(*request.get().fill, *library);
             check_members(*library, *host, call == ORCA_INFILL_CALL_CONCENTRIC_INTERNAL);
@@ -312,6 +313,62 @@ TEST_CASE("Built-in mirror: every Surface field round trips, viewed in place", "
     CHECK(empty.get().surface->expolygon.contour.count == 0);
     CHECK(empty.get().surface->expolygon.holes == nullptr);
     CHECK(Mirror::to_surface(*empty.get().surface).expolygon == ExPolygon());
+}
+
+TEST_CASE("Built-in mirror: the slices of an adaptive infill field round trip, viewed in place", "[InfillPatterns][BuiltinMirror]")
+{
+    const ExPolygons                              first { odd_region(0), odd_region(5000) }, none, last { odd_region(-3000) };
+    const std::vector<AdaptiveInfillField::Slice> slices { { 0.1, 0.3, &first }, { 0.3, 0.55, &none }, { 0.55, 0.75, &last } };
+    const BoundingBox                             bbox(Point(-3000, 0), Point(7000, 1000));
+    const Mirror::FieldInput                      input(slices, bbox);
+    const orca_infill_field_input                 view = input.get(AdaptiveInfillMode::NormalY);
+    CHECK(view.struct_size == sizeof(orca_infill_field_input));
+    CHECK(view.mode == ORCA_INFILL_ADAPTIVE_NORMAL_Y);
+    CHECK(input.get(AdaptiveInfillMode::Lobes).mode == ORCA_INFILL_ADAPTIVE_LOBES);
+    CHECK(view.bbox_defined == 1);
+    CHECK(view.bbox.min.x == -3000);
+    CHECK(view.bbox.max.y == 1000);
+    REQUIRE(view.slice_count == 3);
+    CHECK(view.slices[0].bottom_z == 0.1);
+    CHECK(view.slices[0].print_z == 0.3);
+    REQUIRE(view.slices[0].lslices.count == 2);
+    CHECK(view.slices[0].lslices.items[1].contour.points == Mirror::view(first[1].contour.points));
+    REQUIRE(view.slices[0].lslices.items[1].hole_count == 2);
+    CHECK(view.slices[0].lslices.items[1].holes[1].points == Mirror::view(first[1].holes[1].points));
+    CHECK(view.slices[1].lslices.count == 0);
+    CHECK(view.slices[1].lslices.items == nullptr);
+    REQUIRE(view.slices[2].lslices.count == 1);
+    CHECK(view.slices[2].lslices.items[0].holes[0].points == Mirror::view(last[0].holes[0].points));
+
+    const Mirror::FieldSlices out = Mirror::to_field_slices(view);
+    CHECK(out.mode == AdaptiveInfillMode::NormalY);
+    CHECK(out.bbox.min == bbox.min);
+    CHECK(out.bbox.max == bbox.max);
+    CHECK(out.bbox.defined);
+    REQUIRE(out.slices.size() == slices.size());
+    for (size_t i = 0; i < slices.size(); ++ i) {
+        CAPTURE(i);
+        CHECK(out.slices[i].bottom_z == slices[i].bottom_z);
+        CHECK(out.slices[i].top_z == slices[i].top_z);
+        CHECK(out.slices[i].expolygons == &out.expolygons[i]);
+        CHECK(*out.slices[i].expolygons == *slices[i].expolygons);
+    }
+
+    // An undefined box passes its corners as they are; fields beyond struct_size read as zero.
+    BoundingBox undefined(Point(500, 600), Point(-1, -2));
+    undefined.defined = false;
+    const Mirror::FieldInput nothing({}, undefined);
+    const Mirror::FieldSlices empty = Mirror::to_field_slices(nothing.get(AdaptiveInfillMode::Lobes));
+    CHECK(empty.slices.empty());
+    CHECK(empty.bbox.min == undefined.min);
+    CHECK(empty.bbox.max == undefined.max);
+    CHECK_FALSE(empty.bbox.defined);
+    orca_infill_field_input shorter = view;
+    shorter.struct_size = uint32_t(offsetof(orca_infill_field_input, bbox));
+    const Mirror::FieldSlices partial = Mirror::to_field_slices(shorter);
+    CHECK(partial.slices.size() == 3);
+    CHECK_FALSE(partial.bbox.defined);
+    CHECK(partial.mode == AdaptiveInfillMode::Disabled);
 }
 
 TEST_CASE("Built-in mirror: LockRegionParam round trips in map order", "[InfillPatterns][BuiltinMirror]")

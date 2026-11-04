@@ -58,7 +58,6 @@ private:
     orca_infill_status run(int32_t call, const Surface &surface, const FillParams &params, BuiltinInfillOutput &out);
     // Throws what a status other than ORCA_INFILL_OK stands for.
     void check(orca_infill_status status, const BuiltinInfillOutput &out) const;
-    [[noreturn]] void fail(const std::string &reason) const;
     // The flow of a group of Locked Zag lines: a skeleton flow of the LockRegionParam, then a skin flow.
     const Flow& lock_flow(size_t flow_index) const;
 

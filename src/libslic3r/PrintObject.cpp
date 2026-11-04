@@ -34,7 +34,9 @@
 #include "Fill/Fill.hpp"
 #include "Fill/FillLightning.hpp"
 #include "Fill/AdaptiveInfillField.hpp"
+#include "Fill/InfillPatternLibraries.hpp"
 #include "Fill/InfillPatternRegistry.hpp"
+#include "Fill/Library/BuiltinMirror.hpp"
 #include "format.hpp"
 #include "AABBTreeIndirect.hpp"
 #include "AABBTreeLines.hpp"
@@ -1272,17 +1274,30 @@ FillLightning::GeneratorPtr PrintObject::prepare_lightning_infill_data()
     return has_lightning_infill ? FillLightning::build_generator(std::as_const(*this), [this]() -> void { this->throw_if_canceled(); }) : FillLightning::GeneratorPtr();
 }
 
-AdaptiveInfillFields PrintObject::prepare_adaptive_infill_fields() const
+void PrintObject::prepare_adaptive_infill_fields()
 {
-    AdaptiveInfillFields fields;
+    m_adaptive_infill_fields = {};
+    m_infill_states.fields.clear();
+    // A field is built for every mode a region grades below 100 %; every graded region of the mode reads it. A pattern
+    // library builds the field of its own row, the Fill classes compiled into libslic3r share one per mode.
     std::array<bool, size_t(AdaptiveInfillMode::Count)> modes{};
+    std::vector<std::pair<InfillPattern, AdaptiveInfillMode>> library_fields;
+    bool native_rows = false;
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id)
         if (const PrintRegionConfig &config = this->printing_region(region_id).config();
-            config.sparse_infill_density > 0 && config.sparse_infill_density < 100 && is_adaptive_infill_pattern(config.sparse_infill_pattern))
-            modes[size_t(config.adaptive_infill_mode.value)] = true;
+            config.sparse_infill_density > 0 && is_adaptive_infill_pattern(config.sparse_infill_pattern)) {
+            const AdaptiveInfillMode mode = config.adaptive_infill_mode.value;
+            if (config.sparse_infill_density < 100)
+                modes[size_t(mode)] = true;
+            const std::pair<InfillPattern, AdaptiveInfillMode> key(sliced_infill_pattern(config.sparse_infill_pattern).id, mode);
+            if (InfillPatternRegistry::binding(key.first) == nullptr)
+                native_rows = true;
+            else if (std::find(library_fields.begin(), library_fields.end(), key) == library_fields.end())
+                library_fields.push_back(key);
+        }
     modes[size_t(AdaptiveInfillMode::Disabled)] = false;
     if (std::find(modes.begin(), modes.end(), true) == modes.end() || m_layers.empty())
-        return fields;
+        return;
 
     std::vector<AdaptiveInfillField::Slice> slices;
     slices.reserve(m_layers.size());
@@ -1292,16 +1307,26 @@ AdaptiveInfillFields PrintObject::prepare_adaptive_infill_fields() const
         bbox.merge(get_extents(layer->lslices));
     }
     if (!bbox.defined)
-        return fields;
-    for (size_t mode = 0; mode < modes.size(); ++mode) {
+        return;
+    for (size_t mode = 0; native_rows && mode < modes.size(); ++mode) {
         if (!modes[mode])
             continue;
         // Without a field, the infill falls back to the regular pattern.
         auto field = std::make_unique<AdaptiveInfillField>(slices, bbox, AdaptiveInfillMode(mode), [this]() { m_print->throw_if_canceled(); });
         if (!field->empty())
-            fields[mode] = std::move(field);
+            m_adaptive_infill_fields[mode] = std::move(field);
     }
-    return fields;
+    if (library_fields.empty())
+        return;
+    const BuiltinMirror::FieldInput input(slices, bbox);
+    for (const auto &[row, mode] : library_fields) {
+        if (!modes[size_t(mode)])
+            continue;
+        const orca_infill_field_input field = input.get(mode);
+        if (InfillObjectStatePtr state = prepare_builtin_infill_state(row, ORCA_INFILL_STATE_ADAPTIVE_FIELD, &field,
+                                                                      [this]() { m_print->throw_if_canceled(); }))
+            m_infill_states.fields.push_back({{row, mode}, std::move(state)});
+    }
 }
 
 void PrintObject::clear_layers()
@@ -3364,7 +3389,7 @@ void PrintObject::bridge_over_infill()
         }
 
         this->m_adaptive_fill_octrees = this->prepare_adaptive_infill_data(surfaces_w_layer);
-        this->m_adaptive_infill_fields    = this->prepare_adaptive_infill_fields();
+        this->prepare_adaptive_infill_fields();
 
         std::vector<size_t> layers_to_generate_infill;
         for (const auto &pair : surfaces_by_layer) {

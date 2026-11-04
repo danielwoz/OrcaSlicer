@@ -2327,8 +2327,20 @@ TEST_CASE("Adaptive TPMS infill of a region matches the infill of a larger regio
     };
     const ExPolygon region = circle(20.);
     const ExPolygon larger = circle(30.);
-    auto fill = [pattern, &field](const ExPolygon &expolygon, double z) {
-        std::unique_ptr<Fill> filler(Fill::new_from_type(pattern));
+    // The Fill classes themselves, which read the field directly; a pattern library builds a field of its own.
+    auto native_filler = [](InfillPattern pattern) -> std::unique_ptr<Fill> {
+        switch (pattern) {
+#if ORCA_INFILL_TPMSD
+        case ipTpmsD: return std::make_unique<FillTpmsD>();
+#endif
+#if ORCA_INFILL_TPMSFK
+        case ipTpmsFK: return std::make_unique<FillTpmsFK>();
+#endif
+        default: return std::make_unique<FillGyroid>();
+        }
+    };
+    auto fill = [pattern, &field, &native_filler](const ExPolygon &expolygon, double z) {
+        const std::unique_ptr<Fill> filler = native_filler(pattern);
         filler->spacing           = 0.45;
         filler->angle             = float(M_PI / 7.);
         filler->z                 = z;
@@ -2539,16 +2551,7 @@ TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]
     const std::map<InfillPattern, std::type_index> classes{
         {ipAdaptiveCubic, typeid(FillAdaptive::Filler)},
         {ipSupportCubic, typeid(FillAdaptive::Filler)},
-        {ipLightning, typeid(FillLightning::Filler)},
-        // The type information of these classes is emitted with their first virtual function, in a file a build may
-        // leave out.
-#if ORCA_INFILL_TPMSD
-        {ipTpmsD, typeid(FillTpmsD)},
-#endif
-#if ORCA_INFILL_TPMSFK
-        {ipTpmsFK, typeid(FillTpmsFK)},
-#endif
-        {ipGyroid, typeid(FillGyroid)}};
+        {ipLightning, typeid(FillLightning::Filler)}};
 
     auto filler_class = [](Fill *created) {
         const std::unique_ptr<Fill> filler(created);

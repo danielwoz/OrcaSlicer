@@ -12,10 +12,12 @@
 
 #include "../Polyline.hpp"
 #include "../PrintConfig.hpp"
+#include "InfillObjectState.hpp"
 
 struct orca_infill_builtin_host;
 struct orca_infill_builtin_library;
 struct orca_infill_sink;
+typedef int32_t orca_infill_status;
 
 // The context of one prepare_state() call of a pattern library (orca_infill_builtin.h).
 struct orca_infill_job
@@ -94,6 +96,19 @@ BuiltinInfillLoad check_builtin_infill_entry(BuiltinInfillEntry entry, InfillPat
 // "Infill pattern library <file> is missing or damaged (<reason>). Reinstall OrcaSlicer." for a row whose library is
 // not bound.
 std::string builtin_infill_library_error(InfillPattern row);
+// The reason a call of a pattern library failed with status: error, the message of the exception it failed with, when
+// it reported one, otherwise the status.
+std::string builtin_infill_failure_reason(orca_infill_status status, const std::string &error);
+// Throws the SlicingError "The infill pattern "<key>" of the pattern library <file> failed: <reason>" of a call of the
+// library of row; a row without a key is named by file.
+[[noreturn]] void throw_builtin_infill_failure(InfillPattern row, const std::string &file, const std::string &reason);
+
+// The object state of kind (ORCA_INFILL_STATE_*) that the library of row prepares from data, the input of that kind;
+// nullptr when there is nothing to prepare, as for an empty adaptive infill field. The parallel loops of the library run
+// on the application's threads and call throw_if_canceled. Throws what throw_if_canceled throws, std::bad_alloc, or
+// SlicingError when the row is unbound or the library fails.
+InfillObjectStatePtr prepare_builtin_infill_state(InfillPattern row, int32_t kind, const void *data,
+                                                  const std::function<void()> &throw_if_canceled);
 
 // Ends every call into the libraries: run at exit. A state or a filler released afterwards is left to the process
 // instead of being released into a library whose static objects may be gone.
