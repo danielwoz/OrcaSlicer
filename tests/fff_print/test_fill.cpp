@@ -43,13 +43,10 @@
 #include "libslic3r/Fill/Fill3DHoneycomb.hpp"
 #include "libslic3r/Fill/FillConcentric.hpp"
 #include "libslic3r/Fill/FillConcentricInternal.hpp"
-#include "libslic3r/Fill/FillCrossHatch.hpp"
 #include "libslic3r/Fill/FillHoneycomb.hpp"
 #include "libslic3r/Fill/FillLibrary.hpp"
 #include "libslic3r/Fill/FillLightning.hpp"
-#include "libslic3r/Fill/FillLine.hpp"
 #include "libslic3r/Fill/FillPlanePath.hpp"
-#include "libslic3r/Fill/FillRectilinear.hpp"
 #include "libslic3r/Fill/FillSpiralInset.hpp"
 #include "libslic3r/Fill/FillTpmsD.hpp"
 #include "libslic3r/Fill/FillTpmsFK.hpp"
@@ -2541,34 +2538,16 @@ TEST_CASE("Monotonic line top surfaces print their gap fill next to their lines 
 
 TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]")
 {
-    // The Fill class of each row; a row a pattern library serves creates a FillLibrary, which runs that class in the
-    // library (tests/infill_patterns/test_builtin_equivalence.cpp).
+    // The Fill class of each row libslic3r creates itself. A row a pattern library serves creates a FillLibrary, which
+    // runs the class of the row in the library (tests/infill_patterns/test_builtin_equivalence.cpp).
     const std::map<InfillPattern, std::type_index> classes{
-        {ipMonotonic, typeid(FillMonotonic)},
-        {ipMonotonicLine, typeid(FillMonotonicLines)},
-        {ipRectilinear, typeid(FillRectilinear)},
-        {ipAlignedRectilinear, typeid(FillAlignedRectilinear)},
-        {ipZigZag, typeid(FillZigZag)},
-        {ipCrossZag, typeid(FillCrossZag)},
-        {ipLockedZag, typeid(FillLockedZag)},
-        // The type information of these classes is emitted with their first virtual function, in a file a build may
-        // leave out.
-#if ORCA_INFILL_LINE
-        {ipLine, typeid(FillLine)},
-#endif
-        {ipGrid, typeid(FillGrid)},
-        {ipTriangles, typeid(FillTriangles)},
-        {ipStars, typeid(FillStars)},
-        {ipCubic, typeid(FillCubic)},
         {ipAdaptiveCubic, typeid(FillAdaptive::Filler)},
-        {ipQuarterCubic, typeid(FillQuarterCubic)},
         {ipSupportCubic, typeid(FillAdaptive::Filler)},
         {ipLightning, typeid(FillLightning::Filler)},
         {ipHoneycomb, typeid(FillHoneycomb)},
         {ip3DHoneycomb, typeid(Fill3DHoneycomb)},
-        {ipLateralHoneycomb, typeid(FillLateralHoneycomb)},
-        {ipLateralLattice, typeid(FillLateralLattice)},
-        {ipCrossHatch, typeid(FillCrossHatch)},
+        // The type information of these classes is emitted with their first virtual function, in a file a build may
+        // leave out.
 #if ORCA_INFILL_TPMSD
         {ipTpmsD, typeid(FillTpmsD)},
 #endif
@@ -2581,7 +2560,6 @@ TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]
         {ipHilbertCurve, typeid(FillHilbertCurve)},
         {ipArchimedeanChords, typeid(FillArchimedeanChords)},
         {ipOctagramSpiral, typeid(FillOctagramSpiral)},
-        {ipSupportBase, typeid(FillSupportBase)},
         {ipConcentricInternal, typeid(FillConcentricInternal)}};
 
     auto filler_class = [](Fill *created) {
@@ -2595,12 +2573,13 @@ TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]
         const std::type_index created = filler_class(Fill::new_from_type(pattern.id));
         if (pattern.available()) {
             const auto it = classes.find(pattern.id);
-            REQUIRE(it != classes.end());
             if (InfillPatternRegistry::binding(pattern.id) != nullptr) {
+                CHECK(it == classes.end());
                 CHECK(created == std::type_index(typeid(FillLibrary)));
                 const std::unique_ptr<Fill> filler(Fill::new_from_type(pattern.id));
                 CHECK(static_cast<const FillLibrary&>(*filler).pattern() == pattern.id);
             } else {
+                REQUIRE(it != classes.end());
                 CHECK(created == it->second);
             }
         }

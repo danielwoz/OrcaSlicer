@@ -15,6 +15,10 @@ add_executable(${_TEST_NAME}_tests
     test_parallel_for.cpp
     )
 target_include_directories(${_TEST_NAME}_tests PRIVATE ${CMAKE_SOURCE_DIR}/sdk/infill/include ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>)
+# The equivalence test runs an entry of its own, linked into the executable (src/infill_patterns/runtime/PatternEntry.hpp).
+get_property(_runtime_dir GLOBAL PROPERTY ORCA_INFILL_RUNTIME_DIR)
+set_source_files_properties(test_builtin_equivalence.cpp PROPERTIES COMPILE_DEFINITIONS ORCA_INFILL_PATTERN_MODULE=0
+                                                                     INCLUDE_DIRECTORIES "${_runtime_dir}")
 orca_use_infill_build_id(${_TEST_NAME}_tests)
 # The entries of the libraries linked into the executable, as ORCA_INFILL_PATTERN_LINKAGE=STATIC links them.
 orca_link_builtin_infill_patterns(${_TEST_NAME}_tests)

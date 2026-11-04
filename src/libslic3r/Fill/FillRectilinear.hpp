@@ -223,8 +223,6 @@ public:
     ~FillLockedZag() override = default;
     LockRegionParam lock_param;
 
-    void fill_surface_extrusion(const Surface *surface, const FillParams &params, ExtrusionEntitiesPtr &out) override;
-
     bool has_consistent_pattern() const override { return true; }
     void set_lock_region_param(const LockRegionParam &lock_param) override { this->lock_param = lock_param;};
     void fill_surface_locked_zag(const Surface *                          surface,

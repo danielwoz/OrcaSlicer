@@ -33,8 +33,8 @@ namespace InfillCorpus {
 enum class Call : uint8_t {
     FillSurface, // Fill::fill_surface()
     FillArachne, // Fill::fill_surface_arachne()
-    LockedZag,   // FillLockedZag::fill_surface_locked_zag()
-    Extrusion,   // Fill::fill_surface_extrusion()
+    LockedZag,   // fill_surface_locked_zag() of FillLockedZag or of the FillLibrary of Locked Zag
+    Extrusion,   // Fill::fill_surface_extrusion(); for FillLockedZag the Locked Zag extrusions FillLibrary makes
 };
 
 // The object state a case fills with. It is built from fixed inputs once per scaling factor.
