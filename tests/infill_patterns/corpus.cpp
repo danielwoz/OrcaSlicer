@@ -1186,6 +1186,9 @@ struct NativeStates::Set
     FillLightning::GeneratorParams                               lightning_params {};
     std::vector<Polygons>                                        lightning_outlines;
     std::unique_ptr<FillLightning::Generator>                    generator;
+    FillLightning::GeneratorParams                               support_params {};
+    std::vector<Polygons>                                        support_contours, support_overhangs;
+    std::unique_ptr<FillLightning::Generator>                    support_generator;
 };
 
 NativeStates::NativeStates()  = default;
@@ -1305,6 +1308,27 @@ FillLightning::Generator* NativeStates::lightning()
     if (! set.generator)
         set.generator = std::make_unique<FillLightning::Generator>(input.params, input.outlines, [] {});
     return set.generator.get();
+}
+
+NativeStates::LightningSupportInput NativeStates::lightning_support_input()
+{
+    Set &set = this->current();
+    if (set.support_contours.empty()) {
+        set.support_contours  = this->lightning_input().outlines;
+        set.support_overhangs = this->lightning()->Overhangs();
+        set.support_params    = FillLightning::lightning_support_params(*set.print->objects().front(), 0.3f);
+    }
+    return { set.support_params, set.support_contours, set.support_overhangs };
+}
+
+FillLightning::Generator* NativeStates::lightning_support()
+{
+    this->lightning_support_input();
+    Set &set = this->current();
+    if (! set.support_generator)
+        set.support_generator = std::make_unique<FillLightning::Generator>(set.support_params, set.support_contours, set.support_overhangs,
+                                                                           [] {});
+    return set.support_generator.get();
 }
 
 void NativeStates::attach(const Case &c, Fill &filler)

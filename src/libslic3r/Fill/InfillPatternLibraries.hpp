@@ -10,6 +10,7 @@
 
 #include <boost/filesystem/path.hpp>
 
+#include "../Polygon.hpp"
 #include "../Polyline.hpp"
 #include "../PrintConfig.hpp"
 #include "InfillObjectState.hpp"
@@ -109,6 +110,11 @@ std::string builtin_infill_failure_reason(orca_infill_status status, const std::
 // SlicingError when the row is unbound or the library fails.
 InfillObjectStatePtr prepare_builtin_infill_state(InfillPattern row, int32_t kind, const void *data,
                                                   const std::function<void()> &throw_if_canceled);
+// The polylines the library of row emits, in order, for the query of kind (ORCA_INFILL_QUERY_*) about layer and area of
+// state, an object state it prepared. Several threads may query one state at once. Throws std::bad_alloc, or
+// SlicingError when the library fails or refuses the query.
+Polylines query_builtin_infill_state(InfillPattern row, const InfillObjectState &state, int32_t kind, size_t layer,
+                                     const Polygons &area, coord_t overlap);
 
 // Ends every call into the libraries: run at exit. A state or a filler released afterwards is left to the process
 // instead of being released into a library whose static objects may be gone.

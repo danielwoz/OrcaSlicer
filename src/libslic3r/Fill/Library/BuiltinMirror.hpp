@@ -97,6 +97,23 @@ private:
     orca_infill_lightning_input       m_input {};
 };
 
+// The C query of kind (ORCA_INFILL_QUERY_*) of an object state about layer and area. It points into area, which must
+// outlive it unchanged.
+class StateQuery
+{
+public:
+    StateQuery(int32_t kind, size_t layer, const Polygons &area, coord_t overlap);
+    StateQuery(const StateQuery &) = delete;
+    StateQuery& operator=(const StateQuery &) = delete;
+
+    const orca_infill_state_query& get() const { return m_query; }
+
+private:
+    // Reserved to its final size before the first view is taken, so that no view moves.
+    std::vector<orca_infill_path> m_paths;
+    orca_infill_state_query       m_query {};
+};
+
 // The points as a C array; nothing is copied.
 const orca_infill_point* view(const Points &points);
 // The thick polyline as a C path pointing into it.
@@ -107,6 +124,7 @@ orca_infill_flow         to_c(const Flow &flow);
 // Each struct that starts with struct_size is read up to its struct_size, and the fields beyond it are zero.
 
 Points          to_points(const orca_infill_point *points, size_t count);
+Polygons        to_polygons(const orca_infill_polygons &polygons);
 ExPolygon       to_expolygon(const orca_infill_region &region);
 ExPolygons      to_expolygons(const orca_infill_regions &regions);
 ThickPolyline   to_thick_polyline(const orca_infill_thick_path &path);

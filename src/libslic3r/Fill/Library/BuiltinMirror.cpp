@@ -195,12 +195,8 @@ std::vector<Polygons> to_layers(const orca_infill_polygons *layers, size_t count
     if (layers == nullptr)
         return out;
     out.reserve(count);
-    for (size_t i = 0; i < count; ++ i) {
-        Polygons &polygons = out.emplace_back();
-        polygons.reserve(layers[i].count);
-        for (size_t j = 0; j < layers[i].count; ++ j)
-            polygons.emplace_back(to_points(layers[i].items[j].points, layers[i].items[j].count));
-    }
+    for (size_t i = 0; i < count; ++ i)
+        out.emplace_back(to_polygons(layers[i]));
     return out;
 }
 
@@ -399,6 +395,12 @@ LightningInput::LightningInput(const FillLightning::GeneratorParams &params, con
                 params.supporting_radius, params.wall_supporting_radius, params.prune_length, params.straightening_max_distance };
 }
 
+StateQuery::StateQuery(int32_t kind, size_t layer, const Polygons &area, coord_t overlap)
+{
+    m_paths.reserve(area.size());
+    m_query = { sizeof(m_query), kind, uint64_t(layer), polygons_view(area, m_paths), overlap };
+}
+
 // ---- Library side ----
 
 Points to_points(const orca_infill_point *points, size_t count)
@@ -407,6 +409,15 @@ Points to_points(const orca_infill_point *points, size_t count)
     out.reserve(count);
     for (size_t i = 0; i < count; ++ i)
         out.emplace_back(points[i].x, points[i].y);
+    return out;
+}
+
+Polygons to_polygons(const orca_infill_polygons &polygons)
+{
+    Polygons out;
+    out.reserve(polygons.count);
+    for (size_t i = 0; i < polygons.count; ++ i)
+        out.emplace_back(to_points(polygons.items[i].points, polygons.items[i].count));
     return out;
 }
 

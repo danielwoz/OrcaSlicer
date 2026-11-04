@@ -238,7 +238,7 @@ RowContract contract(const InfillPatternDescriptor &row)
     if (row.has(ipfAdaptiveDensity))
         out.state_kinds |= 1u << ORCA_INFILL_STATE_ADAPTIVE_FIELD;
     if (row.id == ipLightning)
-        out.state_kinds |= 1u << ORCA_INFILL_STATE_LIGHTNING;
+        out.state_kinds |= (1u << ORCA_INFILL_STATE_LIGHTNING) | (1u << ORCA_INFILL_STATE_LIGHTNING_SUPPORT);
     return out;
 }
 
@@ -552,6 +552,22 @@ InfillObjectStatePtr prepare_builtin_infill_state(InfillPattern row, int32_t kin
     if (status == ORCA_INFILL_ERR_NOMEM)
         throw std::bad_alloc();
     throw_builtin_infill_failure(row, binding->file, builtin_infill_failure_reason(status, error));
+}
+
+Polylines query_builtin_infill_state(InfillPattern row, const InfillObjectState &state, int32_t kind, size_t layer,
+                                     const Polygons &area, coord_t overlap)
+{
+    const BuiltinMirror::StateQuery query(kind, layer, area, overlap);
+    BuiltinInfillOutput             out;
+    const orca_infill_status        status = state.library->query_state != nullptr ?
+                                                 state.library->query_state(state.raw, &query.get(), out.sink()) :
+                                                 ORCA_INFILL_ERR_INVALID;
+    if (status == ORCA_INFILL_OK)
+        return std::move(out.polylines);
+    if (status == ORCA_INFILL_ERR_NOMEM)
+        throw std::bad_alloc();
+    const InfillPatternBinding *binding = InfillPatternRegistry::binding(row);
+    throw_builtin_infill_failure(row, binding != nullptr ? binding->file : std::string(), builtin_infill_failure_reason(status, out.error));
 }
 
 void shutdown_builtin_infill_patterns() { s_shut_down = true; }

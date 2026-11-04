@@ -14,7 +14,8 @@ enum class AdaptiveInfillMode;
 
 // An object-level state of a built-in pattern, such as an octree or a lightning generator, built by the pattern
 // library of its row with prepare_state() from inputs the print object gathers. The print object owns it; a filler of
-// the row reads it through Fill::object_state.
+// the row reads it through Fill::object_state. Tree support owns the generator of its lightning base and queries its
+// lines (query_builtin_infill_state()).
 struct InfillObjectState
 {
     InfillObjectState(const orca_infill_builtin_library &library, void *raw) : library(&library), raw(raw) {}

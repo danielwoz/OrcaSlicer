@@ -474,6 +474,29 @@ TEST_CASE("Built-in mirror: the layers of a lightning generator round trip, view
     CHECK(partial.params.straightening_max_distance == 0);
 }
 
+TEST_CASE("Built-in mirror: the area of a state query round trips, viewed in place", "[InfillPatterns][BuiltinMirror]")
+{
+    const ExPolygon                region = odd_region(1);
+    const Polygons                 area   = to_polygons(region);
+    const Mirror::StateQuery       query(ORCA_INFILL_QUERY_LIGHTNING_LINES, 17, area, -3);
+    const orca_infill_state_query &view = query.get();
+    CHECK(view.struct_size == sizeof(orca_infill_state_query));
+    CHECK(view.kind == ORCA_INFILL_QUERY_LIGHTNING_LINES);
+    CHECK(view.layer == 17);
+    CHECK(view.overlap == -3);
+    REQUIRE(view.area.count == area.size());
+    for (size_t i = 0; i < area.size(); ++ i) {
+        CHECK(view.area.items[i].points == Mirror::view(area[i].points));
+        CHECK(view.area.items[i].count == area[i].size());
+    }
+    CHECK(Mirror::to_polygons(view.area) == area);
+
+    const Mirror::StateQuery nothing(ORCA_INFILL_QUERY_LIGHTNING_LINES, 0, Polygons(), 0);
+    CHECK(nothing.get().area.items == nullptr);
+    CHECK(nothing.get().area.count == 0);
+    CHECK(Mirror::to_polygons(nothing.get().area).empty());
+}
+
 TEST_CASE("Built-in mirror: LockRegionParam round trips in map order", "[InfillPatterns][BuiltinMirror]")
 {
     // Ordered by mm3_per_mm: thin, middle, wide.
