@@ -111,6 +111,17 @@ ExPolygon sliver()
 
 ExPolygon l_shape() { return ExPolygon(polygon_mm({ { -8., -8. }, { 8., -8. }, { 8., -2. }, { -2., -2. }, { -2., 8. }, { -8., 8. } })); }
 
+// The part of a wipe tower cone outside the tower's box: an arc closed by a chord.
+ExPolygon cone_cap()
+{
+    std::vector<Vec2d> points;
+    for (int i = 0; i <= 24; ++ i) {
+        const double a = M_PI + 0.5 + (M_PI - 1.) * double(i) / 24.;
+        points.emplace_back(14. * std::cos(a), 6. + 14. * std::sin(a));
+    }
+    return ExPolygon(polygon_mm(points));
+}
+
 BoundingBox object_bbox() { return BoundingBox(Point::new_scale(-10., -10.), Point::new_scale(10., 10.)); }
 
 // ---- Rows ---------------------------------------------------------------------------------------------------------
@@ -497,6 +508,40 @@ void add_scaled(Builder &b)
     });
 }
 
+// A caller that sets only the members it needs, as the wipe tower and interlocking do.
+void minimal(Case &c, double angle_deg, double spacing)
+{
+    c.params                = FillParams();
+    c.params.density        = 1.f;
+    c.fill                  = FillMembers();
+    c.fill.angle            = float(angle_deg * M_PI / 180.);
+    c.fill.spacing          = spacing;
+    c.fill.bounding_box     = get_extents(c.surface.expolygon);
+    c.fill.configs          = false;
+}
+
+// The ironing callers: Layer::make_ironing(), monotonic lines of a fresh FillParams linked over at most three line
+// spacings, as the case linked_name, and the ironing of a support interface, which fill_expolygons_generate_paths() fills.
+void add_ironing(Builder &b, const char *linked_name)
+{
+    b.add(linked_name, [](Case &c) {
+        c.surface = Surface(stTop, l_shape());
+        minimal(c, 30., 0.1);
+        c.params.monotonic     = true;
+        c.fill.bounding_box    = object_bbox();
+        c.fill.fixed_angle     = true;
+        c.fill.link_max_length = coord_t(scale_(3. * c.fill.spacing));
+        at_layer(c, 10);
+    });
+    b.add("support-ironing", [](Case &c) {
+        c.surface.expolygon = square();
+        minimal(c, 0., 0.15);
+        c.fill.bounding_box    = object_bbox();
+        c.fill.link_max_length = coord_t(scale_(3. * c.fill.spacing));
+        at_layer(c, 12);
+    });
+}
+
 void add_rectilinear(Builder &b)
 {
     b.add("monotonic-flag", [](Case &c) {
@@ -520,18 +565,7 @@ void add_rectilinear(Builder &b)
         c.fill.fixed_angle   = true;
         at_layer(c, 10);
     });
-}
-
-// A caller that sets only the members it needs, as the wipe tower and interlocking do.
-void minimal(Case &c, double angle_deg, double spacing)
-{
-    c.params                = FillParams();
-    c.params.density        = 1.f;
-    c.fill                  = FillMembers();
-    c.fill.angle            = float(angle_deg * M_PI / 180.);
-    c.fill.spacing          = spacing;
-    c.fill.bounding_box     = get_extents(c.surface.expolygon);
-    c.fill.configs          = false;
+    add_ironing(b, "ironing-linked");
 }
 
 void add_plane_path(Builder &b)
@@ -706,11 +740,31 @@ void add_row(std::vector<Case> &out, const Row &row)
             c.surface = Surface(stBottom, l_shape());
             minimal(c, 45., 0.42);
         });
+        b.add("wipe-tower-cone", [](Case &c) {
+            c.surface = Surface(stBottom, cone_cap());
+            minimal(c, 45., 0.42);
+        });
         break;
     case ipAlignedRectilinear:
         b.add("interlocking", [](Case &c) {
             minimal(c, 90., 0.8);
             c.params.anchor_length_max = 0.f;
+        });
+        // A layer outline moved by half a cell, as VoxelUtils::walkAreas() passes it.
+        b.add("interlocking-cells", [](Case &c) {
+            c.surface.expolygon = l_shape();
+            c.surface.expolygon.translate(Point::new_scale(-0.4, -0.4));
+            minimal(c, 90., unscaled(scaled<coord_t>(0.8)));
+            c.params.anchor_length_max = 0.f;
+        });
+        break;
+    case ipGrid:
+        // A support interface of the grid pattern: the support fillers leave the layer undefined.
+        b.add("support-interface", [](Case &c) {
+            minimal(c, 90., 0.42);
+            c.params.density     = 0.5f;
+            c.params.dont_adjust = true;
+            c.fill.bounding_box  = object_bbox();
         });
         break;
     case ipRectilinear:
@@ -807,6 +861,12 @@ void add_row(std::vector<Case> &out, const Row &row)
             c.params.extrusion_role = erSupportMaterial;
             c.fill.angle            = float(M_PI / 2.);
             c.fill.configs          = false;
+        });
+        // The base interface below a soluble interface, which fill_expolygons_generate_paths() fills.
+        b.add("support-base-interface", [](Case &c) {
+            minimal(c, 90., 0.42);
+            c.params.density    = 0.3f;
+            c.fill.bounding_box = object_bbox();
         });
         break;
     case ipAdaptiveCubic:
