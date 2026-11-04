@@ -15,6 +15,8 @@
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Surface.hpp"
 
+#include "native_fillers.hpp"
+
 using namespace Slic3r;
 namespace Mirror = Slic3r::BuiltinMirror;
 
@@ -166,7 +168,7 @@ std::set<int> first_values(int count)
 TEST_CASE("Built-in mirror: every field of FillParams but config round trips", "[InfillPatterns][BuiltinMirror]")
 {
     const FillParams            params = distinct_params();
-    const std::unique_ptr<Fill> fill(Fill::new_from_type(ipRectilinear));
+    const std::unique_ptr<Fill> fill = InfillCorpus::native_filler(ipRectilinear);
     const Mirror::Request       request(ORCA_INFILL_CALL_FILL_SURFACE, Surface(), params, *fill);
     REQUIRE(request.get().params != nullptr);
     CHECK(request.get().params->struct_size == sizeof(orca_infill_fill_params));
@@ -177,7 +179,7 @@ TEST_CASE("Built-in mirror: every field of FillParams but config round trips", "
 TEST_CASE("Built-in mirror: fields beyond struct_size read as zero", "[InfillPatterns][BuiltinMirror]")
 {
     const FillParams            params = distinct_params();
-    const std::unique_ptr<Fill> fill(Fill::new_from_type(ipRectilinear));
+    const std::unique_ptr<Fill> fill = InfillCorpus::native_filler(ipRectilinear);
     const Mirror::Request       request(ORCA_INFILL_CALL_FILL_SURFACE, Surface(), params, *fill);
     orca_infill_fill_params     shorter = *request.get().params;
     shorter.struct_size = uint32_t(offsetof(orca_infill_fill_params, flow));
@@ -193,9 +195,9 @@ TEST_CASE("Built-in mirror: fields beyond struct_size read as zero", "[InfillPat
 
 TEST_CASE("Built-in mirror: every Fill member round trips", "[InfillPatterns][BuiltinMirror]")
 {
-    const std::unique_ptr<Fill> defaults(Fill::new_from_type(ipRectilinear));
-    const std::unique_ptr<Fill> host(Fill::new_from_type(ipRectilinear));
-    const std::unique_ptr<Fill> library(Fill::new_from_type(ipRectilinear));
+    const std::unique_ptr<Fill> defaults = InfillCorpus::native_filler(ipRectilinear);
+    const std::unique_ptr<Fill> host = InfillCorpus::native_filler(ipRectilinear);
+    const std::unique_ptr<Fill> library = InfillCorpus::native_filler(ipRectilinear);
     int                         state = 0;
 
     host->layer_id                               = 17;
@@ -209,6 +211,7 @@ TEST_CASE("Built-in mirror: every Fill member round trips", "[InfillPatterns][Bu
     host->bounding_box                           = BoundingBox(Point(-100, -200), Point(3000, 4000));
     host->adapt_fill_octree                      = fake<FillAdaptive::Octree>();
     host->adaptive_infill_field                  = fake<const AdaptiveInfillField>();
+    host->object_state                           = fake<const InfillObjectState>();
     host->print_config                           = fake<const PrintConfig>();
     host->print_object_config                    = fake<const PrintObjectConfig>();
     host->min_nozzle_diameter                    = 0.6;
@@ -237,6 +240,7 @@ TEST_CASE("Built-in mirror: every Fill member round trips", "[InfillPatterns][Bu
     library->bounding_box          = BoundingBox(Point(7, 7), Point(9, 9));
     library->adapt_fill_octree     = host->adapt_fill_octree;
     library->adaptive_infill_field = host->adaptive_infill_field;
+    library->object_state          = host->object_state;
     library->print_config          = host->print_config;
     library->print_object_config   = host->print_object_config;
     library->no_overlap_expolygons = { odd_region(-3000) };
@@ -252,6 +256,7 @@ TEST_CASE("Built-in mirror: every Fill member round trips", "[InfillPatterns][Bu
             check_members(*library, *host, call == ORCA_INFILL_CALL_CONCENTRIC_INTERNAL);
             CHECK(library->adapt_fill_octree == nullptr);
             CHECK(library->adaptive_infill_field == nullptr);
+            CHECK(library->object_state == nullptr);
             CHECK(library->print_config == nullptr);
             CHECK(library->print_object_config == nullptr);
         }
@@ -283,7 +288,7 @@ TEST_CASE("Built-in mirror: every Surface field round trips, viewed in place", "
     CHECK(surface.bridge_angle != defaults.bridge_angle);
     CHECK(surface.extra_perimeters != defaults.extra_perimeters);
 
-    const std::unique_ptr<Fill> fill(Fill::new_from_type(ipRectilinear));
+    const std::unique_ptr<Fill> fill = InfillCorpus::native_filler(ipRectilinear);
     const Mirror::Request       request(ORCA_INFILL_CALL_FILL_SURFACE, surface, FillParams(), *fill);
     const orca_infill_surface  &view = *request.get().surface;
     CHECK(view.struct_size == sizeof(orca_infill_surface));
@@ -320,7 +325,7 @@ TEST_CASE("Built-in mirror: LockRegionParam round trips in map order", "[InfillP
     lock.skeleton_flow_params    = { { wide, { odd_region(0) } }, { thin, { odd_region(500), odd_region(-4000) } } };
     lock.skin_flow_params        = { { middle, { odd_region(700) } } };
 
-    const std::unique_ptr<Fill> fill(Fill::new_from_type(ipRectilinear));
+    const std::unique_ptr<Fill> fill = InfillCorpus::native_filler(ipRectilinear);
     const Mirror::Request       request(ORCA_INFILL_CALL_LOCKED_ZAG, Surface(stInternal, odd_region(0)), FillParams(), *fill, &lock);
     REQUIRE(request.get().lock != nullptr);
     const orca_infill_lock &view = *request.get().lock;

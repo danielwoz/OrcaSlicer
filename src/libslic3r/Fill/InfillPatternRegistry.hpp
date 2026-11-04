@@ -8,9 +8,12 @@
 
 #include "../PrintConfig.hpp"
 
+struct orca_infill_builtin_library;
+
 namespace Slic3r {
 
 class Fill;
+class InfillPatternLibraryLoader;
 struct InfillPatternDescriptor;
 
 // The pattern options a pattern is offered in.
@@ -40,6 +43,7 @@ enum InfillPatternFlag : uint32_t {
     ipfSmallAreaFlowComp   = 1u << 14, // small_area_infill_flow_compensation applies to its surfaces
     ipfNoSurfaceRetract    = 1u << 15, // no retraction within a top surface or a first layer bottom surface
     ipfCurvedBridgeAnchors = 1u << 16, // bridges over it follow the infill rotation and scan anchors densely
+    ipfNoSort              = 1u << 17, // its paths print in the order generated, see Fill::no_sort()
 };
 
 using InfillFactory = Fill *(*)(const InfillPatternDescriptor &pattern);
@@ -79,6 +83,32 @@ struct InfillPatternDescriptor
     bool           has_option(const char *opt_key) const;
 };
 
+// A pattern library of this build (orca_infill_manifest.h).
+struct InfillPatternLibraryRow
+{
+    InfillPattern pattern;
+    // The token of the row, nullptr for an internal row.
+    const char   *key;
+    // orca_infill_<token>.
+    const char   *name;
+    // The file name; empty when libslic3r links the entries (ORCA_INFILL_PATTERN_LINKAGE=STATIC).
+    const char   *file;
+
+    // The file the loader opens, or the name of the library when there is no file.
+    constexpr const char* file_or_name() const { return *file != 0 ? file : name; }
+};
+
+// The pattern library that serves a built-in row (Fill/InfillPatternLibraries.hpp).
+struct InfillPatternBinding
+{
+    // The file name of the library, or its name when it is linked into the executable.
+    std::string                        file;
+    // The library once it passed every check; nullptr while the row is unbound.
+    const orca_infill_builtin_library *library { nullptr };
+    // Why the row is unbound.
+    std::string                        error;
+};
+
 class InfillPatternRegistry
 {
 public:
@@ -116,6 +146,34 @@ public:
     // Sort rank of fill groups: the value itself for a built-in pattern, then the runtime patterns by token,
     // whatever order they were registered in.
     static unsigned order(InfillPattern id);
+
+    // The binding of a row that a pattern library of this build serves; nullptr for every other value. Which rows a
+    // library serves is fixed when OrcaSlicer is built, like available().
+    static const InfillPatternBinding* binding(InfillPattern id);
+    // Whether a library is bound to the row.
+    static bool bound(InfillPattern id);
+    // Whether a library is bound to every row a pattern library serves.
+    static bool all_bound();
+    // The rows a pattern library serves that no library is bound to, in InfillPattern order.
+    static std::vector<InfillPattern> unbound();
+    // The pattern libraries of this build, in InfillPattern order.
+    static const std::vector<InfillPatternLibraryRow>& library_rows();
+    // Whether two tokens are equal; nullptr, the token of an internal row, equals only itself.
+    static constexpr bool same_key(const char *a, const char *b)
+    {
+        if (a == nullptr || b == nullptr)
+            return a == b;
+        for (; *a != 0 && *a == *b; ++ a, ++ b) ;
+        return *a == *b;
+    }
+
+private:
+    friend class InfillPatternLibraryLoader;
+    // Binds library, loaded from file, to a row a pattern library serves; fails when the row is bound already or
+    // registration is closed.
+    static bool bind_library(InfillPattern id, const orca_infill_builtin_library &library, const std::string &file);
+    // Records why a row a pattern library serves stays unbound, with the file it was looked for in.
+    static void set_unbound(InfillPattern id, const std::string &file, const std::string &error);
 };
 
 // The pattern a value names. A value that names none gets a descriptor without slots, flags or factory.

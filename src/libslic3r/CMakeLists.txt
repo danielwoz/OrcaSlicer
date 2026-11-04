@@ -129,12 +129,19 @@ set(lisbslic3r_sources
     Feature/Interlocking/VoxelUtils.hpp
     FileParserError.hpp
     Fill/FillExtrusion.cpp
+    Fill/FillLibrary.cpp
+    Fill/FillLibrary.hpp
+    Fill/InfillObjectState.hpp
+    Fill/InfillPatternLibraries.cpp
+    Fill/InfillPatternLibraries.hpp
     Fill/InfillPatternRegistry.cpp
     Fill/InfillPatternRegistry.hpp
     Fill/InfillPlugins.cpp
     Fill/InfillPlugins.hpp
     Fill/FillPlugin.cpp
     Fill/FillPlugin.hpp
+    Fill/SharedLibrary.cpp
+    Fill/SharedLibrary.hpp
     Fill/Fill.cpp
     Fill/Fill.hpp
     FilamentMixer.cpp
@@ -1007,3 +1014,5 @@ function(orca_use_infill_build_id target)
     target_include_directories(${target} PRIVATE "${CMAKE_BINARY_DIR}/src/libslic3r/$<CONFIG>" "${CMAKE_BINARY_DIR}/src/slic3r")
     add_dependencies(${target} git_commit_hash_header)
 endfunction()
+# The loader of the pattern libraries (Fill/InfillPatternLibraries.cpp) binds only those of its own build.
+orca_use_infill_build_id(libslic3r)

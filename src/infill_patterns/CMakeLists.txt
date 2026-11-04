@@ -39,22 +39,47 @@ endif ()
 # one is on, as for infill plugins (sdk/infill/OrcaInfillPlugin.cmake).
 get_directory_property(_options COMPILE_OPTIONS)
 set(_flags "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS} ${CMAKE_MODULE_LINKER_FLAGS} ${_options}")
-if (APPLE)
-    set(ORCA_INFILL_LINK_OPTIONS "LINKER:-exported_symbols_list,${ORCA_INFILL_RUNTIME_DIR}/exports.txt" "LINKER:-dead_strip"
-                                 "LINKER:-dead_strip_dylibs")
-    set(ORCA_INFILL_LINK_DEPENDS "${ORCA_INFILL_RUNTIME_DIR}/exports.txt")
-elseif (MSVC)
-    # A PDB in every configuration, as for the application; /DEBUG would turn REF and ICF off unless they are named.
-    set(ORCA_INFILL_LINK_OPTIONS "$<$<CONFIG:Release>:/DEBUG>" "/OPT:REF" "/OPT:ICF")
-    set(ORCA_INFILL_LINK_DEPENDS "")
-else ()
-    set(ORCA_INFILL_LINK_OPTIONS "LINKER:--version-script=${ORCA_INFILL_RUNTIME_DIR}/exports.map" "LINKER:--exclude-libs,ALL"
-                                 "LINKER:--as-needed" "LINKER:--gc-sections")
-    if (NOT _flags MATCHES "-fsanitize")
-        list(APPEND ORCA_INFILL_LINK_OPTIONS "LINKER:--no-undefined")
-    endif ()
-    set(ORCA_INFILL_LINK_DEPENDS "${ORCA_INFILL_RUNTIME_DIR}/exports.map")
+if (_flags MATCHES "-fsanitize")
+    set_property(GLOBAL PROPERTY ORCA_INFILL_SANITIZED ON)
 endif ()
+set_property(GLOBAL PROPERTY ORCA_INFILL_RUNTIME_DIR "${ORCA_INFILL_RUNTIME_DIR}")
+
+# orca_add_infill_pattern_module(<target> SOURCES <source>... LIBRARIES <library>... EXPORTS_MAP <map> EXPORTS_LIST <list>)
+# Adds a module linked as a pattern library is: with the module seams (runtime/ModuleSeams.cpp) and libslic3r_fillkit,
+# exporting only the symbols of <map> (GNU ld and lld) or <list> (ld64); on Windows only what is __declspec(dllexport).
+function(orca_add_infill_pattern_module target)
+    cmake_parse_arguments(PARSE_ARGV 1 ARG "" "EXPORTS_MAP;EXPORTS_LIST" "SOURCES;LIBRARIES")
+    get_property(_runtime_dir GLOBAL PROPERTY ORCA_INFILL_RUNTIME_DIR)
+    get_property(_sanitized GLOBAL PROPERTY ORCA_INFILL_SANITIZED)
+    add_library(${target} MODULE ${ARG_SOURCES})
+    set_target_properties(${target} PROPERTIES
+        PREFIX ""
+        INTERPROCEDURAL_OPTIMIZATION OFF
+        # A library needs only the system's C and C++ runtimes; an empty rpath entry would search the working directory.
+        SKIP_BUILD_RPATH ON
+        INSTALL_RPATH "")
+    if (APPLE)
+        target_link_options(${target} PRIVATE "LINKER:-exported_symbols_list,${ARG_EXPORTS_LIST}" "LINKER:-dead_strip"
+                                              "LINKER:-dead_strip_dylibs")
+        set_target_properties(${target} PROPERTIES LINK_DEPENDS "${ARG_EXPORTS_LIST}")
+    elseif (MSVC)
+        # A PDB in every configuration, as for the application; /DEBUG would turn REF and ICF off unless they are named.
+        # The map lists the symbols of the library for scripts/check_infill_pattern_libs.py.
+        target_link_options(${target} PRIVATE "$<$<CONFIG:Release>:/DEBUG>" "/OPT:REF" "/OPT:ICF"
+                                              "/MAP:$<TARGET_FILE_DIR:${target}>/${target}.map")
+    else ()
+        target_link_options(${target} PRIVATE "LINKER:--version-script=${ARG_EXPORTS_MAP}" "LINKER:--exclude-libs,ALL"
+                                              "LINKER:--as-needed" "LINKER:--gc-sections")
+        if (NOT _sanitized)
+            target_link_options(${target} PRIVATE "LINKER:--no-undefined")
+        endif ()
+        set_target_properties(${target} PROPERTIES LINK_DEPENDS "${ARG_EXPORTS_MAP}")
+    endif ()
+    target_compile_definitions(${target} PRIVATE ORCA_INFILL_PATTERN_MODULE=1)
+    target_include_directories(${target} PRIVATE ${_runtime_dir})
+    target_link_libraries(${target} PRIVATE ${ARG_LIBRARIES} orca_infill_module_rt libslic3r_fillkit libslic3r_compile_settings)
+    orca_use_infill_build_id(${target})
+endfunction()
 
 # Definitions a pattern library has in place of libslic3r's (runtime/ModuleSeams.cpp). Its objects are linked as
 # objects, never as archive members, so that they come before any library that defines the same symbols.
@@ -63,14 +88,24 @@ if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "MODULE")
     target_link_libraries(orca_infill_module_rt PRIVATE libslic3r_compile_settings)
     target_compile_definitions(orca_infill_module_rt PRIVATE ORCA_INFILL_PATTERN_MODULE=1)
     encoding_check(orca_infill_module_rt)
-else ()
-    # The entries of every library, under names of their own, for the application to bind without files.
-    add_library(orca_infill_patterns STATIC runtime/PatternEntry.hpp)
-    target_link_libraries(orca_infill_patterns PRIVATE libslic3r_compile_settings)
-    target_compile_definitions(orca_infill_patterns PRIVATE ORCA_INFILL_PATTERN_MODULE=0)
-    target_include_directories(orca_infill_patterns PRIVATE ${ORCA_INFILL_RUNTIME_DIR})
-    orca_use_infill_build_id(orca_infill_patterns)
 endif ()
+
+# The entry of every library once more, under a name of its own and linked into an executable, with the table the
+# loader binds them from (runtime/LinkedLibraries.cpp). With ORCA_INFILL_PATTERN_LINKAGE=STATIC libslic3r links it in
+# place of the files; otherwise orca_link_builtin_infill_patterns() links it into the tools that ship as a single file.
+add_library(orca_infill_patterns_linked OBJECT runtime/LinkedLibraries.cpp runtime/PatternEntry.hpp)
+target_link_libraries(orca_infill_patterns_linked PRIVATE libslic3r_compile_settings)
+target_compile_definitions(orca_infill_patterns_linked PRIVATE ORCA_INFILL_PATTERN_MODULE=0)
+target_include_directories(orca_infill_patterns_linked PRIVATE ${ORCA_INFILL_RUNTIME_DIR})
+orca_use_infill_build_id(orca_infill_patterns_linked)
+encoding_check(orca_infill_patterns_linked)
+
+# The rows of the built-in pattern table (Fill/InfillPatternRegistry.cpp) in InfillPattern order, each named by its
+# token in upper case without punctuation. orca_infill_libraries.h defines ORCA_INFILL_LIBRARY_<ROW> for every one.
+set(ORCA_INFILL_ROWS MONOTONIC MONOTONICLINE RECTILINEAR ALIGNEDRECTILINEAR ZIGZAG CROSSZAG LOCKEDZAG LINE GRID TRIANGLES
+                     TRIHEXAGON CUBIC ADAPTIVECUBIC QUARTERCUBIC SUPPORTCUBIC LIGHTNING HONEYCOMB 3DHONEYCOMB LATERALHONEYCOMB
+                     LATERALLATTICE CROSSHATCH TPMSD TPMSFK GYROID CONCENTRIC SPIRALINSET HILBERTCURVE ARCHIMEDEANCHORDS
+                     OCTAGRAMSPIRAL SUPPORTBASE CONCENTRICINTERNAL)
 
 # orca_add_builtin_infill_library(<token> ROW <ipX> CLASS <FillX> HEADER <header> OBJECTS <objects>...
 #                                 [CALLS <call>...] [STATE <kind>...] [NO_SORT] [INTERNAL])
@@ -116,38 +151,29 @@ function(orca_add_builtin_infill_library token)
     else ()
         set(ORCA_INFILL_TRAITS "0u")
     endif ()
+    if (NOT _define IN_LIST ORCA_INFILL_ROWS)
+        message(FATAL_ERROR "orca_add_builtin_infill_library(${token}): ${_define} is not in ORCA_INFILL_ROWS")
+    endif ()
+
+    # The entry linked into executables, under a name of its own.
+    set(_linked_entry "orca_infill_builtin_entry_v1_${_id}")
+    set(ORCA_INFILL_ENTRY "${_linked_entry}")
+    set(ORCA_INFILL_ENTRY_EXPORT "")
+    set(_entry "${CMAKE_CURRENT_BINARY_DIR}/${_name}/entry_linked.cpp")
+    configure_file(${ORCA_INFILL_RUNTIME_DIR}/entry.cpp.in "${_entry}" @ONLY)
+    target_sources(orca_infill_patterns_linked PRIVATE "${_entry}")
+
     if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "MODULE")
         set(ORCA_INFILL_ENTRY "orca_infill_builtin_entry_v1")
         set(ORCA_INFILL_ENTRY_EXPORT "ORCA_INFILL_EXPORT")
-    else ()
-        set(ORCA_INFILL_ENTRY "orca_infill_builtin_entry_v1_${_id}")
-        set(ORCA_INFILL_ENTRY_EXPORT "")
-    endif ()
-    set(_entry "${CMAKE_CURRENT_BINARY_DIR}/${_name}/entry.cpp")
-    configure_file(${ORCA_INFILL_RUNTIME_DIR}/entry.cpp.in "${_entry}" @ONLY)
-
-    if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "MODULE")
-        add_library(${_name} MODULE "${_entry}")
+        set(_entry "${CMAKE_CURRENT_BINARY_DIR}/${_name}/entry.cpp")
+        configure_file(${ORCA_INFILL_RUNTIME_DIR}/entry.cpp.in "${_entry}" @ONLY)
+        orca_add_infill_pattern_module(${_name} SOURCES "${_entry}" LIBRARIES ${ARG_OBJECTS}
+                                       EXPORTS_MAP ${ORCA_INFILL_RUNTIME_DIR}/exports.map EXPORTS_LIST ${ORCA_INFILL_RUNTIME_DIR}/exports.txt)
         set_target_properties(${_name} PROPERTIES
-            PREFIX ""
             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/infill_patterns/$<CONFIG>"
             # Multi-configuration generators add the configuration, as for the application's own PDB.
-            PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/src"
-            INTERPROCEDURAL_OPTIMIZATION OFF
-            # A library needs only the system's C and C++ runtimes; an empty rpath entry would search the working
-            # directory.
-            SKIP_BUILD_RPATH ON
-            INSTALL_RPATH ""
-            LINK_DEPENDS "${ORCA_INFILL_LINK_DEPENDS}")
-        target_compile_definitions(${_name} PRIVATE ORCA_INFILL_PATTERN_MODULE=1)
-        target_include_directories(${_name} PRIVATE ${ORCA_INFILL_RUNTIME_DIR})
-        target_link_libraries(${_name} PRIVATE ${ARG_OBJECTS} orca_infill_module_rt libslic3r_fillkit libslic3r_compile_settings)
-        target_link_options(${_name} PRIVATE ${ORCA_INFILL_LINK_OPTIONS})
-        if (MSVC)
-            # The map lists the symbols of the library for scripts/check_infill_pattern_libs.py.
-            target_link_options(${_name} PRIVATE "/MAP:$<TARGET_FILE_DIR:${_name}>/${_name}.map")
-        endif ()
-        orca_use_infill_build_id(${_name})
+            PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/src")
         foreach (_dir IN LISTS ORCA_INFILL_PATTERN_STAGE_DIRS)
             add_custom_command(TARGET ${_name} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E make_directory "${_dir}"
@@ -168,14 +194,15 @@ function(orca_add_builtin_infill_library token)
         set(_file "${_name}${CMAKE_SHARED_MODULE_SUFFIX}")
         set_property(GLOBAL APPEND PROPERTY ORCA_INFILL_PATTERN_TARGETS ${_name})
     else ()
-        target_sources(orca_infill_patterns PRIVATE "${_entry}")
         set(_file "")
     endif ()
 
-    set_property(GLOBAL APPEND PROPERTY ORCA_INFILL_PATTERN_DEFINES "#define ORCA_INFILL_LIBRARY_${_define} 1\n")
+    set_property(GLOBAL APPEND PROPERTY ORCA_INFILL_PATTERN_LIBRARY_ROWS ${_define})
     set_property(GLOBAL APPEND PROPERTY ORCA_INFILL_PATTERN_MANIFEST
-                 "    X(${ARG_ROW}, ${ORCA_INFILL_KEY}, \"${_file}\", ${ORCA_INFILL_ENTRY}) \\\n")
-    set_property(GLOBAL APPEND PROPERTY ORCA_INFILL_PATTERN_FILES "${_file}")
+                 "    X(${ARG_ROW}, ${ORCA_INFILL_KEY}, \"${_name}\", \"${_file}\", ${_linked_entry}) \\\n")
+    if (_file)
+        set_property(GLOBAL APPEND PROPERTY ORCA_INFILL_PATTERN_FILES "${_file}")
+    endif ()
 endfunction()
 
 # Every family, in a fixed order, each adding its rows.
@@ -183,13 +210,24 @@ foreach (_family IN ITEMS rectilinear line concentric honeycomb crosshatch plane
     include(${CMAKE_CURRENT_SOURCE_DIR}/${_family}.cmake)
 endforeach ()
 
-if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "MODULE")
-    get_property(_targets GLOBAL PROPERTY ORCA_INFILL_PATTERN_TARGETS)
-    add_custom_target(orca_infill_patterns)
-    if (_targets)
-        add_dependencies(orca_infill_patterns ${_targets})
-    endif ()
+# Builds the pattern libraries; with ORCA_INFILL_PATTERN_LINKAGE=STATIC there are none, and libslic3r links the entries.
+get_property(_targets GLOBAL PROPERTY ORCA_INFILL_PATTERN_TARGETS)
+add_custom_target(orca_infill_patterns)
+if (_targets)
+    add_dependencies(orca_infill_patterns ${_targets})
 endif ()
+if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "STATIC")
+    target_link_libraries(libslic3r PRIVATE orca_infill_patterns_linked)
+endif ()
+
+# Links the entries of the pattern libraries into target, an executable that ships without the library files and binds
+# them with bind_builtin_infill_patterns(linked_builtin_infill_patterns()) (Fill/InfillPatternLibraries.hpp).
+# The objects are added as sources, so that the target may use either signature of target_link_libraries().
+function(orca_link_builtin_infill_patterns target)
+    if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "MODULE")
+        target_sources(${target} PRIVATE $<TARGET_OBJECTS:orca_infill_patterns_linked>)
+    endif ()
+endfunction()
 
 # Writes path only when its content changes, so that its includers rebuild only then.
 function(orca_infill_write_if_changed path content)
@@ -198,9 +236,17 @@ function(orca_infill_write_if_changed path content)
     file(REMOVE "${path}.tmp")
 endfunction()
 
-# orca_infill_libraries.h, which libslic3r_infill_patterns.h includes: the rows a pattern library serves.
-get_property(_defines GLOBAL PROPERTY ORCA_INFILL_PATTERN_DEFINES)
-string(REPLACE ";" "" _defines "${_defines}")
+# orca_infill_libraries.h, which libslic3r_infill_patterns.h includes: ORCA_INFILL_LIBRARY_<ROW> is 1 for the rows a
+# pattern library serves and 0 for the others.
+get_property(_library_rows GLOBAL PROPERTY ORCA_INFILL_PATTERN_LIBRARY_ROWS)
+set(_defines "")
+foreach (_row IN LISTS ORCA_INFILL_ROWS)
+    if (_row IN_LIST _library_rows)
+        string(APPEND _defines "#define ORCA_INFILL_LIBRARY_${_row} 1\n")
+    else ()
+        string(APPEND _defines "#define ORCA_INFILL_LIBRARY_${_row} 0\n")
+    endif ()
+endforeach ()
 if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "STATIC")
     set(_static 1)
 else ()
@@ -208,13 +254,14 @@ else ()
 endif ()
 orca_infill_write_if_changed("${CMAKE_BINARY_DIR}/src/libslic3r/orca_infill_libraries.h"
 "#pragma once
-// Generated by src/infill_patterns/CMakeLists.txt: ORCA_INFILL_LIBRARY_<ROW> is defined for every row of the built-in
-// pattern table that a pattern library serves.
+// Generated by src/infill_patterns/CMakeLists.txt: ORCA_INFILL_LIBRARY_<ROW> is 1 for every row of the built-in
+// pattern table that a pattern library serves, and 0 for the others.
 #define ORCA_INFILL_PATTERN_LINKAGE_STATIC ${_static}
 ${_defines}")
 
-# orca_infill_manifest.h: X(row, token, file, entry) for every pattern library, with the InfillPattern enumerator of its
-# row, its token (nullptr for an internal row), its file name (empty when linked into the application) and its entry.
+# orca_infill_manifest.h: X(row, token, name, file, linked) for every pattern library, with the InfillPattern enumerator
+# of its row, its token (nullptr for an internal row), its name, its file name (empty when libslic3r links the entries)
+# and the entry of its copy in orca_infill_patterns_linked.
 get_property(_manifest GLOBAL PROPERTY ORCA_INFILL_PATTERN_MANIFEST)
 string(REPLACE ";" "" _manifest "${_manifest}")
 orca_infill_write_if_changed("${CMAKE_BINARY_DIR}/src/libslic3r/orca_infill_manifest.h"
@@ -224,7 +271,8 @@ orca_infill_write_if_changed("${CMAKE_BINARY_DIR}/src/libslic3r/orca_infill_mani
 ${_manifest}
 ")
 
-# The file names of the libraries, one per line, for scripts/check_infill_pattern_libs.py.
+# The file names of the libraries, one per line, for scripts/check_infill_pattern_libs.py: the packaging of the
+# application checks its folder of libraries against this one (src/dev-utils/platform/unix/build_linux_image.sh.in).
 function(orca_write_infill_pattern_manifest path)
     get_property(_files GLOBAL PROPERTY ORCA_INFILL_PATTERN_FILES)
     string(REPLACE ";" "\n" _files "${_files}")

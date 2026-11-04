@@ -1139,6 +1139,10 @@ void apply_members(const Case &c, Fill &filler)
     filler.bounding_box                  = f.bounding_box;
     filler.print_config                  = f.configs ? &print_config() : nullptr;
     filler.print_object_config           = f.configs ? &object_config(f.calib_flowrate_topinfill_special_order) : nullptr;
+    // As Layer::make_fills() sets them next to the configurations.
+    const std::vector<double> &nozzles   = print_config().nozzle_diameter.values;
+    filler.min_nozzle_diameter           = f.configs && ! nozzles.empty() ? *std::min_element(nozzles.begin(), nozzles.end()) : 0.;
+    filler.calib_flowrate_topinfill_special_order = f.configs && f.calib_flowrate_topinfill_special_order;
     filler.no_overlap_expolygons         = f.no_overlap_expolygons;
     filler.dont_alternate_fill_direction = f.dont_alternate_fill_direction;
     if (c.has_lock)

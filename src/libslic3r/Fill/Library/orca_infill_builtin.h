@@ -292,8 +292,8 @@ typedef struct orca_infill_builtin_library {
                                                        orca_infill_sink *sink);
 } orca_infill_builtin_library;
 
-/* Exported as ORCA_INFILL_BUILTIN_ENTRY_V1. Returns NULL, after host->log, when host->abi_major or host->build_id is
-   not the library's own. */
+/* Exported as ORCA_INFILL_BUILTIN_ENTRY_V1. Returns NULL, after host->log of the library's own build id at
+   ORCA_INFILL_LOG_ERROR, when host->abi_major or host->build_id is not the library's own. */
 typedef const orca_infill_builtin_library *(ORCA_INFILL_CALL *orca_infill_builtin_entry_v1_fn)(const orca_infill_builtin_host *host);
 
 #ifdef __cplusplus
