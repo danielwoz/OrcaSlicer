@@ -31,11 +31,6 @@
 #include "ExtrusionEntity.hpp"
 #include "Fill.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
-#include "FillRectilinear.hpp"
-#include "FillConcentricInternal.hpp"
-#include "FillTpmsD.hpp"
-#include "FillTpmsFK.hpp"
-#include "FillConcentric.hpp"
 #include "InfillPatternRegistry.hpp"
 #include "InfillPlugins.hpp"
 #include "libslic3r/Flow.hpp"
@@ -1398,7 +1393,6 @@ void Layer::make_fills(const RegionOctrees* fill_octrees, const InfillObjectStat
         f->fixed_angle = surface_fill.params.fixed_angle;
         const InfillPattern row     = sliced_infill_pattern(surface_fill.params.pattern).id;
         const Octrees      *octrees = fill_octrees ? fill_octrees->region(surface_fill.region_id, row) : nullptr;
-        f->adaptive_infill_field   = this->object()->adaptive_infill_field(surface_fill.params.adaptive_infill_mode);
         f->object_state            = row == ipLightning ? lightning :
                                                           this->object()->infill_states().field(row, surface_fill.params.adaptive_infill_mode);
         f->print_config        = &this->object()->print()->config();
@@ -1596,7 +1590,6 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const RegionOctr
         f->fixed_angle = surface_fill.params.fixed_angle;
         const InfillPattern row     = sliced_infill_pattern(surface_fill.params.pattern).id;
         const Octrees      *octrees = fill_octrees ? fill_octrees->region(surface_fill.region_id, row) : nullptr;
-        f->adaptive_infill_field   = this->object()->adaptive_infill_field(surface_fill.params.adaptive_infill_mode);
         f->object_state            = row == ipLightning ? lightning :
                                                           this->object()->infill_states().field(row, surface_fill.params.adaptive_infill_mode);
         f->print_config        = &this->object()->print()->config();

@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <functional>
-#include <memory>
 #include <utility>
 #include <vector>
 
@@ -105,10 +104,6 @@ private:
     // In the modes following the distance to the surface, the depth of every grid node.
     std::vector<float> m_depth;
 };
-
-using AdaptiveInfillFieldPtr = std::unique_ptr<AdaptiveInfillField>;
-// A field for every adaptive mode in use, indexed by the mode.
-using AdaptiveInfillFields = std::array<AdaptiveInfillFieldPtr, size_t(AdaptiveInfillMode::Count)>;
 
 struct AdaptiveTpms
 {
