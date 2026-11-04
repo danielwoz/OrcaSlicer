@@ -179,12 +179,15 @@ public:
     // members above.
     const InfillObjectState* object_state = nullptr;
 
-    // PrintConfig and PrintObjectConfig are used by infills that use Arachne (Concentric and FillEnsuring).
-    // Orca: also used by gap fill function.
+    // The configurations of the print and of the object, which make_fills() and the anchoring of bridges set. print_config
+    // is read only to derive min_nozzle_diameter (set_config_values() in Fill.cpp). print_object_config is read by
+    // make_fills(), by the plane path fillers, by gap fill and by the flow rate calibration order of
+    // fill_surface_extrusion(), which needs it whenever top solid infill is extruded. Neither reaches a pattern library.
     const PrintConfig       *print_config        = nullptr;
     const PrintObjectConfig *print_object_config = nullptr;
-    // The values of these configurations that reach the fillers of a pattern library: the smallest nozzle diameter of
-    // the printer in mm, 0 when unknown, and calib_flowrate_topinfill_special_order of the object.
+    // Values of these configurations for the fillers, which also reach a pattern library: the smallest nozzle diameter
+    // of the printer in mm (0 when unknown), which sizes the Arachne walls of the concentric patterns, and
+    // calib_flowrate_topinfill_special_order of the object.
     double      min_nozzle_diameter = 0.;
     bool        calib_flowrate_topinfill_special_order = false;
 

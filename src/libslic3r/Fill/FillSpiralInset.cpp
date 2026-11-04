@@ -350,7 +350,6 @@ void FillSpiralInset::_fill_surface_single(const FillParams& params,
                                                 ThickPolylines& thick_polylines_out)
 {
     assert(params.use_arachne);
-    assert(this->print_config != nullptr && this->print_object_config != nullptr);
 
     // Internal solid infill must not add Arachne's standalone thin walls: one of those walls can
     // become the extra centre point after the spiral has finished. Top and bottom surfaces keep
@@ -377,7 +376,6 @@ void FillSpiralInset::_fill_surface_single(const FillParams& params,
     coord_t  loops_count = std::max(bbox_size.x(), bbox_size.y()) / min_spacing + 1;
     Polygons polygons    = offset(expolygon, float(min_spacing) / 2.f);
 
-    double min_nozzle_diameter = *std::min_element(print_config->nozzle_diameter.values.begin(), print_config->nozzle_diameter.values.end());
     Arachne::WallToolPathsParams input_params;
     input_params.min_bead_width                = 0.85 * min_nozzle_diameter;
     input_params.min_feature_size              = 0.25 * min_nozzle_diameter;

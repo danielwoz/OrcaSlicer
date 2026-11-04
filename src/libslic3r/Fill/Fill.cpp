@@ -1338,7 +1338,7 @@ static int infill_body(const Layer &layer, const SurfaceFill &fill, const ExPoly
     return body;
 }
 
-// The values of print_config and print_object_config that the fillers of a pattern library receive in their place.
+// The values of print_config and print_object_config that the fillers read, also in a pattern library.
 static void set_config_values(Fill &f)
 {
     const std::vector<double> &nozzles = f.print_config->nozzle_diameter.values;
