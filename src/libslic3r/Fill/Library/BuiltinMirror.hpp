@@ -14,7 +14,7 @@
 
 #include "../AdaptiveInfillField.hpp"
 #include "../FillBase.hpp"
-#include "../Lightning/Generator.hpp"
+#include "../LightningParams.hpp"
 #include "../../Point.hpp"
 #include "../../Surface.hpp"
 
@@ -83,7 +83,7 @@ orca_infill_octree_input octree_input(const indexed_triangle_set &mesh, const st
 class LightningInput
 {
 public:
-    LightningInput(const FillLightning::Generator::Params &params, const std::vector<Polygons> &outlines,
+    LightningInput(const FillLightning::GeneratorParams &params, const std::vector<Polygons> &outlines,
                    const std::vector<Polygons> *overhangs = nullptr);
     LightningInput(const LightningInput &) = delete;
     LightningInput& operator=(const LightningInput &) = delete;
@@ -145,10 +145,10 @@ OctreeMesh      to_octree_mesh(const orca_infill_octree_input &input);
 // The arguments of a FillLightning::Generator constructor.
 struct LightningLayers
 {
-    FillLightning::Generator::Params params;
+    FillLightning::GeneratorParams params;
     // Per layer; empty when the input has none.
-    std::vector<Polygons>            outlines;
-    std::vector<Polygons>            overhangs;
+    std::vector<Polygons>          outlines;
+    std::vector<Polygons>          overhangs;
 };
 LightningLayers to_lightning_layers(const orca_infill_lightning_input &input);
 

@@ -35,10 +35,10 @@ static_assert(std::is_same_v<decltype(boost::pfr::structure_to_tuple(std::declva
                                         float, float, CenterOfSurfacePattern>>,
               "a field of FillParams changed its type: update orca_infill_fill_params");
 
-// FillLightning::Generator::Params: every field is carried.
-static_assert(std::is_same_v<decltype(boost::pfr::structure_to_tuple(std::declval<const FillLightning::Generator::Params&>())),
+// FillLightning::GeneratorParams: every field is carried.
+static_assert(std::is_same_v<decltype(boost::pfr::structure_to_tuple(std::declval<const FillLightning::GeneratorParams&>())),
                              std::tuple<float, int64_t, int64_t, int64_t, int64_t>>,
-              "FillLightning::Generator::Params changed: update orca_infill_lightning_input");
+              "FillLightning::GeneratorParams changed: update orca_infill_lightning_input");
 
 // Fill and Surface members, mirrored by hand.
 static_assert(std::is_same_v<decltype(Fill::layer_id), size_t> && std::is_same_v<decltype(Fill::z), double> &&
@@ -377,7 +377,7 @@ orca_infill_octree_input octree_input(const indexed_triangle_set &mesh, const st
              line_spacing, uint8_t(support_overhangs_only) };
 }
 
-LightningInput::LightningInput(const FillLightning::Generator::Params &params, const std::vector<Polygons> &outlines,
+LightningInput::LightningInput(const FillLightning::GeneratorParams &params, const std::vector<Polygons> &outlines,
                                const std::vector<Polygons> *overhangs)
 {
     assert(overhangs == nullptr || overhangs->size() == outlines.size());

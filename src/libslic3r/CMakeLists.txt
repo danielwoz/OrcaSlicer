@@ -140,6 +140,7 @@ set(lisbslic3r_sources
     Fill/InfillPlugins.cpp
     Fill/InfillPlugins.hpp
     Fill/LightningParams.cpp
+    Fill/LightningParams.hpp
     Fill/FillPlugin.cpp
     Fill/FillPlugin.hpp
     Fill/SharedLibrary.cpp
