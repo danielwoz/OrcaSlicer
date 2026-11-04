@@ -57,6 +57,14 @@ FORBIDDEN = [
 # reach leaves none of that code.
 EXACT_ARITHMETIC = (r"__gmp[a-z]*_\w|(?:^|_)mpfr_\w", "GMP or MPFR")
 
+# What a library exports besides its entry on Windows, where whatever a header declares __declspec(dllexport) is exported
+# by every module that compiles it: the singleton of cereal/details/static_object.hpp, through Config.hpp, and inline
+# members of an OCCT class declared Standard_EXPORT, through Print.hpp in ShortestPath.cpp and GCode/OrderingStrategies.cpp.
+# No module imports them; the loader looks up only the entry.
+HEADER_EXPORTS = {
+    "win32": r"\?\$StaticObject@.+@detail@cereal@@|^\?\w+@TDataStd_GenericEmpty@@",
+}
+
 # The C and C++ runtimes. On Linux that includes the dynamic loader, which defines __tls_get_addr for the thread-local
 # variables of the shared sources.
 IMPORTS = {
@@ -233,6 +241,8 @@ def main():
             problems.append(f"{name}: cannot be read: {error}")
             continue
         problems += [f"{name}: {note}" for note in notes]
+        if platform in HEADER_EXPORTS:
+            exports = {name for name in exports if not re.search(HEADER_EXPORTS[platform], name)}
         if exports != {ENTRY}:
             problems.append(f"{name}: exports {sorted(exports)}, not only {ENTRY}")
         for library in imports:
