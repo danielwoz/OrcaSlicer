@@ -98,4 +98,29 @@ Problems are logged and shown as a notification. `out.log()` writes to the same 
 - The library is loaded once and never unloaded. On macOS, an unsigned download may need
   `xattr -d com.apple.quarantine <file>` before it loads.
 
+## OrcaSlicer's own patterns
+
+The built-in patterns are libraries too, one per pattern, named `orca_infill_<token>` (`orca_infill_gyroid.dll`,
+`orca_infill_tri-hexagon.so`, ...; two internal patterns are `orca_infill_supportbase` and
+`orca_infill_concentricinternal`). They are not plugins and do not use this SDK:
+
+- They are built in the OrcaSlicer tree, from the same object files as the application, and use a reserved ABI of
+  their own, `src/libslic3r/Fill/Library/orca_infill_builtin.h`, which is not part of the SDK. Their entry point is
+  `orca_infill_builtin_entry_v1`.
+- A plugin must not export `orca_infill_builtin_entry_v1`, nor return the reserved status codes
+  `ORCA_INFILL_ERR_STATE` and `ORCA_INFILL_ERR_CANCELED`. A file in a plugin folder that exports that entry is
+  ignored, and a reserved status from a plugin is treated as `ORCA_INFILL_ERR_EXCEPTION`. A plugin cannot replace a
+  built-in pattern: built-in tokens have no `.`, and the built-in libraries are only loaded from the application's own
+  folder, under their own file names.
+- They are tied to the build that made them. Each carries a build id (version, commit, compiler, architecture,
+  configuration and a hash of the compiler flags), and OrcaSlicer only uses a library whose build id is exactly its
+  own, so a library copied from another build or release is refused.
+- They live next to the application: `infill_patterns` next to `orca-slicer.exe` on Windows,
+  `OrcaSlicer.app/Contents/PlugIns/infill_patterns` on macOS, and `<prefix>/<libdir>/orca-slicer/infill_patterns` on
+  Linux (`lib/orca-slicer/infill_patterns` inside the AppImage, `infill_patterns` next to the executable in a build
+  tree).
+- If one is missing or damaged, OrcaSlicer still starts and opens and saves projects, but refuses to slice and names
+  the file; reinstalling fixes it. `orca-slicer --check-infill-patterns` lists every library with its status and exits
+  with 1 when one is not usable.
+
 The full contract, including the ABI versioning rules, is in the comments of `include/orca_infill_plugin.h`.
