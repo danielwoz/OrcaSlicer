@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Audits a folder of built-in infill pattern libraries (src/infill_patterns).
 
-    check_infill_pattern_libs.py --manifest <file> [--exact] [--dumpbin <path>] <folder>
+    check_infill_pattern_libs.py --manifest <file> [--exact] [--dumpbin <path>] [--config <name>] <folder>
 
 The manifest names one library file per line, as src/infill_patterns/CMakeLists.txt
 writes it. For the folder and each library it checks that:
@@ -11,10 +11,13 @@ writes it. For the folder and each library it checks that:
 - a library exports orca_infill_builtin_entry_v1 and nothing else;
 - it imports only the C and C++ runtimes, and on Linux has no library search path;
 - it carries none of the code a library must not contain: the TBB runtime or
-  allocator, Boost.Log, a thread, or code that reads print configurations,
-  presets or the print, or that belongs to wxWidgets, OCCT or OpenVDB;
+  allocator, Boost.Log, a thread, GMP or MPFR, or code that reads print
+  configurations, presets or the print, or that belongs to wxWidgets, OCCT or
+  OpenVDB;
 - on macOS, it holds a slice for every architecture of the first library.
 
+--config names the configuration the libraries were built in; a Windows Debug
+build also imports what DEBUG_IMPORTS lists.
 Linux reads the libraries with readelf and nm, macOS with nm, otool and lipo,
 Windows with dumpbin and the map its link writes next to each library. Exits
 with 1 and one line per problem when a check fails, and with 77 when a tool it
@@ -44,12 +47,25 @@ FORBIDDEN = [
     (r"\bopenvdb::", "OpenVDB"),
 ]
 
+# Code of GMP or MPFR, which are DLLs on Windows. Of the shared sources only the exact planarity check of
+# Geometry/VoronoiUtilsCgal.cpp uses them, and no pattern calls it, so a link that drops the functions a library does not
+# reach leaves none of that code.
+EXACT_ARITHMETIC = (r"__gmp[a-z]*_\w|(?:^|_)mpfr_\w", "GMP or MPFR")
+
 # The C and C++ runtimes. On Linux that includes the dynamic loader, which defines __tls_get_addr for the thread-local
 # variables of the shared sources.
 IMPORTS = {
     "linux": [r"libstdc\+\+\.so\.\d+", r"libm\.so\.\d+", r"libgcc_s\.so\.\d+", r"libc\.so\.\d+", r"ld-linux[\w.-]*\.so\.\d+"],
     "darwin": [r"/usr/lib/libc\+\+\.1\.dylib", r"/usr/lib/libSystem\.B\.dylib"],
     "win32": [r"KERNEL32\.dll", r"VCRUNTIME140(_1)?\.dll", r"MSVCP140(_\d+)?\.dll", r"api-ms-win-crt-[\w-]+\.dll"],
+}
+
+# The further imports of the libraries of a Windows Debug build: the debug C and C++ runtimes, and GMP and MPFR
+# (EXACT_ARITHMETIC). That build compiles without function-level linking, so a library keeps all of an object it uses:
+# the exact planarity check of Geometry/VoronoiUtilsCgal.cpp comes with the angle check that validates the Voronoi
+# diagrams of Arachne.
+DEBUG_IMPORTS = {
+    "win32": [r"VCRUNTIME140(_1)?D\.dll", r"MSVCP140(_\d+)?D\.dll", r"ucrtbased\.dll", r"libgmp-10\.dll", r"libmpfr-4\.dll"],
 }
 
 
@@ -153,6 +169,7 @@ def main():
     parser.add_argument("--manifest", required=True, help="file with one library file name per line")
     parser.add_argument("--exact", action="store_true", help="the folder holds nothing but the libraries")
     parser.add_argument("--dumpbin", default="dumpbin", help="dumpbin of Visual Studio, on Windows")
+    parser.add_argument("--config", default="", help="the build configuration of the libraries")
     parser.add_argument("folder")
     args = parser.parse_args()
 
@@ -163,6 +180,9 @@ def main():
         print(f"check_infill_pattern_libs: unsupported platform {sys.platform}")
         return 1
     read = {"linux": linux, "darwin": darwin, "win32": lambda path: win32(path, args.dumpbin)}[platform]
+    allowed, forbidden = IMPORTS[platform], FORBIDDEN + [EXACT_ARITHMETIC]
+    if args.config == "Debug" and platform in DEBUG_IMPORTS:
+        allowed, forbidden = allowed + DEBUG_IMPORTS[platform], FORBIDDEN
 
     problems = []
     present = sorted(os.listdir(args.folder)) if os.path.isdir(args.folder) else []
@@ -192,9 +212,9 @@ def main():
             problems.append(f"{name}: exports {sorted(exports)}, not only {ENTRY}")
         for library in imports:
             if not any(re.fullmatch(pattern, os.path.basename(library) if platform == "linux" else library, re.IGNORECASE)
-                       for pattern in IMPORTS[platform]):
+                       for pattern in allowed):
                 problems.append(f"{name}: imports {library}")
-        for pattern, what in FORBIDDEN:
+        for pattern, what in forbidden:
             hits = sorted({symbol for symbol in symbols if re.search(pattern, symbol)})
             if hits:
                 problems.append(f"{name}: carries {what}: {', '.join(hits[:5])}{' ...' if len(hits) > 5 else ''}")
