@@ -1,12 +1,16 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "FillBase.hpp"
 
 struct orca_infill_builtin_library;
+typedef int32_t orca_infill_status;
 
 namespace Slic3r {
 
@@ -17,8 +21,8 @@ struct InfillPatternDescriptor;
 // instance of the row's Fill class in the library, and every call passes all members of this filler and the
 // LockRegionParam it was given, so that the instance computes what the class computes in libslic3r. The lines come
 // back in the order generated, with Fill::spacing, InfillFailedException and std::bad_alloc as the class leaves them;
-// any other failure is a SlicingError. fill_surface_extrusion() stays Fill's, which calls back into fill_surface() and
-// fill_surface_arachne().
+// any other failure is a SlicingError. fill_surface_extrusion() extrudes the lines of Locked Zag with the flows of its
+// LockRegionParam, and is Fill's for every other row, which calls back into fill_surface() and fill_surface_arachne().
 class FillLibrary : public Fill
 {
 public:
@@ -39,13 +43,23 @@ public:
     Polylines      fill_surface(const Surface *surface, const FillParams &params) override;
     ThickPolylines fill_surface_arachne(const Surface *surface, const FillParams &params) override;
     void           set_lock_region_param(const LockRegionParam &lock_param) override;
+    void           fill_surface_extrusion(const Surface *surface, const FillParams &params, ExtrusionEntitiesPtr &out) override;
+    // FillLockedZag::fill_surface_locked_zag(): appends the lines of each flow, also those generated before an
+    // InfillFailedException.
+    void           fill_surface_locked_zag(const Surface *surface, const FillParams &params,
+                                           std::vector<std::pair<Polylines, Flow>> &multi_width_polyline);
 
     InfillPattern      pattern() const { return m_pattern; }
     const std::string& file() const { return m_file; }
 
 private:
     // Runs call (ORCA_INFILL_CALL_*) in the library and writes Fill::spacing back.
-    void run(int32_t call, const Surface &surface, const FillParams &params, BuiltinInfillOutput &out);
+    orca_infill_status run(int32_t call, const Surface &surface, const FillParams &params, BuiltinInfillOutput &out);
+    // Throws what a status other than ORCA_INFILL_OK stands for.
+    void check(orca_infill_status status, const BuiltinInfillOutput &out) const;
+    [[noreturn]] void fail(const std::string &reason) const;
+    // The flow of a group of Locked Zag lines: a skeleton flow of the LockRegionParam, then a skin flow.
+    const Flow& lock_flow(size_t flow_index) const;
 
     InfillPattern                      m_pattern;
     const orca_infill_builtin_library *m_library;

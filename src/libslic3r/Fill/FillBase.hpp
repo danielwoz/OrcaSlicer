@@ -223,6 +223,10 @@ public:
     // BBS: this method is used to fill the ExtrusionEntityCollection.
     // It call fill_surface by default
     virtual void fill_surface_extrusion(const Surface *surface, const FillParams &params, ExtrusionEntitiesPtr &out);
+    // The extrusions of Locked Zag: the lines of each flow FillLockedZag::fill_surface_locked_zag() generated, extruded
+    // with that flow adjusted to Fill::spacing.
+    void append_locked_zag_extrusions(std::vector<std::pair<Polylines, Flow>> &&multi_width_polyline, const FillParams &params,
+                                      ExtrusionEntitiesPtr &out) const;
 
 protected:
     Fill() :

@@ -1,4 +1,5 @@
-// Fill::fill_surface_extrusion(): the extrusions of the lines a filler generates for a surface, and their gap fill.
+// Fill::fill_surface_extrusion() and Fill::append_locked_zag_extrusions(): the extrusions of the lines a filler generates
+// for a surface, and their gap fill.
 // It reads the print object and region configurations, which the pattern code does not.
 #include <algorithm>
 #include <cstddef>
@@ -88,6 +89,46 @@ void Fill::fill_surface_extrusion(const Surface* surface, const FillParams& para
 
         // Orca: run gap fill
         this->_create_gap_fill(surface, params, eec);
+    }
+}
+
+void Fill::append_locked_zag_extrusions(std::vector<std::pair<Polylines, Flow>> &&multi_width_polyline, const FillParams &params,
+                                        ExtrusionEntitiesPtr &out) const
+{
+    ThickPolylines thick_polylines;
+
+    if (!thick_polylines.empty() || !multi_width_polyline.empty()) {
+        // Save into layer.
+        ExtrusionEntityCollection* eec = nullptr;
+        out.push_back(eec = new ExtrusionEntityCollection());
+        // Only concentric fills are not sorted.
+        eec->no_sort = this->no_sort();
+        size_t idx   = eec->entities.size();
+        {
+            for (std::pair<Polylines, Flow> &poly_with_flow: multi_width_polyline) {
+                // calculate actual flow from spacing (which might have been adjusted by the infill
+                // pattern generator)
+                double flow_mm3_per_mm = poly_with_flow.second.mm3_per_mm();
+                double flow_width      = poly_with_flow.second.width();
+                if (params.using_internal_flow) {
+                    // if we used the internal flow we're not doing a solid infill
+                    // so we can safely ignore the slight variation that might have
+                    // been applied to f->spacing
+                } else {
+                    Flow new_flow   = poly_with_flow.second.with_spacing(this->spacing);
+                    flow_mm3_per_mm = new_flow.mm3_per_mm();
+                    flow_width      = new_flow.width();
+                }
+            extrusion_entities_append_paths(
+                eec->entities, std::move(poly_with_flow.first),
+                params.extrusion_role,
+                flow_mm3_per_mm, float(flow_width), poly_with_flow.second.height());
+            }
+        }
+        if (!params.can_reverse) {
+            for (size_t i = idx; i < eec->entities.size(); i++)
+                eec->entities[i]->set_reverse();
+        }
     }
 }
 

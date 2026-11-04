@@ -1,11 +1,13 @@
 // The built-in pattern libraries against the Fill classes they carry: on every case of the corpus of a row a library
 // serves, the filler of the row (Fill::new_from_type(), which runs in the library) returns what the class itself
 // returns, bit for bit, under both scaling factors and when the cases run in any order on several threads at once.
+// This file is compiled with ORCA_INFILL_PATTERN_MODULE=0, so that it can link an entry of its own (PatternEntry.hpp).
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -14,8 +16,12 @@
 #include <thread>
 #include <vector>
 
+#include "PatternEntry.hpp"
+#include "orca_infill_build_id.h"
+
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/Fill/FillLibrary.hpp"
+#include "libslic3r/Fill/FillRectilinear.hpp"
 #include "libslic3r/Fill/InfillPatternLibraries.hpp"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
 #include "libslic3r/Fill/Library/BuiltinMirror.hpp"
@@ -121,8 +127,13 @@ TEST_CASE("Pattern libraries reproduce the Fill classes they carry", "[InfillPat
             REQUIRE(c->state == State::None);
             ++ per_row[c->pattern];
             expected.emplace_back(run_native(*c));
-            const std::string why = difference(*c, expected.back(), run_library(*c));
-            CHECK(why.empty());
+            const Output got = run_library(*c);
+            CHECK(difference(*c, expected.back(), got).empty());
+            // Interlocking takes every line for a segment along y (VoxelUtils.cpp, spreadDotsArea()); the rotation of
+            // the lines leaves their ends a few units apart in x.
+            if (c->pattern == ipAlignedRectilinear && c->name.find("/interlocking") != std::string::npos)
+                for (const Polyline &line : got.polylines)
+                    CHECK((line.size() == 2 && std::abs(line.points.front().x() - line.points.back().x()) < SCALED_EPSILON));
         }
 
         // The same cases again, shuffled over 8 threads, each case on a filler of its own.
@@ -150,10 +161,63 @@ TEST_CASE("Pattern libraries reproduce the Fill classes they carry", "[InfillPat
         }
     }
     // Every library row has cases of its own.
-    for (InfillPattern row : { ipRectilinear, ipCrossHatch }) {
-        CAPTURE(int(row));
-        CHECK(per_row[row] > 0);
+    for (const InfillPatternLibraryRow &row : InfillPatternRegistry::library_rows()) {
+        CAPTURE(row.name);
+        CHECK(per_row[row.pattern] > 0);
     }
+}
+
+namespace {
+
+// Locked Zag whose skin fails to fill: fill_surface_locked_zag() fills the skin with locked_zag cleared, after the
+// skeleton.
+class FailingSkin : public FillLockedZag
+{
+public:
+    Fill* clone() const override { return new FailingSkin(*this); }
+    Polylines fill_surface(const Surface *surface, const FillParams &params) override
+    {
+        if (! params.locked_zag)
+            throw InfillFailedException();
+        return FillLockedZag::fill_surface(surface, params);
+    }
+};
+
+struct FailingSkinRow
+{
+    using Filler = FailingSkin;
+    static constexpr int32_t     pattern     = int32_t(ipLockedZag);
+    static constexpr const char *key         = "lockedzag";
+    static constexpr const char *name        = "orca_infill_lockedzag";
+    static constexpr const char *build_id    = ORCA_INFILL_BUILD_ID;
+    static constexpr uint32_t    calls       = (1u << ORCA_INFILL_CALL_FILL_SURFACE) | (1u << ORCA_INFILL_CALL_LOCKED_ZAG);
+    static constexpr uint32_t    traits      = 0;
+    static constexpr uint32_t    state_kinds = 0;
+};
+
+} // namespace
+
+TEST_CASE("Locked Zag keeps the lines generated before a fill fails, as its class does", "[InfillPatterns][BuiltinEquivalence]")
+{
+    ScalingFactorGuard guard;
+    const orca_infill_builtin_library *library = PatternLibrary::PatternEntry<FailingSkinRow>::bind(&builtin_infill_host());
+    REQUIRE(library != nullptr);
+    size_t partial = 0;
+    for (const Case &c : cases()) {
+        if (c.pattern != ipLockedZag || (c.call != Call::LockedZag && c.call != Call::Extrusion))
+            continue;
+        CAPTURE(c.name);
+        set_scaling_factor(c.scaling_factor);
+        FailingSkin native;
+        apply_members(c, native);
+        const Output expected = run(c, native);
+        FillLibrary served(ipLockedZag, *library, "orca_infill_lockedzag");
+        apply_members(c, served);
+        CHECK(difference(c, expected, run(c, served)).empty());
+        if (c.call == Call::LockedZag && expected.error == Output::Error::InfillFailed && ! expected.flow_groups.empty())
+            ++ partial;
+    }
+    CHECK(partial > 0);
 }
 
 TEST_CASE("Pattern library statuses become the exceptions of the Fill classes", "[InfillPatterns][BuiltinEquivalence]")

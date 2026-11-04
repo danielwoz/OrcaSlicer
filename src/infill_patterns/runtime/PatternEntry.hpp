@@ -7,10 +7,14 @@
 // ORCA_INFILL_PATTERN_MODULE is 1 in a loadable library, whose log and parallel loops go to its host
 // (ModuleSeams.cpp), and 0 for an entry linked into the application.
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <new>
+#include <stdexcept>
+#include <utility>
+#include <vector>
 
 #include "libslic3r/Fill/FillBase.hpp"
 #include "libslic3r/Fill/Library/BuiltinMirror.hpp"
@@ -75,8 +79,11 @@ public:
 private:
     using Filler = typename Row::Filler;
 
-    static constexpr uint32_t served_calls = (1u << ORCA_INFILL_CALL_FILL_SURFACE) | (1u << ORCA_INFILL_CALL_FILL_ARACHNE);
-    static_assert(Row::calls != 0 && (Row::calls & ~served_calls) == 0, "PatternEntry runs fill_surface() and fill_surface_arachne()");
+    static constexpr uint32_t served_calls = (1u << ORCA_INFILL_CALL_FILL_SURFACE) | (1u << ORCA_INFILL_CALL_FILL_ARACHNE) |
+                                             (1u << ORCA_INFILL_CALL_LOCKED_ZAG);
+    static_assert(Row::calls != 0 && (Row::calls & ~served_calls) == 0,
+                  "PatternEntry runs fill_surface(), fill_surface_arachne() and fill_surface_locked_zag()");
+    static constexpr bool locked_zag = (Row::calls & (1u << ORCA_INFILL_CALL_LOCKED_ZAG)) != 0;
     static_assert(Row::state_kinds == 0, "PatternEntry prepares no object state");
 
     static void ORCA_INFILL_CALL set_scaling_factor(double scaling_factor) noexcept { SCALING_FACTOR = scaling_factor; }
@@ -120,6 +127,21 @@ private:
                 host->set_spacing(sink, filler.spacing);
                 return emit(host, sink, lines);
             }
+            if constexpr (locked_zag) {
+                if (request->call == ORCA_INFILL_CALL_LOCKED_ZAG) {
+                    // The lines generated before an InfillFailedException are kept, as FillLockedZag keeps them.
+                    std::vector<std::pair<Polylines, Flow>> groups;
+                    orca_infill_status                      status = ORCA_INFILL_OK;
+                    try {
+                        filler.fill_surface_locked_zag(&surface, params, groups);
+                    } catch (const InfillFailedException &) {
+                        status = ORCA_INFILL_ERR_FAILED;
+                    }
+                    host->set_spacing(sink, filler.spacing);
+                    const orca_infill_status emitted = emit(host, sink, filler.lock_param, groups);
+                    return emitted != ORCA_INFILL_OK ? emitted : status;
+                }
+            }
             const ThickPolylines lines = filler.fill_surface_arachne(&surface, params);
             host->set_spacing(sink, filler.spacing);
             return emit(host, sink, lines);
@@ -150,6 +172,27 @@ private:
         for (const ThickPolyline &line : lines) {
             const orca_infill_thick_path path = BuiltinMirror::view(line);
             if (orca_infill_status status = host->emit_thick_polyline(sink, &path); status != ORCA_INFILL_OK)
+                return status;
+        }
+        return ORCA_INFILL_OK;
+    }
+
+    // Group i of fill_surface_locked_zag() holds the lines of flow i, the skeleton flows of lock and then its skin flows,
+    // which is the flow index of begin_group().
+    static orca_infill_status emit(const orca_infill_builtin_host *host, orca_infill_sink *sink, const LockRegionParam &lock,
+                                   const std::vector<std::pair<Polylines, Flow>> &groups)
+    {
+        std::vector<const Flow*> flows;
+        for (const auto *map : { &lock.skeleton_flow_params, &lock.skin_flow_params })
+            for (const auto &entry : *map)
+                flows.emplace_back(&entry.first);
+        for (size_t i = 0; i < groups.size(); ++ i)
+            if (i >= flows.size() || groups[i].second != *flows[i])
+                throw std::logic_error("Locked Zag lines of a flow out of the order of the lock maps");
+        for (size_t i = 0; i < groups.size(); ++ i) {
+            if (orca_infill_status status = host->begin_group(sink, i); status != ORCA_INFILL_OK)
+                return status;
+            if (orca_infill_status status = emit(host, sink, groups[i].first); status != ORCA_INFILL_OK)
                 return status;
         }
         return ORCA_INFILL_OK;
