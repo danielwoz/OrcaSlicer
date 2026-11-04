@@ -128,11 +128,17 @@ def linux(path):
 
 
 def darwin(path):
-    exports = {line.split()[-1] for line in run("nm", "-gU", path).splitlines() if line.split()}
-    exports = {name[1:] if name.startswith("_") else name for name in exports}
-    imports = [line.split()[0] for line in run("otool", "-L", path).splitlines()[1:] if line.strip()]
-    symbols = [line.split()[-1] for line in run("nm", path).splitlines() if line.split()]
-    symbols = [name[1:] if name.startswith("_") else name for name in symbols]
+    # Each slice of a universal library on its own; the tools head the listing of a slice with a line ending in ':'.
+    def names(*command):
+        lines = [line.split() for line in run(*command).splitlines()]
+        return [fields[-1][1:] if fields[-1].startswith("_") else fields[-1]
+                for fields in lines if fields and not fields[-1].endswith(":")]
+    exports, imports, symbols = set(), [], []
+    for arch in run("lipo", "-archs", path).split():
+        exports.update(names("nm", "-arch", arch, "-gU", path))
+        imports += [line.split()[0] for line in run("otool", "-arch", arch, "-L", path).splitlines()
+                    if line[:1].isspace() and line.strip()]
+        symbols += names("nm", "-arch", arch, path)
     return exports, imports, demangle(symbols), []
 
 
