@@ -1,5 +1,5 @@
-// The inputs of the lightning generators (Fill/Lightning/Generator.hpp) that come from a print object: the parameters,
-// read from its configuration, and the infill outlines of its layers, which the pattern code does not read.
+#include "LightningParams.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -10,13 +10,12 @@
 #include "../Print.hpp"
 #include "../PrintConfig.hpp"
 #include "../Surface.hpp"
-#include "Lightning/Generator.hpp"
 
 namespace Slic3r::FillLightning {
 
-Generator::Params lightning_infill_params(const PrintObject &print_object)
+GeneratorParams lightning_infill_params(const PrintObject &print_object)
 {
-    Generator::Params          params;
+    GeneratorParams            params;
     const PrintConfig         &print_config         = print_object.print()->config();
     const PrintObjectConfig   &object_config        = print_object.config();
     const PrintRegionConfig   &region_config        = print_object.shared_regions()->all_regions.front()->config();
@@ -65,9 +64,9 @@ std::vector<Polygons> lightning_infill_outlines(const PrintObject &print_object,
     return infill_outlines;
 }
 
-Generator::Params lightning_support_params(const PrintObject &print_object, float density)
+GeneratorParams lightning_support_params(const PrintObject &print_object, float density)
 {
-    Generator::Params          params;
+    GeneratorParams            params;
     const PrintConfig         &print_config         = print_object.print()->config();
     const PrintObjectConfig   &object_config        = print_object.config();
     const PrintRegionConfig   &region_config        = print_object.shared_regions()->all_regions.front()->config();

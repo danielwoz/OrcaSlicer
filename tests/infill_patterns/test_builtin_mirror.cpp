@@ -417,7 +417,7 @@ TEST_CASE("Built-in mirror: the mesh and the overhangs of an octree round trip, 
 
 TEST_CASE("Built-in mirror: the layers of a lightning generator round trip, viewed in place", "[InfillPatterns][BuiltinMirror]")
 {
-    const FillLightning::Generator::Params params { 452000.5f, 2260000, 199999, -7, 1 };
+    const FillLightning::GeneratorParams   params { 452000.5f, 2260000, 199999, -7, 1 };
     const ExPolygon                        region = odd_region(0);
     const std::vector<Polygons>            outlines { to_polygons(region), {}, { region.holes[1], region.contour } };
     const std::vector<Polygons>            overhangs { {}, { region.holes[0] }, {} };

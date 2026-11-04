@@ -14,6 +14,7 @@
 #include "libslic3r/Fill/FillLibrary.hpp"
 #include "libslic3r/Fill/FillLightning.hpp"
 #include "libslic3r/Fill/FillRectilinear.hpp"
+#include "libslic3r/Fill/Lightning/Generator.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Tesselate.hpp"
@@ -1182,7 +1183,7 @@ struct NativeStates::Set
     std::map<AdaptiveInfillMode, std::unique_ptr<AdaptiveInfillField>> fields;
     std::unique_ptr<Model>                                       model;
     std::unique_ptr<Print>                                       print;
-    FillLightning::Generator::Params                             lightning_params {};
+    FillLightning::GeneratorParams                               lightning_params {};
     std::vector<Polygons>                                        lightning_outlines;
     std::unique_ptr<FillLightning::Generator>                    generator;
 };

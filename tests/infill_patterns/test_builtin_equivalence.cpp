@@ -641,8 +641,8 @@ TEST_CASE("Pattern libraries prepare the lightning generator of their row", "[In
     }
     for (const coord_t radius : { coord_t(0), coord_t(-scaled<coord_t>(2.)) }) {
         CAPTURE(radius);
-        FillLightning::Generator::Params params = native.params;
-        params.supporting_radius                = radius;
+        FillLightning::GeneratorParams params = native.params;
+        params.supporting_radius              = radius;
         const BuiltinMirror::LightningInput bad_radius(params, native.outlines);
         const orca_infill_state_input       bad { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_LIGHTNING, &bad_radius.get() };
         CHECK(library.prepare_state(int32_t(ipLightning), &bad, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);

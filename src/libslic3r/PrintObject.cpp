@@ -88,7 +88,7 @@
 #include <tbb/concurrent_unordered_map.h>
 #include "ExtrusionEntityCollection.hpp"
 #include "Fill/FillBase.hpp"
-#include "Fill/Lightning/Generator.hpp"
+#include "Fill/LightningParams.hpp"
 #include "SurfaceCollection.hpp"
 #include "TriangleMesh.hpp"
 #include "BeltBrim.hpp"

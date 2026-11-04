@@ -79,7 +79,7 @@ Slic3r::SVG draw_two_overhangs_to_svg(size_t ts_layer, const ExPolygons& overhan
 
 namespace Slic3r::FillLightning {
 
-Generator::Generator(const Params &params, const std::vector<Polygons> &infill_outlines, const std::function<void()> &throw_on_cancel_callback) :
+Generator::Generator(const GeneratorParams &params, const std::vector<Polygons> &infill_outlines, const std::function<void()> &throw_on_cancel_callback) :
     m_infill_extrusion_width(params.infill_extrusion_width),
     m_supporting_radius(params.supporting_radius),
     m_wall_supporting_radius(params.wall_supporting_radius),
@@ -90,7 +90,7 @@ Generator::Generator(const Params &params, const std::vector<Polygons> &infill_o
     generateTrees(infill_outlines, throw_on_cancel_callback);
 }
 
-Generator::Generator(const Params &params, std::vector<Polygons>& contours, std::vector<Polygons>& overhangs, const std::function<void()> &throw_on_cancel_callback) :
+Generator::Generator(const GeneratorParams &params, std::vector<Polygons>& contours, std::vector<Polygons>& overhangs, const std::function<void()> &throw_on_cancel_callback) :
     m_infill_extrusion_width(params.infill_extrusion_width),
     m_supporting_radius(params.supporting_radius),
     m_wall_supporting_radius(params.wall_supporting_radius),

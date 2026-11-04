@@ -6,6 +6,7 @@
 
 #include "libslic3r/BoundingBox.hpp"
 #include "Layer.hpp"
+#include "libslic3r/Fill/LightningParams.hpp"
 #include "libslic3r/Polygon.hpp"
 #include "libslic3r/libslic3r.h"
 
@@ -16,8 +17,6 @@
 
 namespace Slic3r 
 {
-class PrintObject;
-
 namespace FillLightning
 {
 
@@ -42,20 +41,6 @@ class Generator  // "Just like Nicola used to make!"
 {
 public:
     /*!
-     * The widths and distances a generator grows its trees by, scaled. They are
-     * read from the configuration of a print object by lightning_infill_params()
-     * and lightning_support_params().
-     */
-    struct Params
-    {
-        float   infill_extrusion_width;
-        coord_t supporting_radius;
-        coord_t wall_supporting_radius;
-        coord_t prune_length;
-        coord_t straightening_max_distance;
-    };
-
-    /*!
      * Create a generator to fill a certain mesh with infill.
      *
      * This generator will pre-compute things in preparation of generating
@@ -64,7 +49,7 @@ public:
      * \param infill_outlines The infill areas of each layer of the mesh, as
      * lightning_infill_outlines() gathers them.
      */
-    Generator(const Params &params, const std::vector<Polygons> &infill_outlines, const std::function<void()> &throw_on_cancel_callback);
+    Generator(const GeneratorParams &params, const std::vector<Polygons> &infill_outlines, const std::function<void()> &throw_on_cancel_callback);
 
     /*!
      * Get a tree of paths generated for a certain layer of the mesh.
@@ -81,7 +66,7 @@ public:
 
     float infilll_extrusion_width() const { return m_infill_extrusion_width; }
 
-    Generator(const Params &params, std::vector<Polygons>& contours, std::vector<Polygons>& overhangs, const std::function<void()> &throw_on_cancel_callback);
+    Generator(const GeneratorParams &params, std::vector<Polygons>& contours, std::vector<Polygons>& overhangs, const std::function<void()> &throw_on_cancel_callback);
 
 protected:
     /*!
@@ -151,13 +136,6 @@ protected:
 
     std::vector<BoundingBox> bboxs;
 };
-
-// The parameters, from the configuration of print_object, and the outlines of each layer of the lightning infill of
-// print_object (Fill/LightningParams.cpp).
-Generator::Params     lightning_infill_params(const PrintObject &print_object);
-std::vector<Polygons> lightning_infill_outlines(const PrintObject &print_object, const std::function<void()> &throw_on_cancel_callback);
-// The parameters of the lightning support base of print_object, of the given density.
-Generator::Params     lightning_support_params(const PrintObject &print_object, float density = 0.15);
 
 } // namespace FillLightning
 } // namespace Slic3r
