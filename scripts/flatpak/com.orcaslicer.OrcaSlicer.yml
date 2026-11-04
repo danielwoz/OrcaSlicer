@@ -460,6 +460,13 @@ modules:
       - type: file
         path: ../run_unit_tests.sh
         dest: scripts
+      # The audit of the infill pattern libraries (a test) and the check of the packaged app (unit_tests_flatpak.yml).
+      - type: file
+        path: ../check_infill_pattern_libs.py
+        dest: scripts
+      - type: file
+        path: ../check_packaged_infill_patterns.sh
+        dest: scripts
 
       # AppData metainfo for GNOME Software & Co.
       - type: file

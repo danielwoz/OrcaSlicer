@@ -556,6 +556,21 @@ jobs:
           name: OrcaSlicer_profile_validator_Windows_${{ env.ver }}
           path: ${{ github.workspace }}/build/src/Release/OrcaSlicer_profile_validator.exe
 
+      # The installed tree is what the portable zip and the MSIX ship, and what the installer installs through the
+      # same install rules: the infill pattern libraries it carries, and the application binding them and slicing.
+      - name: Check the packaged infill pattern libraries Win
+        if: runner.os == 'Windows'
+        working-directory: ${{ github.workspace }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          host=$([ "$PROCESSOR_ARCHITECTURE" = ARM64 ] && echo arm64 || echo x64)
+          dumpbin=$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' \
+            -find "VC\Tools\MSVC\*\bin\Host$host\*\dumpbin.exe" | tr -d '\r' | head -1)
+          python scripts/check_infill_pattern_libs.py --exact --dumpbin "$dumpbin" \
+            --manifest "$BUILD_DIR/infill_patterns/manifest.txt" "$BUILD_DIR/OrcaSlicer/infill_patterns"
+          scripts/check_packaged_infill_patterns.sh "$BUILD_DIR/OrcaSlicer/orca-slicer.exe"
+
       - name: Check exception throw info Win
         if: runner.os == 'Windows' && inputs.compiler == 'clang'
         working-directory: ${{ github.workspace }}
@@ -656,6 +671,18 @@ jobs:
           appimagetool=$(find build -name "appimagetool.AppImage" | head -1)
           ARCH=$(uname -m) "$appimagetool" --appimage-extract-and-run squashfs-root "$appimage"
           rm -rf squashfs-root
+      # The AppImage as shipped: the infill pattern libraries it carries, and the application binding them and slicing.
+      - name: Check the packaged infill pattern libraries (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          appimage=$(find build -maxdepth 1 -name "OrcaSlicer_Linux_AppImage*.AppImage" | head -1)
+          work=$(mktemp -d)
+          (cd "$work" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract > /dev/null)
+          python3 scripts/check_infill_pattern_libs.py --exact --manifest build/infill_patterns/manifest.txt \
+            "$work/squashfs-root/lib/orca-slicer/infill_patterns"
+          rm -rf "$work"
+          scripts/check_packaged_infill_patterns.sh "$appimage" --appimage-extract-and-run
         # Ship the freshly-built validator so slice_check_linux (build_all.yml)
         # can slice-sweep the shipped profiles with this PR's engine. Taken from
         # the aarch64 leg so the sweep also exercises the arm build; x86_64 on

@@ -45,6 +45,19 @@ jobs:
             --bind-mount=/run/build="$PWD/.flatpak-builder/build" \
             flatpak_app \
             bash -c 'cd /run/build/OrcaSlicer && scripts/run_unit_tests.sh build_flatpak/tests'
+      # The app as shipped: the infill pattern libraries it installs, and the application binding them and slicing.
+      - name: Check the packaged infill pattern libraries
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          flatpak build --die-with-parent \
+            --bind-mount=/run/build="$PWD/.flatpak-builder/build" \
+            flatpak_app \
+            bash -c 'cd /run/build/OrcaSlicer &&
+              python3 scripts/check_infill_pattern_libs.py --exact \
+                --manifest build_flatpak/tests/infill_patterns/infill_pattern_manifest.txt \
+                "$(find /app -type d -path "*/orca-slicer/infill_patterns" | head -1)" &&
+              bash scripts/check_packaged_infill_patterns.sh /app/bin/orca-slicer'
       - name: Collect test results
         if: always()
         shell: bash
