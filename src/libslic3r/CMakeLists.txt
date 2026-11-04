@@ -428,6 +428,8 @@ set(lisbslic3r_sources
     Optimize/Optimizer.hpp
     Orient.cpp
     Orient.hpp
+    ParallelFor.hpp
+    ParallelForTbb.cpp
     ParallelResolve.hpp
     ParameterUtils.cpp
     ParameterUtils.hpp
