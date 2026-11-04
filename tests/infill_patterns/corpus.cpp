@@ -1182,7 +1182,9 @@ struct NativeStates::Set
     std::map<AdaptiveInfillMode, std::unique_ptr<AdaptiveInfillField>> fields;
     std::unique_ptr<Model>                                       model;
     std::unique_ptr<Print>                                       print;
-    FillLightning::GeneratorPtr                                  generator;
+    FillLightning::Generator::Params                             lightning_params {};
+    std::vector<Polygons>                                        lightning_outlines;
+    std::unique_ptr<FillLightning::Generator>                    generator;
 };
 
 NativeStates::NativeStates()  = default;
@@ -1269,10 +1271,10 @@ const std::vector<AdaptiveInfillField::Slice>& NativeStates::field_slices() { re
 
 const BoundingBox& NativeStates::field_bbox() { return this->fields().field_bbox; }
 
-FillLightning::Generator* NativeStates::lightning()
+NativeStates::LightningInput NativeStates::lightning_input()
 {
     Set &set = this->current();
-    if (! set.generator) {
+    if (! set.print) {
         // A 20 mm square slab 4 mm high with 25 % lightning infill in 0.2 mm layers: trees on layers 3 to 15.
         DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
         config.set_deserialize_strict({ { "sparse_infill_pattern", "lightning" }, { "sparse_infill_density", "25%" },
@@ -1288,8 +1290,19 @@ FillLightning::Generator* NativeStates::lightning()
         set.print->validate();
         set.print->set_status_silent();
         set.print->process();
-        set.generator = FillLightning::build_generator(*set.print->objects().front(), [] {});
+        const PrintObject &print_object = *set.print->objects().front();
+        set.lightning_params            = FillLightning::lightning_infill_params(print_object);
+        set.lightning_outlines          = FillLightning::lightning_infill_outlines(print_object, [] {});
     }
+    return { set.lightning_params, set.lightning_outlines };
+}
+
+FillLightning::Generator* NativeStates::lightning()
+{
+    const LightningInput input = this->lightning_input();
+    Set                 &set   = this->current();
+    if (! set.generator)
+        set.generator = std::make_unique<FillLightning::Generator>(input.params, input.outlines, [] {});
     return set.generator.get();
 }
 

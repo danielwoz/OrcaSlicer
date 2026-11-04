@@ -238,7 +238,7 @@ RowContract contract(const InfillPatternDescriptor &row)
     if (row.has(ipfAdaptiveDensity))
         out.state_kinds |= 1u << ORCA_INFILL_STATE_ADAPTIVE_FIELD;
     if (row.id == ipLightning)
-        out.state_kinds |= (1u << ORCA_INFILL_STATE_LIGHTNING) | (1u << ORCA_INFILL_STATE_LIGHTNING_SUPPORT);
+        out.state_kinds |= 1u << ORCA_INFILL_STATE_LIGHTNING;
     return out;
 }
 

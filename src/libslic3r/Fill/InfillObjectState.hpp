@@ -74,6 +74,8 @@ struct InfillObjectStates
 {
     // The octrees of adaptive and support cubic infill.
     RegionOctrees octrees;
+    // The generator of lightning infill, null without lightning infill of a density above 0.
+    InfillObjectStatePtr lightning;
     // The adaptive infill field of each row and adaptive_infill_mode the regions slice; a field that came out empty is
     // left out, so that the row lays its regular pattern.
     std::vector<std::pair<std::pair<InfillPattern, AdaptiveInfillMode>, InfillObjectStatePtr>> fields;

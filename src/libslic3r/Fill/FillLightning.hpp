@@ -12,17 +12,9 @@ namespace Slic3r { class Point; }
 
 namespace Slic3r {
 
-class PrintObject;
-
 namespace FillLightning {
 
 class Generator;
-// To keep the definition of Octree opaque, we have to define a custom deleter.
-struct GeneratorDeleter { void operator()(Generator *p); };
-using  GeneratorPtr = std::unique_ptr<Generator, GeneratorDeleter>;
-
-// The generator of the lightning infill of print_object (Fill/LightningParams.cpp).
-GeneratorPtr build_generator(const PrintObject &print_object, const std::function<void()> &throw_on_cancel_callback);
 
 class Filler : public Slic3r::Fill
 {
@@ -30,7 +22,7 @@ public:
     ~Filler() override = default;
     bool is_self_crossing() override { return false; }
 
-    Generator   *generator { nullptr };
+    const Generator *generator { nullptr };
 protected:
     Fill* clone() const override { return new Filler(*this); }
 

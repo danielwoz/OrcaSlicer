@@ -11,7 +11,6 @@
 #include "CommonDefs.hpp"
 #include "PrintBase.hpp"
 #include "Fill/FillAdaptive.hpp"
-#include "Fill/FillLightning.hpp"
 #include "Fill/AdaptiveInfillField.hpp"
 #include "Fill/InfillObjectState.hpp"
 
@@ -97,12 +96,6 @@ namespace FillAdaptive {
     struct OctreeDeleter;
     using OctreePtr = std::unique_ptr<Octree, OctreeDeleter>;
 };
-
-namespace FillLightning {
-    class Generator;
-    struct GeneratorDeleter;
-    using GeneratorPtr = std::unique_ptr<Generator, GeneratorDeleter>;
-}; // namespace FillLightning
 
 // Print step IDs for keeping track of the print state.
 // The Print steps are applied in this order.
@@ -659,7 +652,7 @@ private:
     void _generate_support_material();
     RegionOctrees prepare_adaptive_infill_data(
         const std::vector<std::pair<const Surface*, const Layer*>>& surfaces_w_layer) const;
-    FillLightning::GeneratorPtr prepare_lightning_infill_data();
+    InfillObjectStatePtr prepare_lightning_infill_data();
     void prepare_adaptive_infill_fields();
 
     // BBS
@@ -709,7 +702,6 @@ private:
     bool                    				m_typed_slices = false;
 
     std::vector<BoundingBox>                m_separated_body_bboxes;
-    FillLightning::GeneratorPtr m_lightning_generator;
     AdaptiveInfillFields m_adaptive_infill_fields;
     InfillObjectStates   m_infill_states;
 

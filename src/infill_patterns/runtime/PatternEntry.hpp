@@ -21,8 +21,10 @@
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include "libslic3r/Fill/FillAdaptive.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
+#include "libslic3r/Fill/FillLightning.hpp"
 #include "libslic3r/Fill/Library/BuiltinMirror.hpp"
 #include "libslic3r/Fill/Library/orca_infill_builtin.h"
+#include "libslic3r/Fill/Lightning/Generator.hpp"
 #include "libslic3r/Surface.hpp"
 #include "libslic3r/libslic3r.h"
 
@@ -58,7 +60,10 @@ private:
 //                                                builds the state of the input data of kind; leaves it null when there is
 //                                                nothing to build. throw_if_canceled throws JobCanceled.
 //   static void attach(Fill &filler, const Type *state);
-//                                                gives the state, or null, to the member of the filler that reads it
+//                                                gives the state, or null, to the member of the filler that reads it; it
+//                                                may take the Fill class of the row instead of Fill
+//   static constexpr bool required;              whether a filler of the row lays its pattern only over a state, so that
+//                                                run() refuses a call without one
 //   static constexpr uint32_t queries;           (1u << ORCA_INFILL_QUERY_*) for each query query_state() answers, and,
 //                                                when there are any,
 //   static orca_infill_status query(const Type &state, const orca_infill_state_query &query, Polylines &lines);
@@ -68,7 +73,8 @@ template<uint32_t Kinds> struct ObjectState;
 template<> struct ObjectState<1u << ORCA_INFILL_STATE_ADAPTIVE_FIELD>
 {
     using Type = AdaptiveInfillField;
-    static constexpr uint32_t queries = 0;
+    static constexpr uint32_t queries  = 0;
+    static constexpr bool     required = false;
 
     static orca_infill_status prepare(int32_t, const void *data, const std::function<void()> &throw_if_canceled,
                                       std::unique_ptr<Type> &state)
@@ -95,7 +101,8 @@ template<> struct ObjectState<1u << ORCA_INFILL_STATE_OCTREE>
     {
         FillAdaptive::OctreePtr octree;
     };
-    static constexpr uint32_t queries = 0;
+    static constexpr uint32_t queries  = 0;
+    static constexpr bool     required = false;
 
     static orca_infill_status prepare(int32_t, const void *data, const std::function<void()> &, std::unique_ptr<Type> &state)
     {
@@ -109,6 +116,28 @@ template<> struct ObjectState<1u << ORCA_INFILL_STATE_OCTREE>
     }
 
     static void attach(Fill &filler, const Type *state) { filler.adapt_fill_octree = state != nullptr ? state->octree.get() : nullptr; }
+};
+
+// The generator of the lightning infill, whose trees a filler of the row draws.
+template<> struct ObjectState<1u << ORCA_INFILL_STATE_LIGHTNING>
+{
+    using Type = FillLightning::Generator;
+    static constexpr uint32_t queries  = 0;
+    static constexpr bool     required = true;
+
+    static orca_infill_status prepare(int32_t, const void *data, const std::function<void()> &throw_if_canceled,
+                                      std::unique_ptr<Type> &state)
+    {
+        const BuiltinMirror::LightningLayers input = BuiltinMirror::to_lightning_layers(*static_cast<const orca_infill_lightning_input*>(data));
+        // The trees grow down the layers of the outlines, which also give the overhangs they support; the supporting
+        // radius sets the cell size of the distance fields they grow over.
+        if (input.outlines.empty() || ! input.overhangs.empty() || input.params.supporting_radius <= 0)
+            return ORCA_INFILL_ERR_INVALID;
+        state = std::make_unique<Type>(input.params, input.outlines, throw_if_canceled);
+        return ORCA_INFILL_OK;
+    }
+
+    static void attach(FillLightning::Filler &filler, const Type *state) { filler.generator = state; }
 };
 
 // Row describes the row, as entry.cpp.in declares it:
@@ -192,8 +221,12 @@ private:
             const Surface    surface = BuiltinMirror::to_surface(*request->surface);
             const FillParams params  = BuiltinMirror::to_fill_params(*request->params);
             BuiltinMirror::apply_fill_state(*request->fill, filler);
-            if constexpr (has_state)
-                State::attach(filler, static_cast<const typename State::Type*>(BuiltinMirror::to_state(*request->fill)));
+            if constexpr (has_state) {
+                const auto *state = static_cast<const typename State::Type*>(BuiltinMirror::to_state(*request->fill));
+                if (state == nullptr && State::required)
+                    return ORCA_INFILL_ERR_INVALID;
+                State::attach(filler, state);
+            }
             if (request->lock != nullptr)
                 filler.set_lock_region_param(BuiltinMirror::to_lock_region_param(*request->lock));
             if (request->call == ORCA_INFILL_CALL_FILL_SURFACE) {

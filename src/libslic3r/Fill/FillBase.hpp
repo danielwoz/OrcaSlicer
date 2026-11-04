@@ -176,7 +176,7 @@ public:
     const AdaptiveInfillField* adaptive_infill_field = nullptr;
 
     // The object state of a pattern served by its pattern library (Fill/InfillObjectState.hpp), in place of the two
-    // members above.
+    // members above and of FillLightning::Filler::generator.
     const InfillObjectState* object_state = nullptr;
 
     // The configurations of the print and of the object, which make_fills() and the anchoring of bridges set. print_config
