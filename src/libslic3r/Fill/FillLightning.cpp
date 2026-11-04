@@ -45,8 +45,4 @@ void Filler::_fill_surface_single(
     chain_or_connect_infill(std::move(fill_lines), expolygon, polylines_out, this->spacing, params);
 }
 
-void GeneratorDeleter::operator()(Generator *p) {
-    delete p;
-}
-
 } // namespace Slic3r::FillAdaptive

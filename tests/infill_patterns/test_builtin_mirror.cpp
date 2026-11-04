@@ -415,6 +415,65 @@ TEST_CASE("Built-in mirror: the mesh and the overhangs of an octree round trip, 
     CHECK_FALSE(partial.support_overhangs_only);
 }
 
+TEST_CASE("Built-in mirror: the layers of a lightning generator round trip, viewed in place", "[InfillPatterns][BuiltinMirror]")
+{
+    const FillLightning::Generator::Params params { 452000.5f, 2260000, 199999, -7, 1 };
+    const ExPolygon                        region = odd_region(0);
+    const std::vector<Polygons>            outlines { to_polygons(region), {}, { region.holes[1], region.contour } };
+    const std::vector<Polygons>            overhangs { {}, { region.holes[0] }, {} };
+    const Mirror::LightningInput           input(params, outlines, &overhangs);
+    const orca_infill_lightning_input     &view = input.get();
+    CHECK(view.struct_size == sizeof(orca_infill_lightning_input));
+    CHECK(view.layer_count == 3);
+    CHECK(view.infill_extrusion_width == params.infill_extrusion_width);
+    CHECK(view.supporting_radius == params.supporting_radius);
+    CHECK(view.wall_supporting_radius == params.wall_supporting_radius);
+    CHECK(view.prune_length == params.prune_length);
+    CHECK(view.straightening_max_distance == params.straightening_max_distance);
+    REQUIRE(view.outlines != nullptr);
+    REQUIRE(view.outlines[0].count == 3);
+    CHECK(view.outlines[0].items[2].points == Mirror::view(outlines[0][2].points));
+    CHECK(view.outlines[0].items[2].count == outlines[0][2].size());
+    CHECK(view.outlines[1].count == 0);
+    CHECK(view.outlines[1].items == nullptr);
+    REQUIRE(view.outlines[2].count == 2);
+    CHECK(view.outlines[2].items[0].points == Mirror::view(outlines[2][0].points));
+    REQUIRE(view.overhangs != nullptr);
+    CHECK(view.overhangs[0].count == 0);
+    REQUIRE(view.overhangs[1].count == 1);
+    CHECK(view.overhangs[1].items[0].points == Mirror::view(overhangs[1][0].points));
+
+    const Mirror::LightningLayers out = Mirror::to_lightning_layers(view);
+    CHECK(out.params.infill_extrusion_width == params.infill_extrusion_width);
+    CHECK(out.params.supporting_radius == params.supporting_radius);
+    CHECK(out.params.wall_supporting_radius == params.wall_supporting_radius);
+    CHECK(out.params.prune_length == params.prune_length);
+    CHECK(out.params.straightening_max_distance == params.straightening_max_distance);
+    CHECK(out.outlines == outlines);
+    CHECK(out.overhangs == overhangs);
+
+    // Without overhangs there is no array of them, nor of the layers without any; fields beyond struct_size read as zero.
+    const Mirror::LightningInput infill(params, outlines);
+    CHECK(infill.get().overhangs == nullptr);
+    const Mirror::LightningLayers infill_out = Mirror::to_lightning_layers(infill.get());
+    CHECK(infill_out.outlines == outlines);
+    CHECK(infill_out.overhangs.empty());
+    const std::vector<Polygons>  none;
+    const Mirror::LightningInput nothing(params, none, &none);
+    CHECK(nothing.get().layer_count == 0);
+    CHECK(nothing.get().outlines == nullptr);
+    CHECK(nothing.get().overhangs == nullptr);
+    CHECK(Mirror::to_lightning_layers(nothing.get()).outlines.empty());
+    orca_infill_lightning_input shorter = view;
+    shorter.struct_size = uint32_t(offsetof(orca_infill_lightning_input, infill_extrusion_width));
+    const Mirror::LightningLayers partial = Mirror::to_lightning_layers(shorter);
+    CHECK(partial.outlines == outlines);
+    CHECK(partial.overhangs == overhangs);
+    CHECK(partial.params.infill_extrusion_width == 0.f);
+    CHECK(partial.params.supporting_radius == 0);
+    CHECK(partial.params.straightening_max_distance == 0);
+}
+
 TEST_CASE("Built-in mirror: LockRegionParam round trips in map order", "[InfillPatterns][BuiltinMirror]")
 {
     // Ordered by mm3_per_mm: thin, middle, wide.

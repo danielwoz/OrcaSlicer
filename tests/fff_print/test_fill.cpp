@@ -41,7 +41,6 @@
 #include "libslic3r/Fill/FillGyroid.hpp"
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include "libslic3r/Fill/FillLibrary.hpp"
-#include "libslic3r/Fill/FillLightning.hpp"
 #include "libslic3r/Fill/FillTpmsD.hpp"
 #include "libslic3r/Fill/FillTpmsFK.hpp"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
@@ -2546,11 +2545,8 @@ TEST_CASE("Monotonic line top surfaces print their gap fill next to their lines 
 
 TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]")
 {
-    // The Fill class of each row libslic3r creates itself. A row a pattern library serves creates a FillLibrary, which
-    // runs the class of the row in the library (tests/infill_patterns/test_builtin_equivalence.cpp).
-    const std::map<InfillPattern, std::type_index> classes{
-        {ipLightning, typeid(FillLightning::Filler)}};
-
+    // Every row creates a FillLibrary, which runs the class of the row in its pattern library
+    // (tests/infill_patterns/test_builtin_equivalence.cpp).
     auto filler_class = [](Fill *created) {
         const std::unique_ptr<Fill> filler(created);
         REQUIRE(filler != nullptr);
@@ -2561,16 +2557,10 @@ TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]
         CAPTURE(int(pattern.id));
         const std::type_index created = filler_class(Fill::new_from_type(pattern.id));
         if (pattern.available()) {
-            const auto it = classes.find(pattern.id);
-            if (InfillPatternRegistry::binding(pattern.id) != nullptr) {
-                CHECK(it == classes.end());
-                CHECK(created == std::type_index(typeid(FillLibrary)));
-                const std::unique_ptr<Fill> filler(Fill::new_from_type(pattern.id));
-                CHECK(static_cast<const FillLibrary&>(*filler).pattern() == pattern.id);
-            } else {
-                REQUIRE(it != classes.end());
-                CHECK(created == it->second);
-            }
+            REQUIRE(InfillPatternRegistry::binding(pattern.id) != nullptr);
+            CHECK(created == std::type_index(typeid(FillLibrary)));
+            const std::unique_ptr<Fill> filler(Fill::new_from_type(pattern.id));
+            CHECK(static_cast<const FillLibrary&>(*filler).pattern() == pattern.id);
         }
         if (! pattern.internal()) {
             CAPTURE(pattern.key);

@@ -14,6 +14,7 @@
 
 #include "../AdaptiveInfillField.hpp"
 #include "../FillBase.hpp"
+#include "../Lightning/Generator.hpp"
 #include "../../Point.hpp"
 #include "../../Surface.hpp"
 
@@ -76,6 +77,26 @@ private:
 orca_infill_octree_input octree_input(const indexed_triangle_set &mesh, const std::vector<Vec3d> &overhangs, double line_spacing,
                                       bool support_overhangs_only);
 
+// The C input of a lightning generator (ORCA_INFILL_STATE_LIGHTNING, ORCA_INFILL_STATE_LIGHTNING_SUPPORT) with params,
+// over the outlines of each layer and, for tree support, the overhangs of each layer. It points into the outlines and
+// the overhangs, which must outlive it unchanged.
+class LightningInput
+{
+public:
+    LightningInput(const FillLightning::Generator::Params &params, const std::vector<Polygons> &outlines,
+                   const std::vector<Polygons> *overhangs = nullptr);
+    LightningInput(const LightningInput &) = delete;
+    LightningInput& operator=(const LightningInput &) = delete;
+
+    const orca_infill_lightning_input& get() const { return m_input; }
+
+private:
+    // Reserved to their final size before the first view is taken, so that no view moves.
+    std::vector<orca_infill_path>     m_paths;
+    std::vector<orca_infill_polygons> m_layers; // outlines, then overhangs
+    orca_infill_lightning_input       m_input {};
+};
+
 // The points as a C array; nothing is copied.
 const orca_infill_point* view(const Points &points);
 // The thick polyline as a C path pointing into it.
@@ -120,6 +141,16 @@ struct OctreeMesh
     bool                 support_overhangs_only;
 };
 OctreeMesh      to_octree_mesh(const orca_infill_octree_input &input);
+
+// The arguments of a FillLightning::Generator constructor.
+struct LightningLayers
+{
+    FillLightning::Generator::Params params;
+    // Per layer; empty when the input has none.
+    std::vector<Polygons>            outlines;
+    std::vector<Polygons>            overhangs;
+};
+LightningLayers to_lightning_layers(const orca_infill_lightning_input &input);
 
 } // namespace BuiltinMirror
 } // namespace Slic3r

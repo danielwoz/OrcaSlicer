@@ -35,6 +35,11 @@ static_assert(std::is_same_v<decltype(boost::pfr::structure_to_tuple(std::declva
                                         float, float, CenterOfSurfacePattern>>,
               "a field of FillParams changed its type: update orca_infill_fill_params");
 
+// FillLightning::Generator::Params: every field is carried.
+static_assert(std::is_same_v<decltype(boost::pfr::structure_to_tuple(std::declval<const FillLightning::Generator::Params&>())),
+                             std::tuple<float, int64_t, int64_t, int64_t, int64_t>>,
+              "FillLightning::Generator::Params changed: update orca_infill_lightning_input");
+
 // Fill and Surface members, mirrored by hand.
 static_assert(std::is_same_v<decltype(Fill::layer_id), size_t> && std::is_same_v<decltype(Fill::z), double> &&
               std::is_same_v<decltype(Fill::spacing), double> && std::is_same_v<decltype(Fill::overlap), double> &&
@@ -171,6 +176,32 @@ orca_infill_regions regions_view(const ExPolygons &expolygons, std::vector<orca_
     for (const ExPolygon &expolygon : expolygons)
         regions.push_back(region_view(expolygon, holes));
     return { expolygons.empty() ? nullptr : regions.data() + first, expolygons.size() };
+}
+
+// Views of polygons appended to paths, which has the capacity.
+orca_infill_polygons polygons_view(const Polygons &polygons, std::vector<orca_infill_path> &paths)
+{
+    assert(paths.size() + polygons.size() <= paths.capacity());
+    const size_t first = paths.size();
+    for (const Polygon &polygon : polygons)
+        paths.push_back(path_view(polygon.points));
+    return { polygons.empty() ? nullptr : paths.data() + first, polygons.size() };
+}
+
+// The polygons of each of count layers, none when layers is null.
+std::vector<Polygons> to_layers(const orca_infill_polygons *layers, size_t count)
+{
+    std::vector<Polygons> out;
+    if (layers == nullptr)
+        return out;
+    out.reserve(count);
+    for (size_t i = 0; i < count; ++ i) {
+        Polygons &polygons = out.emplace_back();
+        polygons.reserve(layers[i].count);
+        for (size_t j = 0; j < layers[i].count; ++ j)
+            polygons.emplace_back(to_points(layers[i].items[j].points, layers[i].items[j].count));
+    }
+    return out;
 }
 
 orca_infill_bbox to_c(const BoundingBox &bbox) { return { { bbox.min.x(), bbox.min.y() }, { bbox.max.x(), bbox.max.y() } }; }
@@ -346,6 +377,28 @@ orca_infill_octree_input octree_input(const indexed_triangle_set &mesh, const st
              line_spacing, uint8_t(support_overhangs_only) };
 }
 
+LightningInput::LightningInput(const FillLightning::Generator::Params &params, const std::vector<Polygons> &outlines,
+                               const std::vector<Polygons> *overhangs)
+{
+    assert(overhangs == nullptr || overhangs->size() == outlines.size());
+    size_t paths = 0;
+    for (const std::vector<Polygons> *layers : { &outlines, overhangs })
+        if (layers != nullptr)
+            for (const Polygons &polygons : *layers)
+                paths += polygons.size();
+    m_paths.reserve(paths);
+    m_layers.reserve(outlines.size() * (overhangs != nullptr ? 2 : 1));
+    for (const Polygons &polygons : outlines)
+        m_layers.push_back(polygons_view(polygons, m_paths));
+    if (overhangs != nullptr)
+        for (const Polygons &polygons : *overhangs)
+            m_layers.push_back(polygons_view(polygons, m_paths));
+    const bool layers = ! outlines.empty();
+    m_input = { sizeof(m_input), outlines.size(), layers ? m_layers.data() : nullptr,
+                layers && overhangs != nullptr ? m_layers.data() + outlines.size() : nullptr, params.infill_extrusion_width,
+                params.supporting_radius, params.wall_supporting_radius, params.prune_length, params.straightening_max_distance };
+}
+
 // ---- Library side ----
 
 Points to_points(const orca_infill_point *points, size_t count)
@@ -500,6 +553,17 @@ OctreeMesh to_octree_mesh(const orca_infill_octree_input &source)
         out.overhangs.emplace_back(input.overhangs[3 * i], input.overhangs[3 * i + 1], input.overhangs[3 * i + 2]);
     out.line_spacing           = input.line_spacing;
     out.support_overhangs_only = input.support_overhangs_only != 0;
+    return out;
+}
+
+LightningLayers to_lightning_layers(const orca_infill_lightning_input &source)
+{
+    const orca_infill_lightning_input input = read(source);
+    LightningLayers out;
+    out.params    = { input.infill_extrusion_width, input.supporting_radius, input.wall_supporting_radius, input.prune_length,
+                      input.straightening_max_distance };
+    out.outlines  = to_layers(input.outlines, input.layer_count);
+    out.overhangs = to_layers(input.overhangs, input.layer_count);
     return out;
 }
 

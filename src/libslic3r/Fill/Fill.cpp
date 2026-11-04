@@ -32,7 +32,6 @@
 #include "Fill.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
 #include "FillRectilinear.hpp"
-#include "FillLightning.hpp"
 #include "FillConcentricInternal.hpp"
 #include "FillTpmsD.hpp"
 #include "FillTpmsFK.hpp"
@@ -49,8 +48,6 @@
 #include "libslic3r/MultiMaterialSegmentation.hpp"
 #include "libslic3r/Slicing.hpp"
 #include "libslic3r/SurfaceCollection.hpp"
-
-namespace Slic3r::FillLightning { class Generator; }
 
 namespace Slic3r {
 
@@ -1366,7 +1363,7 @@ void export_group_fills_to_svg(const char *path, const std::vector<SurfaceFill> 
 #endif
 
 // friend to Layer
-void Layer::make_fills(const RegionOctrees* fill_octrees, FillLightning::Generator* lightning_generator)
+void Layer::make_fills(const RegionOctrees* fill_octrees, const InfillObjectState* lightning)
 {
 	for (LayerRegion *layerm : m_regions)
 		layerm->fills.clear();
@@ -1402,12 +1399,11 @@ void Layer::make_fills(const RegionOctrees* fill_octrees, FillLightning::Generat
         const InfillPattern row     = sliced_infill_pattern(surface_fill.params.pattern).id;
         const Octrees      *octrees = fill_octrees ? fill_octrees->region(surface_fill.region_id, row) : nullptr;
         f->adaptive_infill_field   = this->object()->adaptive_infill_field(surface_fill.params.adaptive_infill_mode);
-        f->object_state            = this->object()->infill_states().field(row, surface_fill.params.adaptive_infill_mode);
+        f->object_state            = row == ipLightning ? lightning :
+                                                          this->object()->infill_states().field(row, surface_fill.params.adaptive_infill_mode);
         f->print_config        = &this->object()->print()->config();
         f->print_object_config = &this->object()->config();
         set_config_values(*f);
-        if (surface_fill.params.pattern == ipLightning)
-            dynamic_cast<FillLightning::Filler*>(f.get())->generator = lightning_generator;
         // calculate flow spacing for infill pattern generation
         bool using_internal_flow = ! surface_fill.surface.is_solid() && ! surface_fill.params.bridge;
         double link_max_length = 0.;
@@ -1567,7 +1563,7 @@ void Layer::make_fills(const RegionOctrees* fill_octrees, FillLightning::Generat
  * - For lightning/adaptive patterns, the respective generators are wired so their
  *   polylines match the final infill layout.
  */
-Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const RegionOctrees* fill_octrees, FillLightning::Generator* lightning_generator) const
+Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const RegionOctrees* fill_octrees, const InfillObjectState* lightning) const
 {
     LockRegionParam skin_inner_param;
     std::vector<SurfaceFill> surface_fills = group_fills(*this, skin_inner_param);
@@ -1601,13 +1597,11 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(const RegionOctr
         const InfillPattern row     = sliced_infill_pattern(surface_fill.params.pattern).id;
         const Octrees      *octrees = fill_octrees ? fill_octrees->region(surface_fill.region_id, row) : nullptr;
         f->adaptive_infill_field   = this->object()->adaptive_infill_field(surface_fill.params.adaptive_infill_mode);
-        f->object_state            = this->object()->infill_states().field(row, surface_fill.params.adaptive_infill_mode);
+        f->object_state            = row == ipLightning ? lightning :
+                                                          this->object()->infill_states().field(row, surface_fill.params.adaptive_infill_mode);
         f->print_config        = &this->object()->print()->config();
         f->print_object_config = &this->object()->config();
         set_config_values(*f);
-
-        if (surface_fill.params.pattern == ipLightning)
-            dynamic_cast<FillLightning::Filler *>(f.get())->generator = lightning_generator;
 
         // calculate flow spacing for infill pattern generation
         double link_max_length = 0.;

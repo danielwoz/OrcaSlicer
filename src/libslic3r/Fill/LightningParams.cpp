@@ -10,7 +10,6 @@
 #include "../Print.hpp"
 #include "../PrintConfig.hpp"
 #include "../Surface.hpp"
-#include "FillLightning.hpp"
 #include "Lightning/Generator.hpp"
 
 namespace Slic3r::FillLightning {
@@ -103,12 +102,6 @@ Generator::Params lightning_support_params(const PrintObject &print_object, floa
     params.prune_length = layer_thickness * std::tan(lightning_infill_prune_angle);
     params.straightening_max_distance = layer_thickness * std::tan(lightning_infill_straightening_angle);
     return params;
-}
-
-GeneratorPtr build_generator(const PrintObject &print_object, const std::function<void()> &throw_on_cancel_callback)
-{
-    return GeneratorPtr(new Generator(lightning_infill_params(print_object), lightning_infill_outlines(print_object, throw_on_cancel_callback),
-                                      throw_on_cancel_callback));
 }
 
 } // namespace Slic3r::FillLightning

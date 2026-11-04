@@ -14,6 +14,7 @@
 #include "libslic3r/ExtrusionEntityCollection.hpp"
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
+#include "libslic3r/Fill/Lightning/Generator.hpp"
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Surface.hpp"
@@ -24,7 +25,6 @@ struct indexed_triangle_set;
 namespace Slic3r {
 
 namespace FillAdaptive { struct Octree; }
-namespace FillLightning { class Generator; }
 
 // Filler calls of every built-in pattern that has a filler: the shapes, surface types, parameters and object states
 // that slicing, supports, ironing, the wipe tower and interlocking pass to it. The cases hold plain Slic3r values only,
@@ -115,6 +115,14 @@ public:
         bool                        support_overhangs_only;
     };
     OctreeInput octree_input(State state);
+
+    // The arguments the lightning generator is built with: the parameters and the outlines of the sliced slab.
+    struct LightningInput
+    {
+        const FillLightning::Generator::Params &params;
+        const std::vector<Polygons>            &outlines;
+    };
+    LightningInput lightning_input();
 
     // The slices and the box the fields are built over.
     const std::vector<AdaptiveInfillField::Slice>& field_slices();

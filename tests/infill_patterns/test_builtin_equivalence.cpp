@@ -93,17 +93,16 @@ public:
     {
         if (c.state == State::None)
             return nullptr;
-        // Only the adaptive infill field and the octrees are prepared here; a case of another kind needs its own
-        // preparation.
-        const bool octree = c.state == State::AdaptiveOctree || c.state == State::SupportOctree;
-        REQUIRE((octree || c.state == State::Field));
-        const AdaptiveInfillMode mode = octree ? AdaptiveInfillMode::Disabled : c.params.adaptive_infill_mode;
-        if (! octree && mode == AdaptiveInfillMode::Disabled)
+        const bool field = c.state == State::Field;
+        const AdaptiveInfillMode mode = field ? c.params.adaptive_infill_mode : AdaptiveInfillMode::Disabled;
+        if (field && mode == AdaptiveInfillMode::Disabled)
             return nullptr;
         const auto key = std::make_tuple(SCALING_FACTOR, c.pattern, c.state, mode);
         auto       it  = m_states.find(key);
         if (it == m_states.end())
-            it = m_states.emplace(key, octree ? this->prepare_octree(c.pattern, c.state) : this->prepare_field(c.pattern, mode)).first;
+            it = m_states.emplace(key, field ? this->prepare_field(c.pattern, mode) :
+                                       c.state == State::Lightning ? this->prepare_lightning(c.pattern) :
+                                                                     this->prepare_octree(c.pattern, c.state)).first;
         return it->second.get();
     }
 
@@ -126,6 +125,14 @@ public:
     {
         const NativeStates::OctreeInput input = native.octree_input(state);
         return BuiltinMirror::octree_input(input.mesh, input.overhangs, input.line_spacing, input.support_overhangs_only);
+    }
+
+    // The lightning generator, prepared by the library of row from the inputs of the native one.
+    InfillObjectStatePtr prepare_lightning(InfillPattern row, const std::function<void()> &throw_if_canceled = {})
+    {
+        const NativeStates::LightningInput  native = m_native.lightning_input();
+        const BuiltinMirror::LightningInput input(native.params, native.outlines);
+        return prepare_builtin_infill_state(row, ORCA_INFILL_STATE_LIGHTNING, &input.get(), throw_if_canceled);
     }
 
     void clear() { m_states.clear(); }
@@ -154,8 +161,9 @@ Output run_library(const Case &c, LibraryStates &states)
 
 #if ! ORCA_INFILL_PATTERN_LINKAGE_STATIC
 // While it lives, the library of row runs the parallel loops of prepare_state() on the calling thread, in blocks of
-// grain items or of the grain of the loop if larger, the last block first. A status other than ORCA_INFILL_OK fails
-// every loop with that status instead. The library is bound to the application's host again afterwards.
+// grain items or of the grain of the loop if larger, the last block first; a loop over a grid in such blocks of rows
+// and of columns. A status other than ORCA_INFILL_OK fails every loop with that status instead. The library is bound
+// to the application's host again afterwards.
 class SplitLoops
 {
 public:
@@ -168,15 +176,17 @@ public:
         s_grain  = grain;
         s_status = status;
         s_host   = builtin_infill_host();
-        s_host.parallel_for = &split;
+        s_host.parallel_for    = &split;
+        s_host.parallel_for_2d = &split_2d;
         REQUIRE(m_entry(&s_host) == InfillPatternRegistry::binding(row)->library);
     }
     ~SplitLoops() { m_entry(&builtin_infill_host()); }
     SplitLoops(const SplitLoops &) = delete;
     SplitLoops& operator=(const SplitLoops &) = delete;
 
-    // The blocks run so far.
+    // The blocks run so far, of any loop and of the loops over a grid.
     static size_t blocks() { return s_blocks; }
+    static size_t grid_blocks() { return s_grid_blocks; }
 
 private:
     static orca_infill_status ORCA_INFILL_CALL split(orca_infill_job *job, int64_t begin, int64_t end, int64_t grain,
@@ -196,7 +206,28 @@ private:
         return ORCA_INFILL_OK;
     }
 
+    static orca_infill_status ORCA_INFILL_CALL split_2d(orca_infill_job *job, int64_t row_begin, int64_t row_end, int64_t row_grain,
+                                                        int64_t col_begin, int64_t col_end, int64_t col_grain,
+                                                        orca_infill_range2d_fn body, void *user)
+    {
+        if (s_status != ORCA_INFILL_OK)
+            return s_status;
+        if (row_begin >= row_end || col_begin >= col_end)
+            return ORCA_INFILL_OK;
+        const int64_t row_step = std::max(row_grain, s_grain), col_step = std::max(col_grain, s_grain);
+        for (int64_t row = row_begin + (row_end - row_begin - 1) / row_step * row_step; row >= row_begin; row -= row_step)
+            for (int64_t col = col_begin + (col_end - col_begin - 1) / col_step * col_step; col >= col_begin; col -= col_step) {
+                if (builtin_infill_host().is_canceled(job) != 0)
+                    return ORCA_INFILL_ERR_CANCELED;
+                body(user, row, std::min(row + row_step, row_end), col, std::min(col + col_step, col_end));
+                ++ s_blocks;
+                ++ s_grid_blocks;
+            }
+        return ORCA_INFILL_OK;
+    }
+
     static inline size_t                   s_blocks = 0;
+    static inline size_t                   s_grid_blocks = 0;
     static inline int64_t                  s_grain = 1;
     static inline orca_infill_status       s_status = ORCA_INFILL_OK;
     static inline orca_infill_builtin_host s_host {};
@@ -269,6 +300,28 @@ Output run_linked(const Case &c, const LinkedState &linked)
     filler.object_state = linked.state.get();
     return run(c, filler);
 }
+
+#if ! ORCA_INFILL_PATTERN_LINKAGE_STATIC
+// Checks each lightning generator prepare returns while both of its loops, over the samples and over the grid around a
+// sample, are split into single items and into blocks of 7.
+void check_split_lightning(const std::function<InfillObjectStatePtr()>            &prepare,
+                           const std::function<void(const InfillObjectState &)> &check)
+{
+    for (const int64_t grain : { 1, 7 }) {
+        CAPTURE(grain);
+        const size_t         blocks = SplitLoops::blocks(), grid_blocks = SplitLoops::grid_blocks();
+        InfillObjectStatePtr generator;
+        {
+            const SplitLoops split(ipLightning, grain);
+            generator = prepare();
+        }
+        CHECK(SplitLoops::grid_blocks() > grid_blocks);
+        CHECK(SplitLoops::blocks() - blocks > SplitLoops::grid_blocks() - grid_blocks);
+        REQUIRE(generator != nullptr);
+        check(*generator);
+    }
+}
+#endif
 
 } // namespace
 
@@ -513,6 +566,96 @@ TEST_CASE("Pattern libraries prepare the octree of their row", "[InfillPatterns]
 
     // So does the copy of the library linked into the executable, as ORCA_INFILL_PATTERN_LINKAGE=STATIC links it.
     CHECK(difference(c, expected, run_linked(c, prepare_linked(ipAdaptiveCubic, state_input))).empty());
+}
+
+TEST_CASE("Pattern libraries prepare the lightning generator of their row", "[InfillPatterns][BuiltinEquivalence]")
+{
+    ScalingFactorGuard guard;
+    set_scaling_factor(SCALING_FACTOR_INTERNAL);
+    REQUIRE(InfillPatternRegistry::bound(ipLightning));
+    NativeStates  native_states;
+    LibraryStates library_states(native_states);
+    const orca_infill_builtin_library &library = *InfillPatternRegistry::binding(ipLightning)->library;
+    const Case &c = *std::find_if(cases().begin(), cases().end(), [](const Case &c) {
+        return c.pattern == ipLightning && c.state == State::Lightning && c.scaling_factor == SCALING_FACTOR_INTERNAL &&
+               c.call == Call::FillSurface;
+    });
+    CAPTURE(c.name);
+    auto run_on = [&c](const InfillObjectState *state) {
+        const std::unique_ptr<Fill> filler(Fill::new_from_type(ipLightning));
+        apply_members(c, *filler);
+        filler->object_state = state;
+        return run(c, *filler);
+    };
+
+    // The library fills on the generator it builds as the class does on the native one.
+    const Output expected = run_native(c, native_states);
+    REQUIRE(! expected.polylines.empty());
+    const InfillObjectStatePtr generator = library_states.prepare_lightning(ipLightning);
+    REQUIRE(generator != nullptr);
+    CHECK(generator->library == &library);
+    CHECK(difference(c, expected, run_on(generator.get())).empty());
+
+    // A filler draws only the trees of a generator: without one, the call fails.
+    {
+        const std::unique_ptr<Fill> filler(Fill::new_from_type(ipLightning));
+        apply_members(c, *filler);
+        CHECK_THROWS_AS(filler->fill_surface(&c.surface, c.params), SlicingError);
+    }
+
+#if ! ORCA_INFILL_PATTERN_LINKAGE_STATIC
+    // Both loops of the generator, over the samples and over the grid around a sample, may be split in any way.
+    check_split_lightning([&library_states] { return library_states.prepare_lightning(ipLightning); },
+                          [&](const InfillObjectState &generator) { CHECK(difference(c, expected, run_on(&generator)).empty()); });
+#endif
+
+    check_canceled([&library_states](const std::function<void()> &throw_if_canceled) {
+        return library_states.prepare_lightning(ipLightning, throw_if_canceled);
+    }, 5);
+
+    // The library refuses an input of another row or kind, no input, an input without layers, with overhangs or with a
+    // supporting radius that is not positive, and prepares without a job on the calling thread.
+    const NativeStates::LightningInput  native = native_states.lightning_input();
+    const BuiltinMirror::LightningInput input(native.params, native.outlines);
+    const orca_infill_state_input       state_input { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_LIGHTNING, &input.get() };
+    const orca_infill_state_input       support_input { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_LIGHTNING_SUPPORT, &input.get() };
+    int   stale = 0;
+    void *raw   = &stale;
+    CHECK(library.prepare_state(int32_t(ipGyroid), &state_input, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+    CHECK(raw == nullptr);
+    CHECK(library.prepare_state(int32_t(ipLightning), &support_input, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+    CHECK(library.prepare_state(int32_t(ipLightning), nullptr, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+    CHECK(library.prepare_state(int32_t(ipLightning), &state_input, nullptr, nullptr) == ORCA_INFILL_ERR_INVALID);
+    {
+        const BuiltinMirror::LightningInput with_overhangs(native.params, native.outlines, &native.outlines);
+        const orca_infill_state_input       bad { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_LIGHTNING, &with_overhangs.get() };
+        CHECK(library.prepare_state(int32_t(ipLightning), &bad, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+        CHECK(raw == nullptr);
+    }
+    {
+        const std::vector<Polygons>         none;
+        const BuiltinMirror::LightningInput no_layers(native.params, none);
+        const orca_infill_state_input       bad { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_LIGHTNING, &no_layers.get() };
+        CHECK(library.prepare_state(int32_t(ipLightning), &bad, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+        CHECK(raw == nullptr);
+    }
+    for (const coord_t radius : { coord_t(0), coord_t(-scaled<coord_t>(2.)) }) {
+        CAPTURE(radius);
+        FillLightning::Generator::Params params = native.params;
+        params.supporting_radius                = radius;
+        const BuiltinMirror::LightningInput bad_radius(params, native.outlines);
+        const orca_infill_state_input       bad { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_LIGHTNING, &bad_radius.get() };
+        CHECK(library.prepare_state(int32_t(ipLightning), &bad, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+        CHECK(raw == nullptr);
+    }
+    CHECK(library.query_state == nullptr);
+    REQUIRE(library.prepare_state(int32_t(ipLightning), &state_input, nullptr, &raw) == ORCA_INFILL_OK);
+    REQUIRE(raw != nullptr);
+    const InfillObjectState serial(library, raw);
+    CHECK(difference(c, expected, run_on(&serial)).empty());
+
+    // So does the copy of the library linked into the executable, as ORCA_INFILL_PATTERN_LINKAGE=STATIC links it.
+    CHECK(difference(c, expected, run_linked(c, prepare_linked(ipLightning, state_input))).empty());
 }
 
 TEST_CASE("Pattern library fillers keep their state between calls", "[InfillPatterns][BuiltinEquivalence]")

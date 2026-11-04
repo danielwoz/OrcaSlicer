@@ -32,7 +32,6 @@
 #include "Utils.hpp"
 #include "Fill/FillAdaptive.hpp"
 #include "Fill/Fill.hpp"
-#include "Fill/FillLightning.hpp"
 #include "Fill/AdaptiveInfillField.hpp"
 #include "Fill/InfillPatternLibraries.hpp"
 #include "Fill/InfillPatternRegistry.hpp"
@@ -827,7 +826,7 @@ void PrintObject::infill()
             [this](const tbb::blocked_range<size_t>& range) {
                 for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++ layer_idx) {
                     m_print->throw_if_canceled();
-                    m_layers[layer_idx]->make_fills(&m_infill_states.octrees, this->m_lightning_generator.get());
+                    m_layers[layer_idx]->make_fills(&m_infill_states.octrees, m_infill_states.lightning.get());
                 }
             }
         );
@@ -1268,7 +1267,7 @@ RegionOctrees PrintObject::prepare_adaptive_infill_data(
     return octrees;
 }
 
-FillLightning::GeneratorPtr PrintObject::prepare_lightning_infill_data()
+InfillObjectStatePtr PrintObject::prepare_lightning_infill_data()
 {
     bool has_lightning_infill = false;
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id)
@@ -1276,8 +1275,14 @@ FillLightning::GeneratorPtr PrintObject::prepare_lightning_infill_data()
             has_lightning_infill = true;
             break;
         }
+    if (! has_lightning_infill)
+        return {};
 
-    return has_lightning_infill ? FillLightning::build_generator(std::as_const(*this), [this]() -> void { this->throw_if_canceled(); }) : FillLightning::GeneratorPtr();
+    // The pattern library of the lightning row builds the generator from the parameters and the outlines of this object.
+    const std::function<void()>         throw_if_canceled = [this]() -> void { this->throw_if_canceled(); };
+    const std::vector<Polygons>         outlines          = FillLightning::lightning_infill_outlines(*this, throw_if_canceled);
+    const BuiltinMirror::LightningInput input(FillLightning::lightning_infill_params(*this), outlines);
+    return prepare_builtin_infill_state(ipLightning, ORCA_INFILL_STATE_LIGHTNING, &input.get(), throw_if_canceled);
 }
 
 void PrintObject::prepare_adaptive_infill_fields()
@@ -3370,7 +3375,7 @@ void PrintObject::bridge_over_infill()
         });
 
         // Use the modified surfaces to generate expanded lightning anchors
-        this->m_lightning_generator = this->prepare_lightning_infill_data();
+        this->m_infill_states.lightning = this->prepare_lightning_infill_data();
 
         // And now restore carefully the original surfaces, again using move to avoid reallocation and preserving the validity of the
         // pointers in surface candidates
@@ -3412,7 +3417,7 @@ void PrintObject::bridge_over_infill()
                 size_t lidx = layers_to_generate_infill[job_idx];
                 infill_lines.at(
                     lidx) = po->get_layer(lidx)->generate_sparse_infill_polylines_for_anchoring(&po->m_infill_states.octrees,
-                                                                                                po->m_lightning_generator.get());
+                                                                                                po->m_infill_states.lightning.get());
             }
         });
 #ifdef DEBUG_BRIDGE_OVER_INFILL
