@@ -79,10 +79,12 @@ endif ()
 # The libraries copied for the tests hold exactly the files of the manifest, export only their entry, import only the
 # C and C++ runtimes and carry none of the code a library must not contain. The manifest is written into the tests
 # folder, the only part of the build CI hands to its test jobs. Those run without the developer environment of Visual
-# Studio, so dumpbin is looked for when configuring; the audit is skipped when a tool it needs is missing.
+# Studio and without the dependencies, so dumpbin and a Python of the system, not the bundled one, are looked for when
+# configuring; the audit is skipped when a tool it needs is missing.
 if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "MODULE")
-    find_package(Python3 COMPONENTS Interpreter)
-    if (Python3_Interpreter_FOUND)
+    find_program(ORCA_INFILL_AUDIT_PYTHON NAMES python3 python NAMES_PER_DIR
+                 NO_PACKAGE_ROOT_PATH NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH NO_CMAKE_SYSTEM_PATH NO_CMAKE_INSTALL_PREFIX)
+    if (ORCA_INFILL_AUDIT_PYTHON)
         get_property(_library_dir GLOBAL PROPERTY ORCA_INFILL_PATTERN_TEST_DIR)
         orca_write_infill_pattern_manifest(${CMAKE_CURRENT_BINARY_DIR}/infill_pattern_manifest.txt)
         set(_audit_options "")
@@ -93,10 +95,10 @@ if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "MODULE")
             endif ()
         endif ()
         add_test(NAME infill_pattern_libraries_audit
-                 COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/scripts/check_infill_pattern_libs.py ${_audit_options}
+                 COMMAND ${ORCA_INFILL_AUDIT_PYTHON} ${CMAKE_SOURCE_DIR}/scripts/check_infill_pattern_libs.py ${_audit_options}
                          --config $<CONFIG> --manifest ${CMAKE_CURRENT_BINARY_DIR}/infill_pattern_manifest.txt "${_library_dir}")
         set_tests_properties(infill_pattern_libraries_audit PROPERTIES LABELS packaging SKIP_RETURN_CODE 77)
     else ()
-        message(WARNING "No Python 3 interpreter: the audit of the infill pattern libraries is not run")
+        message(WARNING "No Python on PATH: the audit of the infill pattern libraries is not run")
     endif ()
 endif ()
