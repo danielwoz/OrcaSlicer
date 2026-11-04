@@ -93,7 +93,7 @@ if (ORCA_INFILL_PATTERN_LINKAGE STREQUAL "MODULE")
         endif ()
         add_test(NAME infill_pattern_libraries_audit
                  COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/scripts/check_infill_pattern_libs.py ${_audit_options}
-                         --manifest ${CMAKE_CURRENT_BINARY_DIR}/infill_pattern_manifest.txt "${_library_dir}")
+                         --config $<CONFIG> --manifest ${CMAKE_CURRENT_BINARY_DIR}/infill_pattern_manifest.txt "${_library_dir}")
         set_tests_properties(infill_pattern_libraries_audit PROPERTIES LABELS packaging SKIP_RETURN_CODE 77)
     else ()
         message(WARNING "No Python 3 interpreter: the audit of the infill pattern libraries is not run")
