@@ -27,6 +27,13 @@ else ()
     set(_app_dir "${CMAKE_BINARY_DIR}/src${_config_dir}/infill_patterns")
 endif ()
 set(_test_dir "${CMAKE_BINARY_DIR}/tests/infill_patterns${_config_dir}")
+# Where an installation keeps them: next to orca-slicer.exe on Windows, in <libdir>/orca-slicer on Linux (FHS, Flatpak).
+# A macOS bundle carries the folder it is built with.
+if (WIN32)
+    set(ORCA_INFILL_PATTERN_INSTALL_DIR "infill_patterns")
+elseif (NOT APPLE)
+    set(ORCA_INFILL_PATTERN_INSTALL_DIR "${CMAKE_INSTALL_LIBDIR}/orca-slicer/infill_patterns")
+endif ()
 set_property(GLOBAL PROPERTY ORCA_INFILL_PATTERN_APP_DIR "${_app_dir}")
 set_property(GLOBAL PROPERTY ORCA_INFILL_PATTERN_TEST_DIR "${_test_dir}")
 set(ORCA_INFILL_PATTERN_STAGE_DIRS "${_app_dir}")
@@ -200,10 +207,8 @@ function(orca_add_builtin_infill_library token)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE_DIR:${_name}>/${_name}.map" "${_test_dir}"
                 VERBATIM)
         endif ()
-        if (WIN32)
-            install(TARGETS ${_name} LIBRARY DESTINATION infill_patterns)
-        elseif (NOT APPLE)
-            install(TARGETS ${_name} LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/orca-slicer/infill_patterns)
+        if (ORCA_INFILL_PATTERN_INSTALL_DIR)
+            install(TARGETS ${_name} LIBRARY DESTINATION ${ORCA_INFILL_PATTERN_INSTALL_DIR})
         endif ()
         set(_file "${_name}${CMAKE_SHARED_MODULE_SUFFIX}")
         set_property(GLOBAL APPEND PROPERTY ORCA_INFILL_PATTERN_TARGETS ${_name})
@@ -311,14 +316,25 @@ orca_infill_write_if_changed("${CMAKE_BINARY_DIR}/src/libslic3r/orca_infill_mani
 ${_manifest}
 ")
 
-# The file names of the libraries, one per line, for scripts/check_infill_pattern_libs.py: the packaging of the
-# application checks its folder of libraries against this one (src/dev-utils/platform/unix/build_linux_image.sh.in).
+# The file names of the libraries, one per line, for scripts/check_infill_pattern_libs.py. The application ships a copy
+# as manifest.txt next to its libraries, or in Contents/Resources/infill_patterns of a macOS bundle, whose PlugIns hold
+# only code (build_release_macos.sh), so that the audit can check a packaged application on its own.
 function(orca_write_infill_pattern_manifest path)
     get_property(_files GLOBAL PROPERTY ORCA_INFILL_PATTERN_FILES)
     string(REPLACE ";" "\n" _files "${_files}")
-    orca_infill_write_if_changed("${path}" "${_files}\n")
+    # An empty (0 byte) file when libslic3r links the libraries in: the packagers test it with -s or grep -q . to tell
+    # a build without libraries from a build whose manifest is missing.
+    if (_files)
+        string(APPEND _files "\n")
+    endif ()
+    orca_infill_write_if_changed("${path}" "${_files}")
 endfunction()
-orca_write_infill_pattern_manifest("${CMAKE_BINARY_DIR}/infill_patterns/manifest.txt")
+set(ORCA_INFILL_PATTERN_MANIFEST "${CMAKE_BINARY_DIR}/infill_patterns/manifest.txt")
+orca_write_infill_pattern_manifest("${ORCA_INFILL_PATTERN_MANIFEST}")
+set_property(GLOBAL PROPERTY ORCA_INFILL_PATTERN_MANIFEST "${ORCA_INFILL_PATTERN_MANIFEST}")
+if (_files AND ORCA_INFILL_PATTERN_INSTALL_DIR)
+    install(FILES "${ORCA_INFILL_PATTERN_MANIFEST}" DESTINATION ${ORCA_INFILL_PATTERN_INSTALL_DIR})
+endif ()
 
 # Called on the application's target: builds the libraries first, and copies them next to it again after every link,
 # so that a bundle that is rebuilt is filled again.
@@ -333,6 +349,10 @@ function(orca_stage_builtin_infill_libraries target)
     foreach (_library IN LISTS _targets)
         list(APPEND _files "$<TARGET_FILE:${_library}>")
     endforeach ()
+    if (_files AND NOT APPLE)
+        get_property(_manifest GLOBAL PROPERTY ORCA_INFILL_PATTERN_MANIFEST)
+        list(APPEND _files "${_manifest}")
+    endif ()
     if (_files)
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory "${_dir}"

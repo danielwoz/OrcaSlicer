@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Audits a folder of built-in infill pattern libraries (src/infill_patterns).
 
-    check_infill_pattern_libs.py --manifest <file> [--exact] [--dumpbin <path>] [--config <name>] <folder>
+    check_infill_pattern_libs.py [--manifest <file>] [--exact] [--dumpbin <path>] [--config <name>] <folder>
 
 The manifest names one library file per line, as src/infill_patterns/CMakeLists.txt
-writes it. For the folder and each library it checks that:
+writes it; the libraries of an application ship with a copy of it, manifest.txt,
+which is the manifest when --manifest is not given. For the folder and each library
+it checks that:
 
 - the folder holds every library of the manifest and no other pattern library
-  (orca_infill_*); with --exact, no other file at all;
+  (orca_infill_*); with --exact, no other file at all but a manifest.txt that lists
+  the same libraries;
 - a library exports orca_infill_builtin_entry_v1 and nothing else;
 - it imports only the C and C++ runtimes, and on Linux has no library search path;
 - it carries none of the code a library must not contain: the TBB runtime or
@@ -31,6 +34,8 @@ import subprocess
 import sys
 
 ENTRY = "orca_infill_builtin_entry_v1"
+# The copy of the manifest that ships with the libraries of an application.
+MANIFEST = "manifest.txt"
 # The exit code of a run that could not read the libraries, the SKIP_RETURN_CODE of its test.
 SKIPPED = 77
 
@@ -164,17 +169,25 @@ def win32(path, dumpbin):
     return exports, imports, symbols + msvc_map_symbols(path), []
 
 
+def read_manifest(path):
+    with open(path, encoding="utf-8") as file:
+        return [line.strip() for line in file if line.strip()]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Audits a folder of built-in infill pattern libraries.")
-    parser.add_argument("--manifest", required=True, help="file with one library file name per line")
+    parser.add_argument("--manifest", help=f"file with one library file name per line; by default the folder's {MANIFEST}")
     parser.add_argument("--exact", action="store_true", help="the folder holds nothing but the libraries")
     parser.add_argument("--dumpbin", default="dumpbin", help="dumpbin of Visual Studio, on Windows")
     parser.add_argument("--config", default="", help="the build configuration of the libraries")
     parser.add_argument("folder")
     args = parser.parse_args()
 
-    with open(args.manifest, encoding="utf-8") as file:
-        expected = [line.strip() for line in file if line.strip()]
+    manifest = args.manifest or os.path.join(args.folder, MANIFEST)
+    if not os.path.isfile(manifest):
+        print(f"FAIL {manifest}: no such manifest")
+        return 1
+    expected = read_manifest(manifest)
     platform = "linux" if sys.platform.startswith("linux") else sys.platform
     if platform not in IMPORTS:
         print(f"check_infill_pattern_libs: unsupported platform {sys.platform}")
@@ -194,8 +207,14 @@ def main():
     suffix = os.path.splitext(expected[0])[1] if expected else None
     for name in present:
         library = suffix is not None and name.startswith("orca_infill_") and name.endswith(suffix)
-        if name not in expected and (args.exact or library):
+        if name not in expected and (library or args.exact and name != MANIFEST):
             problems.append(f"{name}: not in the manifest")
+    if args.exact and os.path.isdir(args.folder):
+        shipped = os.path.join(args.folder, MANIFEST)
+        if not os.path.isfile(shipped):
+            problems.append(f"{MANIFEST}: missing")
+        elif read_manifest(shipped) != expected:
+            problems.append(f"{MANIFEST}: lists other libraries than {manifest}")
 
     archs = None
     for name in expected:
