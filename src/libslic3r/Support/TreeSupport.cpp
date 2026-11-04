@@ -67,7 +67,10 @@
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/ExtrusionEntityCollection.hpp"
-#include "libslic3r/Fill/Lightning/Layer.hpp"
+#include "libslic3r/Fill/InfillPatternLibraries.hpp"
+#include "libslic3r/Fill/LightningParams.hpp"
+#include "libslic3r/Fill/Library/BuiltinMirror.hpp"
+#include "libslic3r/Fill/Library/orca_infill_builtin.h"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/SurfaceCollection.hpp"
 
@@ -1824,12 +1827,12 @@ void TreeSupport::generate_toolpaths()
                             double print_z = ts_layer->print_z;
                             auto lightning_layer_mapping = printZ_to_lightninglayer.find(print_z);
                             if (lightning_layer_mapping != printZ_to_lightninglayer.end()) {
-                                auto &lightning_layer = generator->getTreesForLayer(lightning_layer_mapping->second);
                                 ExPolygons areas;
                                 areas.emplace_back(poly);
                                 areas = offset_ex(areas, -flow.scaled_spacing());
                                 for (auto &area : areas) {
-                                    Polylines polylines = lightning_layer.convertToLines(to_polygons(area), 0);
+                                    Polylines polylines = query_builtin_infill_state(ipLightning, *generator, ORCA_INFILL_QUERY_LIGHTNING_LINES,
+                                                                                     lightning_layer_mapping->second, to_polygons(area), 0);
                                     for (auto itr = polylines.begin(); itr != polylines.end();) {
                                         if (itr->length() < scale_(1.0))
                                             itr = polylines.erase(itr);
@@ -1846,7 +1849,6 @@ void TreeSupport::generate_toolpaths()
                                     SVG svg(name, bbox);
                                     if (svg.is_opened()) {
                                         svg.draw(ts_layer->base_areas, "blue");
-                                        svg.draw(generator->Overhangs()[lightning_layer_mapping->second], "red");
                                         for (auto &line : opt_polylines) svg.draw(line, "yellow");
                                     }
 #endif
@@ -2705,8 +2707,8 @@ void TreeSupport::draw_circles()
             auto m_support_material_flow = support_material_flow(m_object, m_slicing_params.layer_height);
             coordf_t support_spacing = m_object_config->support_base_pattern_spacing.value + m_support_material_flow.spacing();
             coordf_t support_density = std::min(1., m_support_material_flow.spacing() / support_spacing * 2); // for lightning infill the density is defined differently, so need to double it
-            generator = std::make_unique<FillLightning::Generator>(FillLightning::lightning_support_params(*m_object, support_density), contours,
-                                                                   overhangs, []() {});
+            const BuiltinMirror::LightningInput input(FillLightning::lightning_support_params(*m_object, support_density), contours, &overhangs);
+            generator = prepare_builtin_infill_state(ipLightning, ORCA_INFILL_STATE_LIGHTNING_SUPPORT, &input.get(), []() {});
         }
 
         else if (!with_infill) {

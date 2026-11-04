@@ -24,7 +24,7 @@
 #include "tbb/concurrent_unordered_map.h"
 #include "Flow.hpp"
 #include "PrintConfig.hpp"
-#include "Fill/Lightning/Generator.hpp"
+#include "Fill/InfillObjectState.hpp"
 #include "TreeModelVolumes.hpp"
 #include "TreeSupport3D.hpp"
 
@@ -411,7 +411,9 @@ public:
     double max_cantilever_dist = 0;
     SupportType support_type;
 
-    std::unique_ptr<FillLightning::Generator> generator;
+    // The generator of the lightning support base, prepared by the lightning pattern library
+    // (ORCA_INFILL_STATE_LIGHTNING_SUPPORT), and the layer of its trees at each print_z.
+    InfillObjectStatePtr generator;
     std::unordered_map<double, size_t> printZ_to_lightninglayer;
 
     std::function<void()> throw_on_cancel;

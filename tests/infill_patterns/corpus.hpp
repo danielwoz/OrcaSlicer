@@ -106,6 +106,8 @@ public:
     FillAdaptive::Octree*      octree(State state);
     const AdaptiveInfillField* field(AdaptiveInfillMode mode);
     FillLightning::Generator*  lightning();
+    // The generator tree support builds for its lightning base, of lightning_support_input().
+    FillLightning::Generator*  lightning_support();
 
     // The arguments of FillAdaptive::build_octree() the octree of state is built with.
     struct OctreeInput
@@ -124,6 +126,16 @@ public:
         const std::vector<Polygons>          &outlines;
     };
     LightningInput lightning_input();
+
+    // The arguments the generator of tree support is built with: the parameters of a support base under the slab and, as
+    // the contours and the overhangs of each layer, the outlines of the slab and the overhangs of its lightning infill.
+    struct LightningSupportInput
+    {
+        const FillLightning::GeneratorParams &params;
+        const std::vector<Polygons>          &contours;
+        const std::vector<Polygons>          &overhangs;
+    };
+    LightningSupportInput lightning_support_input();
 
     // The slices and the box the fields are built over.
     const std::vector<AdaptiveInfillField::Slice>& field_slices();

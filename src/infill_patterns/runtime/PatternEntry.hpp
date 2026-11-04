@@ -118,26 +118,45 @@ template<> struct ObjectState<1u << ORCA_INFILL_STATE_OCTREE>
     static void attach(Fill &filler, const Type *state) { filler.adapt_fill_octree = state != nullptr ? state->octree.get() : nullptr; }
 };
 
-// The generator of the lightning infill, whose trees a filler of the row draws.
-template<> struct ObjectState<1u << ORCA_INFILL_STATE_LIGHTNING>
+// The lightning generators: of the infill, whose trees a filler of the row draws, and of the support base of tree
+// support, whose trees the host queries as lines.
+template<> struct ObjectState<(1u << ORCA_INFILL_STATE_LIGHTNING) | (1u << ORCA_INFILL_STATE_LIGHTNING_SUPPORT)>
 {
     using Type = FillLightning::Generator;
-    static constexpr uint32_t queries  = 0;
+    static constexpr uint32_t queries  = 1u << ORCA_INFILL_QUERY_LIGHTNING_LINES;
     static constexpr bool     required = true;
 
-    static orca_infill_status prepare(int32_t, const void *data, const std::function<void()> &throw_if_canceled,
+    static orca_infill_status prepare(int32_t kind, const void *data, const std::function<void()> &throw_if_canceled,
                                       std::unique_ptr<Type> &state)
     {
-        const BuiltinMirror::LightningLayers input = BuiltinMirror::to_lightning_layers(*static_cast<const orca_infill_lightning_input*>(data));
-        // The trees grow down the layers of the outlines, which also give the overhangs they support; the supporting
-        // radius sets the cell size of the distance fields they grow over.
-        if (input.outlines.empty() || ! input.overhangs.empty() || input.params.supporting_radius <= 0)
+        BuiltinMirror::LightningLayers input = BuiltinMirror::to_lightning_layers(*static_cast<const orca_infill_lightning_input*>(data));
+        // The supporting radius sets the cell size of the distance fields the trees grow over.
+        if (input.params.supporting_radius <= 0)
+            return ORCA_INFILL_ERR_INVALID;
+        if (kind == ORCA_INFILL_STATE_LIGHTNING_SUPPORT) {
+            // The trees grow down the contours of the layers to the overhangs of each; without layers there are none.
+            if (input.overhangs.size() != input.outlines.size())
+                return ORCA_INFILL_ERR_INVALID;
+            state = std::make_unique<Type>(input.params, input.outlines, input.overhangs, throw_if_canceled);
+            return ORCA_INFILL_OK;
+        }
+        // The trees grow down the layers of the outlines, which also give the overhangs they support.
+        if (input.outlines.empty() || ! input.overhangs.empty())
             return ORCA_INFILL_ERR_INVALID;
         state = std::make_unique<Type>(input.params, input.outlines, throw_if_canceled);
         return ORCA_INFILL_OK;
     }
 
     static void attach(FillLightning::Filler &filler, const Type *state) { filler.generator = state; }
+
+    // ORCA_INFILL_QUERY_LIGHTNING_LINES: the trees of the layer as lines within the area.
+    static orca_infill_status query(const Type &state, const orca_infill_state_query &query, Polylines &lines)
+    {
+        if (query.layer >= state.layer_count())
+            return ORCA_INFILL_ERR_INVALID;
+        lines = state.getTreesForLayer(size_t(query.layer)).convertToLines(BuiltinMirror::to_polygons(query.area), query.overlap);
+        return ORCA_INFILL_OK;
+    }
 };
 
 // Row describes the row, as entry.cpp.in declares it:

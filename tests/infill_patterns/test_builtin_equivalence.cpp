@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -24,6 +25,7 @@
 #include "PatternEntry.hpp"
 #include "orca_infill_build_id.h"
 
+#include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/Fill/FillLibrary.hpp"
 #include "libslic3r/Fill/FillRectilinear.hpp"
@@ -32,6 +34,7 @@
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
 #include "libslic3r/Fill/Library/BuiltinMirror.hpp"
 #include "libslic3r/Fill/Library/orca_infill_builtin.h"
+#include "libslic3r/Fill/Lightning/Generator.hpp"
 #include "libslic3r/PrintBase.hpp"
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/libslic3r.h"
@@ -52,6 +55,16 @@ bool same_points(const Points &a, const Points &b)
 }
 
 bool same_bits(double a, double b) { return std::memcmp(&a, &b, sizeof(double)) == 0; }
+
+bool same_lines(const Polylines &expected, const Polylines &got)
+{
+    if (expected.size() != got.size())
+        return false;
+    for (size_t i = 0; i < got.size(); ++ i)
+        if (! same_points(expected[i].points, got[i].points) || ! got[i].fitting_result.empty())
+            return false;
+    return true;
+}
 
 // The first difference between two outputs of c; empty when they are equal bit for bit.
 std::string difference(const Case &c, const Output &expected, const Output &got)
@@ -613,8 +626,9 @@ TEST_CASE("Pattern libraries prepare the lightning generator of their row", "[In
         return library_states.prepare_lightning(ipLightning, throw_if_canceled);
     }, 5);
 
-    // The library refuses an input of another row or kind, no input, an input without layers, with overhangs or with a
-    // supporting radius that is not positive, and prepares without a job on the calling thread.
+    // The library refuses an input of another row, a tree support input without overhangs, no input, an input without
+    // layers, with overhangs or with a supporting radius that is not positive, and prepares without a job on the calling
+    // thread.
     const NativeStates::LightningInput  native = native_states.lightning_input();
     const BuiltinMirror::LightningInput input(native.params, native.outlines);
     const orca_infill_state_input       state_input { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_LIGHTNING, &input.get() };
@@ -648,7 +662,6 @@ TEST_CASE("Pattern libraries prepare the lightning generator of their row", "[In
         CHECK(library.prepare_state(int32_t(ipLightning), &bad, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
         CHECK(raw == nullptr);
     }
-    CHECK(library.query_state == nullptr);
     REQUIRE(library.prepare_state(int32_t(ipLightning), &state_input, nullptr, &raw) == ORCA_INFILL_OK);
     REQUIRE(raw != nullptr);
     const InfillObjectState serial(library, raw);
@@ -656,6 +669,211 @@ TEST_CASE("Pattern libraries prepare the lightning generator of their row", "[In
 
     // So does the copy of the library linked into the executable, as ORCA_INFILL_PATTERN_LINKAGE=STATIC links it.
     CHECK(difference(c, expected, run_linked(c, prepare_linked(ipLightning, state_input))).empty());
+}
+
+namespace {
+
+// The lightning library with a part taken away, as the entry of a library for check_builtin_infill_entry().
+struct ChangedLightningLibrary
+{
+    static inline BuiltinInfillEntry             entry = nullptr;
+    static inline orca_infill_builtin_library    library {};
+    static inline orca_infill_builtin_row        row {};
+    static inline const orca_infill_builtin_row *rows[1] {};
+
+    static const orca_infill_builtin_library* without_query(const orca_infill_builtin_host *host)
+    {
+        library             = *entry(host);
+        library.query_state = nullptr;
+        return &library;
+    }
+    static const orca_infill_builtin_library* without_support(const orca_infill_builtin_host *host)
+    {
+        library = *entry(host);
+        row     = *library.rows[0];
+        row.state_kinds &= ~(1u << ORCA_INFILL_STATE_LIGHTNING_SUPPORT);
+        rows[0]      = &row;
+        library.rows = rows;
+        return &library;
+    }
+};
+
+} // namespace
+
+TEST_CASE("Pattern libraries prepare the lightning generator of tree support and answer its lines", "[InfillPatterns][BuiltinEquivalence]")
+{
+    ScalingFactorGuard guard;
+    REQUIRE(InfillPatternRegistry::bound(ipLightning));
+    const InfillPatternBinding        &binding = *InfillPatternRegistry::binding(ipLightning);
+    const orca_infill_builtin_library &library = *binding.library;
+    REQUIRE(library.query_state != nullptr);
+    NativeStates native_states;
+
+    // The queries of every layer: within its contours, within the contours shrunk as tree support shrinks its base areas,
+    // within the half of them left of their centre and within nothing; with no overlap and with one.
+    struct Query
+    {
+        size_t   layer;
+        Polygons area;
+        coord_t  overlap;
+    };
+    auto queries_of = [](const std::vector<Polygons> &contours) {
+        std::vector<Query> out;
+        for (size_t layer = 0; layer < contours.size(); ++ layer) {
+            const BoundingBox box = get_extents(contours[layer]);
+            const Polygons    half = box.defined ?
+                intersection(contours[layer], Polygons { BoundingBox(box.min, Point(box.center().x(), box.max.y())).polygon() }) : Polygons();
+            for (const Polygons &area : { contours[layer], offset(contours[layer], -scaled<float>(0.4)), half, Polygons() })
+                for (const coord_t overlap : { coord_t(0), scaled<coord_t>(0.2) })
+                    out.push_back({ layer, area, overlap });
+        }
+        return out;
+    };
+    auto query = [](const InfillObjectState &state, const Query &q) {
+        return query_builtin_infill_state(ipLightning, state, ORCA_INFILL_QUERY_LIGHTNING_LINES, q.layer, q.area, q.overlap);
+    };
+
+    size_t lines = 0;
+    for (const double scaling_factor : { SCALING_FACTOR_INTERNAL, SCALING_FACTOR_INTERNAL_LARGE_PRINTER }) {
+        CAPTURE(scaling_factor);
+        set_scaling_factor(scaling_factor);
+        const NativeStates::LightningSupportInput native = native_states.lightning_support_input();
+        const FillLightning::Generator           &native_generator = *native_states.lightning_support();
+        const BuiltinMirror::LightningInput       input(native.params, native.contours, &native.overhangs);
+        auto prepare = [&input](const std::function<void()> &throw_if_canceled = {}) {
+            return prepare_builtin_infill_state(ipLightning, ORCA_INFILL_STATE_LIGHTNING_SUPPORT, &input.get(), throw_if_canceled);
+        };
+
+        // The library answers every query on the generator it builds as the native generator does.
+        const std::vector<Query> queries = queries_of(native.contours);
+        REQUIRE(native_generator.layer_count() == native.contours.size());
+        std::vector<Polylines> expected;
+        for (const Query &q : queries) {
+            expected.emplace_back(native_generator.getTreesForLayer(q.layer).convertToLines(q.area, q.overlap));
+            lines += expected.back().size();
+        }
+        const InfillObjectStatePtr generator = prepare();
+        REQUIRE(generator != nullptr);
+        CHECK(generator->library == &library);
+        for (size_t i = 0; i < queries.size(); ++ i) {
+            CAPTURE(i, queries[i].layer);
+            CHECK(same_lines(expected[i], query(*generator, queries[i])));
+        }
+
+        // The same queries again, shuffled over 8 threads that share the generator.
+        std::vector<size_t> order(queries.size());
+        for (size_t i = 0; i < order.size(); ++ i)
+            order[i] = i;
+        std::shuffle(order.begin(), order.end(), std::mt19937(20261105));
+        std::vector<Polylines>   got(queries.size());
+        std::atomic<size_t>      next { 0 };
+        std::vector<std::thread> threads;
+        for (int t = 0; t < 8; ++ t)
+            threads.emplace_back([&] {
+                for (size_t i; (i = next++) < order.size();)
+                    got[order[i]] = query(*generator, queries[order[i]]);
+            });
+        for (std::thread &thread : threads)
+            thread.join();
+        for (size_t i = 0; i < queries.size(); ++ i) {
+            CAPTURE(i, queries[i].layer);
+            CHECK(same_lines(expected[i], got[i]));
+        }
+
+#if ! ORCA_INFILL_PATTERN_LINKAGE_STATIC
+        // Both loops of the generator, over the samples and over the grid around a sample, may be split in any way.
+        check_split_lightning(prepare, [&](const InfillObjectState &split_generator) {
+            for (size_t i = 0; i < queries.size(); ++ i) {
+                CAPTURE(i, queries[i].layer);
+                CHECK(same_lines(expected[i], query(split_generator, queries[i])));
+            }
+        });
+#endif
+
+        check_canceled(prepare, 5);
+    }
+    // The trees reach the queries.
+    CHECK(lines > 0);
+
+    set_scaling_factor(SCALING_FACTOR_INTERNAL);
+    const NativeStates::LightningSupportInput native = native_states.lightning_support_input();
+    const BuiltinMirror::LightningInput       input(native.params, native.contours, &native.overhangs);
+    const orca_infill_state_input             state_input { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_LIGHTNING_SUPPORT, &input.get() };
+    const std::vector<Query>                  queries = queries_of(native.contours);
+    const Query                              &q = *std::max_element(queries.begin(), queries.end(), [&native_states](const Query &a, const Query &b) {
+        return native_states.lightning_support()->getTreesForLayer(a.layer).convertToLines(a.area, a.overlap).size() <
+               native_states.lightning_support()->getTreesForLayer(b.layer).convertToLines(b.area, b.overlap).size();
+    });
+    const Polylines expected = native_states.lightning_support()->getTreesForLayer(q.layer).convertToLines(q.area, q.overlap);
+    REQUIRE(! expected.empty());
+
+    // The library refuses an input of another row, one without overhangs and a supporting radius that is not positive.
+    int   stale = 0;
+    void *raw   = &stale;
+    CHECK(library.prepare_state(int32_t(ipGyroid), &state_input, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+    CHECK(raw == nullptr);
+    {
+        const BuiltinMirror::LightningInput no_overhangs(native.params, native.contours);
+        const orca_infill_state_input       bad { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_LIGHTNING_SUPPORT, &no_overhangs.get() };
+        CHECK(library.prepare_state(int32_t(ipLightning), &bad, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+        CHECK(raw == nullptr);
+    }
+    for (const coord_t radius : { coord_t(0), coord_t(-scaled<coord_t>(2.)) }) {
+        CAPTURE(radius);
+        FillLightning::GeneratorParams params = native.params;
+        params.supporting_radius              = radius;
+        const BuiltinMirror::LightningInput bad_radius(params, native.contours, &native.overhangs);
+        const orca_infill_state_input       bad { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_LIGHTNING_SUPPORT, &bad_radius.get() };
+        CHECK(library.prepare_state(int32_t(ipLightning), &bad, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+        CHECK(raw == nullptr);
+    }
+
+    // Without layers, as for tree support without base areas, it prepares a generator that answers no layer.
+    {
+        const std::vector<Polygons>         none;
+        const BuiltinMirror::LightningInput no_layers(native.params, none, &none);
+        const InfillObjectStatePtr          empty = prepare_builtin_infill_state(ipLightning, ORCA_INFILL_STATE_LIGHTNING_SUPPORT,
+                                                                                 &no_layers.get(), {});
+        REQUIRE(empty != nullptr);
+        CHECK_THROWS_AS(query(*empty, { 0, q.area, 0 }), SlicingError);
+    }
+
+    // It prepares without a job on the calling thread, and answers the lines query of a layer of the generator into a
+    // sink, nothing else.
+    REQUIRE(library.prepare_state(int32_t(ipLightning), &state_input, nullptr, &raw) == ORCA_INFILL_OK);
+    REQUIRE(raw != nullptr);
+    const InfillObjectState serial(library, raw);
+    CHECK(same_lines(expected, query(serial, q)));
+    CHECK_THROWS_WITH(query(serial, { native.contours.size(), q.area, 0 }),
+                      ContainsSubstring("lightning") && ContainsSubstring(binding.file) && ContainsSubstring("error"));
+    const BuiltinMirror::StateQuery lines_query(ORCA_INFILL_QUERY_LIGHTNING_LINES, q.layer, q.area, q.overlap);
+    {
+        BuiltinInfillOutput out;
+        CHECK(library.query_state(raw, &lines_query.get(), out.sink()) == ORCA_INFILL_OK);
+        CHECK(same_lines(expected, out.polylines));
+    }
+    BuiltinInfillOutput out;
+    CHECK(library.query_state(raw, &lines_query.get(), nullptr) == ORCA_INFILL_ERR_INVALID);
+    CHECK(library.query_state(nullptr, &lines_query.get(), out.sink()) == ORCA_INFILL_ERR_INVALID);
+    CHECK(library.query_state(raw, nullptr, out.sink()) == ORCA_INFILL_ERR_INVALID);
+    const BuiltinMirror::StateQuery other(ORCA_INFILL_QUERY_LIGHTNING_LINES + 1, q.layer, q.area, q.overlap);
+    CHECK(library.query_state(raw, &other.get(), out.sink()) == ORCA_INFILL_ERR_INVALID);
+    orca_infill_state_query shorter = lines_query.get();
+    shorter.struct_size             = uint32_t(offsetof(orca_infill_state_query, overlap));
+    CHECK(library.query_state(raw, &shorter, out.sink()) == ORCA_INFILL_ERR_INVALID);
+    CHECK(out.polylines.empty());
+
+    // So does the copy of the library linked into the executable, as ORCA_INFILL_PATTERN_LINKAGE=STATIC links it.
+    CHECK(same_lines(expected, query(*prepare_linked(ipLightning, state_input).state, q)));
+
+    // The loader refuses a lightning library that does not answer the lines or prepare the generator of tree support.
+    for (const BuiltinInfillLoad &bound : builtin_infill_pattern_loads())
+        if (bound.pattern == ipLightning)
+            ChangedLightningLibrary::entry = bound.entry;
+    REQUIRE(ChangedLightningLibrary::entry != nullptr);
+    CHECK(check_builtin_infill_entry(&ChangedLightningLibrary::without_query, ipLightning).error == "is incomplete");
+    CHECK(check_builtin_infill_entry(&ChangedLightningLibrary::without_support, ipLightning).error ==
+          "prepares other object states for its pattern");
 }
 
 TEST_CASE("Pattern library fillers keep their state between calls", "[InfillPatterns][BuiltinEquivalence]")

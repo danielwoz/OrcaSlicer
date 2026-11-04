@@ -62,6 +62,9 @@ public:
      */
     const Layer& getTreesForLayer(const size_t& layer_id) const;
 
+    // The number of layers getTreesForLayer() has trees for.
+    size_t layer_count() const { return m_lightning_layers.size(); }
+
     std::vector<Polygons>& Overhangs() { return m_overhang_per_layer; }
 
     float infilll_extrusion_width() const { return m_infill_extrusion_width; }
