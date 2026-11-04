@@ -128,6 +128,7 @@ set(lisbslic3r_sources
     Feature/Interlocking/VoxelUtils.cpp
     Feature/Interlocking/VoxelUtils.hpp
     FileParserError.hpp
+    Fill/AdaptiveFillSpacing.cpp
     Fill/FillExtrusion.cpp
     Fill/FillLibrary.cpp
     Fill/FillLibrary.hpp
@@ -583,6 +584,7 @@ set(libslic3r_fillkit_sources
     ExtrusionEntity.hpp
     ExtrusionEntityCollection.cpp
     ExtrusionEntityCollection.hpp
+    Fill/FillAdaptiveFrame.cpp
     Fill/FillBase.cpp
     Fill/FillBase.hpp
     Fill/FillCornerSmoothing.cpp
