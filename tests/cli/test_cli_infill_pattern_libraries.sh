@@ -3,7 +3,8 @@
 #
 # --check-infill-patterns lists the libraries and exits with 0 when every one is bound, whatever the infill plugin
 # switches say. In a copy of the application without one of the libraries it exits with 1, the start-up names the
-# file, and slicing is refused at validation, naming the file, with CLI_VALIDATE_ERROR.
+# file, and slicing is refused at validation, naming the file, with CLI_VALIDATE_ERROR. At info level the log has one
+# summary line of the libraries, and one error line per library that is not bound.
 #
 # usage: test_cli_infill_pattern_libraries.sh <orca-slicer binary>
 set -u
@@ -93,10 +94,21 @@ grep -q -F "error: infill pattern library $MISSING: missing" "$WORK/missing-chec
 
 echo "== slicing without it"
 run slice "$BIN" --datadir "$WORK/datadir" --load-settings "$WORK/machine.json;$WORK/process.json" --slice 0 \
-    --outputdir "$WORK/slice" "$MODEL"
+    --debug 3 --logfile "$WORK/slice.log" --outputdir "$WORK/slice" "$MODEL"
 [ "$(status slice)" -eq 0 ] || fail "slice: status $(status slice), want 0"
+libraries=$(grep -c -P '\tbound\t' "$WORK/check/stdout")
+grep -q -E "Infill pattern libraries: $libraries of $libraries bound in [0-9.]+ ms, folder: " "$WORK/slice.log" ||
+    fail "slice: the log has no summary of the libraries"
+grep -q -e "Infill pattern library .*: " -e "Loaded infill pattern library" "$WORK/slice.log" &&
+    fail "slice: the log has more than the summary at info level"
 run missing-slice "$COPY" --datadir "$WORK/datadir" --load-settings "$WORK/machine.json;$WORK/process.json" --slice 0 \
-    --outputdir "$WORK/missing-slice" "$MODEL"
+    --debug 3 --logfile "$WORK/missing-slice.log" --outputdir "$WORK/missing-slice" "$MODEL"
+grep -q -E "Infill pattern libraries: $((libraries - 1)) of $libraries bound in " "$WORK/missing-slice.log" ||
+    fail "missing slice: the log has no summary of the libraries"
+errors=$(grep -c "Infill pattern library .*: " "$WORK/missing-slice.log")
+if [ "$errors" -ne 1 ] || ! grep -q -F "$MISSING: missing" "$WORK/missing-slice.log"; then
+    fail "missing slice: the log has not one error naming $MISSING"
+fi
 [ "$(status missing-slice)" -eq $(( CLI_VALIDATE_ERROR & 255 )) ] ||
     fail "missing slice: status $(status missing-slice), want $(( CLI_VALIDATE_ERROR & 255 )) (CLI_VALIDATE_ERROR)"
 grep -q -F "Infill pattern library $MISSING is missing or damaged (missing). Reinstall OrcaSlicer." "$WORK/missing-slice/stderr" ||

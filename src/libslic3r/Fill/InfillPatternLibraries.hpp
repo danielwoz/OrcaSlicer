@@ -83,10 +83,13 @@ const std::vector<LinkedBuiltinInfillLibrary>& linked_builtin_infill_patterns();
 const std::vector<BuiltinInfillLoad>& builtin_infill_pattern_loads();
 // The folder the libraries were loaded from; empty when none of the folders exists or the libraries are linked.
 const boost::filesystem::path& builtin_infill_pattern_folder();
-// Writes the outcome of loading to the log, one line per library, for the loads made before the log was set up.
+// Writes the outcome of loading to the log, for the loads made before the log was set up: one info line with the count
+// of libraries bound, the time taken and the folder, one error line per library that is not bound, and one debug line
+// per library that is.
 void log_builtin_infill_pattern_loads();
-// Prints the value, token, file, status and load time of every row a pattern library serves (--check-infill-patterns).
-void print_builtin_infill_patterns(std::ostream &out);
+// Prints the build id of the libraries, and the value, token, file, status and load time of every row a pattern
+// library serves (--check-infill-patterns, the system information); folder adds where the libraries come from.
+void print_builtin_infill_patterns(std::ostream &out, bool folder = true);
 
 // Opens the file and runs every check on it as the library of row, without binding it. A library whose entry ran stays
 // loaded, as the loader keeps every library it called into.
