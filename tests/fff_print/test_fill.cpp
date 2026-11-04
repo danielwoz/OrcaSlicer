@@ -1033,6 +1033,8 @@ TEST_CASE("Spiral inset fill closes the gaps with variable width walls", "[Fill]
         filler->overlap             = 0.5 * spacing; // cancel the contraction, so both see the same surface
         filler->print_config        = &print_config;
         filler->print_object_config = &object_config;
+        filler->min_nozzle_diameter = *std::min_element(print_config.nozzle_diameter.values.begin(),
+                                                        print_config.nozzle_diameter.values.end());
         return filler;
     };
 

@@ -29,8 +29,6 @@ namespace Slic3r {
 
 void FillConcentricInternal::fill_surface_extrusion(const Surface* surface, const FillParams& params, ExtrusionEntitiesPtr& out)
 {
-    assert(this->print_config != nullptr && this->print_object_config != nullptr);
-
     ThickPolylines thick_polylines_out;
 
     for (size_t i = 0; i < this->no_overlap_expolygons.size(); ++i) {
@@ -43,7 +41,6 @@ void FillConcentricInternal::fill_surface_extrusion(const Surface* surface, cons
         coord_t                loops_count = std::max(bbox_size.x(), bbox_size.y()) / min_spacing + 1;
         Polygons               polygons = to_polygons(expolygon);
 
-        double min_nozzle_diameter = *std::min_element(print_config->nozzle_diameter.values.begin(), print_config->nozzle_diameter.values.end());
         Arachne::WallToolPathsParams input_params;
         input_params.min_bead_width = 0.85 * min_nozzle_diameter;
         input_params.min_feature_size = 0.25 * min_nozzle_diameter;
