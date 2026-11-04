@@ -14,6 +14,7 @@
 
 #include "libslic3r/Fill/FillBase.hpp"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
+#include "libslic3r/Utils.hpp"
 #include "libslic3r/libslic3r.h"
 
 #include "corpus.hpp"
@@ -65,13 +66,13 @@ TEST_CASE("Native fillers reproduce the golden corpus", "[InfillPatterns][Golden
         // A row this build leaves out has no digest to check.
         if (! InfillPatternRegistry::builtins()[size_t(c.pattern)].available())
             continue;
-        SCALING_FACTOR = c.scaling_factor;
+        set_scaling_factor(c.scaling_factor);
         std::unique_ptr<Fill> filler(Fill::new_from_type(c.pattern));
         InfillCorpus::apply_members(c, *filler);
         states.attach(c, *filler);
         lines.emplace_back(golden_line(c, InfillCorpus::digest(c, InfillCorpus::run(c, *filler))));
     }
-    SCALING_FACTOR = saved;
+    set_scaling_factor(saved);
 
     // ORCA_INFILL_GOLDEN_WRITE=<path> writes the digests of this platform instead of checking them.
     if (const char *path = std::getenv("ORCA_INFILL_GOLDEN_WRITE"); path != nullptr && *path != 0) {

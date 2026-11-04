@@ -111,6 +111,8 @@ extern std::string format_memsize(size_t bytes, unsigned int decimals = 1);
 // The string is non-empty if the loglevel >= info (3) or ignore_loglevel==true.
 extern std::string log_memory_info(bool ignore_loglevel = false);
 extern void disable_multi_threading();
+// Sets SCALING_FACTOR. Called on the main thread while nothing is being sliced.
+extern void set_scaling_factor(double scaling_factor);
 // Returns the size of physical memory (RAM) in bytes.
 extern size_t total_physical_memory();
 

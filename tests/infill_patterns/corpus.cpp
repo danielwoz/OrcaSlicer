@@ -16,6 +16,7 @@
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Tesselate.hpp"
 #include "libslic3r/TriangleMesh.hpp"
+#include "libslic3r/Utils.hpp"
 
 namespace Slic3r::InfillCorpus {
 namespace {
@@ -833,11 +834,11 @@ std::vector<Case> build_cases()
 {
     std::vector<Case> out;
     const double saved = SCALING_FACTOR;
-    SCALING_FACTOR = SCALING_FACTOR_INTERNAL;
+    set_scaling_factor(SCALING_FACTOR_INTERNAL);
     for (const Row &row : rows)
         add_row(out, row);
     // The scaling factor of large beds.
-    SCALING_FACTOR = SCALING_FACTOR_INTERNAL_LARGE_PRINTER;
+    set_scaling_factor(SCALING_FACTOR_INTERNAL_LARGE_PRINTER);
     for (const Row &row : rows) {
         Builder b(out, row, SCALING_FACTOR_INTERNAL_LARGE_PRINTER);
         add_scaled(b);
@@ -851,7 +852,7 @@ std::vector<Case> build_cases()
             at_layer(c, 29);
         });
     }
-    SCALING_FACTOR = saved;
+    set_scaling_factor(saved);
     std::stable_sort(out.begin(), out.end(), [](const Case &a, const Case &b) { return a.pattern < b.pattern; });
     return out;
 }
