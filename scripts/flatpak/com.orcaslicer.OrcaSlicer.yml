@@ -440,6 +440,10 @@ modules:
       - type: dir
         path: ../../localization
         dest: localization
+      # The infill plugin SDK: libslic3r compiles against its C ABI header.
+      - type: dir
+        path: ../../sdk
+        dest: sdk
       # For the post-build unit-test step (BUILD_TESTS=ON); not built by the app.
       - type: dir
         path: ../../tests
