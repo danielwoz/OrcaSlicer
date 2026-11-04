@@ -373,6 +373,11 @@ function build_slicer() {
             rm ./OrcaSlicer.app/Contents/Resources
             cp -R "$resources_path" ./OrcaSlicer.app/Contents/Resources
             relocate_python_runtime ./OrcaSlicer.app
+            # The manifest of the infill pattern libraries; codesign wants only code in Contents/PlugIns.
+            if [ -s ../infill_patterns/manifest.txt ]; then
+                mkdir -p ./OrcaSlicer.app/Contents/Resources/infill_patterns
+                cp ../infill_patterns/manifest.txt ./OrcaSlicer.app/Contents/Resources/infill_patterns/
+            fi
             # delete .DS_Store file
             find ./OrcaSlicer.app/ -name '.DS_Store' -delete
 

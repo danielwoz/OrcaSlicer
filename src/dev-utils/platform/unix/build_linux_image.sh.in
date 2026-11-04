@@ -199,7 +199,7 @@ echo -n "[9/9] Generating Linux app..."
 
     # The built-in infill pattern libraries that CMake staged next to the binary go where the application looks for them
     # in an AppImage ($APPDIR/lib/orca-slicer/infill_patterns). Every print is refused while one is missing, so the
-    # folder must hold exactly the files of the build's manifest (empty when the libraries are linked in).
+    # folder must hold exactly the files of the build's manifest (empty when the libraries are linked in) and its copy.
     INFILL_PATTERN_MANIFEST="infill_patterns/manifest.txt"
     INFILL_PATTERN_DIR=""
     if [ -f "$INFILL_PATTERN_MANIFEST" ] && grep -q . "$INFILL_PATTERN_MANIFEST"; then
