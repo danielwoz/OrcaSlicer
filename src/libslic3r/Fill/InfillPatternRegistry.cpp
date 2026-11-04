@@ -380,6 +380,14 @@ const InfillPatternDescriptor& sliced_infill_pattern(InfillPattern pattern)
     return found == nullptr ? s_none : found->available() ? *found : *InfillPatternRegistry::find(found->fallback);
 }
 
+Fill* Fill::new_from_type(const InfillPattern type) { return InfillPatternRegistry::create(type); }
+
+Fill* Fill::new_from_type(const std::string &type)
+{
+    const InfillPatternDescriptor *pattern = InfillPatternRegistry::find(type);
+    return pattern == nullptr ? nullptr : InfillPatternRegistry::create(pattern->id);
+}
+
 // The infill pattern traits declared in PrintConfig.hpp; they describe the pattern that is sliced.
 bool is_separable_infill_pattern(InfillPattern pattern) { return sliced_infill_pattern(pattern).has(ipfSeparable); }
 bool is_octree_infill_pattern(InfillPattern pattern) { return sliced_infill_pattern(pattern).has(ipfOctree); }

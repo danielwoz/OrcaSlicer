@@ -106,6 +106,8 @@ public:
     Flow        with_flow_ratio(double ratio) const { return this->with_cross_section(this->mm3_per_mm() * ratio); }
 
     static Flow bridging_flow(float dmr, float nozzle_diameter) { return Flow { dmr, dmr, bridge_extrusion_spacing(dmr), nozzle_diameter, true }; }
+    // A flow of exactly these values, such as those read from another Flow; nothing is derived or checked.
+    static Flow raw(float width, float height, float spacing, float nozzle_diameter, bool bridge) { return Flow { width, height, spacing, nozzle_diameter, bridge }; }
 
     static Flow new_from_config_width(FlowRole role, const ConfigOptionFloatOrPercent &width, float nozzle_diameter, float height);
 

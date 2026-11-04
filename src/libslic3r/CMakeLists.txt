@@ -130,6 +130,7 @@ set(lisbslic3r_sources
     Circle.hpp
     ClipperUtils.cpp
     ClipperUtils.hpp
+    ClipperUtilsParallel.cpp
     ClipperZUtils.cpp
     ClipperZUtils.hpp
     Color.cpp
@@ -146,6 +147,7 @@ set(lisbslic3r_sources
     CutUtils.hpp
     EdgeGrid.cpp
     EdgeGrid.hpp
+    EdgeGridPng.cpp
     ElephantFootCompensation.cpp
     ElephantFootCompensation.hpp
     Emboss.cpp
@@ -185,6 +187,7 @@ set(lisbslic3r_sources
     Fill/FillAdaptive.hpp
     Fill/FillBase.cpp
     Fill/FillBase.hpp
+    Fill/FillExtrusion.cpp
     Fill/InfillPatternRegistry.cpp
     Fill/InfillPatternRegistry.hpp
     Fill/InfillPlugins.cpp
@@ -242,6 +245,7 @@ set(lisbslic3r_sources
     TextureToColor/ColorUtils.cpp
     Flow.cpp
     Flow.hpp
+    FlowConfig.cpp
     FlushVolCalc.cpp
     FlushVolCalc.hpp
     Format/3mf.cpp
