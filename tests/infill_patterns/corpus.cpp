@@ -1177,6 +1177,7 @@ struct NativeStates::Set
     bool                                                         octrees_built { false };
     std::vector<ExPolygons>                                      field_layers;
     std::vector<AdaptiveInfillField::Slice>                      field_slices;
+    BoundingBox                                                  field_bbox;
     std::map<AdaptiveInfillMode, std::unique_ptr<AdaptiveInfillField>> fields;
     std::unique_ptr<Model>                                       model;
     std::unique_ptr<Print>                                       print;
@@ -1215,10 +1216,8 @@ FillAdaptive::Octree* NativeStates::octree(State state)
     return (state == State::SupportOctree ? set.support_octree : set.adaptive_octree).get();
 }
 
-const AdaptiveInfillField* NativeStates::field(AdaptiveInfillMode mode)
+NativeStates::Set& NativeStates::fields()
 {
-    if (mode == AdaptiveInfillMode::Disabled)
-        return nullptr;
     Set &set = this->current();
     if (set.field_slices.empty()) {
         // A sphere of 9.5 mm radius joined by a column that ends below its equator, in 0.2 mm layers.
@@ -1233,20 +1232,31 @@ const AdaptiveInfillField* NativeStates::field(AdaptiveInfillMode mode)
                 polygons.emplace_back(rectangle_mm(5., -3., 12., 3.));
             set.field_layers.emplace_back(union_ex(polygons));
         }
-        BoundingBox bbox;
         for (size_t i = 0; i < layers; ++ i) {
             set.field_slices.push_back({ 0.2 * double(i), 0.2 * double(i + 1), &set.field_layers[i] });
-            bbox.merge(get_extents(set.field_layers[i]));
+            set.field_bbox.merge(get_extents(set.field_layers[i]));
         }
         for (int m = int(AdaptiveInfillMode::DistanceWarp); m < int(AdaptiveInfillMode::Count); ++ m) {
-            auto field = std::make_unique<AdaptiveInfillField>(set.field_slices, bbox, AdaptiveInfillMode(m), [] {});
+            auto field = std::make_unique<AdaptiveInfillField>(set.field_slices, set.field_bbox, AdaptiveInfillMode(m), [] {});
             if (! field->empty())
                 set.fields[AdaptiveInfillMode(m)] = std::move(field);
         }
     }
+    return set;
+}
+
+const AdaptiveInfillField* NativeStates::field(AdaptiveInfillMode mode)
+{
+    if (mode == AdaptiveInfillMode::Disabled)
+        return nullptr;
+    const Set &set = this->fields();
     auto it = set.fields.find(mode);
     return it == set.fields.end() ? nullptr : it->second.get();
 }
+
+const std::vector<AdaptiveInfillField::Slice>& NativeStates::field_slices() { return this->fields().field_slices; }
+
+const BoundingBox& NativeStates::field_bbox() { return this->fields().field_bbox; }
 
 FillLightning::Generator* NativeStates::lightning()
 {

@@ -5,9 +5,7 @@
 #include <utility>
 
 #include "../Exception.hpp"
-#include "../I18N.hpp"
 #include "../Surface.hpp"
-#include "../format.hpp"
 #include "InfillObjectState.hpp"
 #include "InfillPatternLibraries.hpp"
 #include "InfillPatternRegistry.hpp"
@@ -106,7 +104,8 @@ const Flow& FillLibrary::lock_flow(size_t flow_index) const
         if (flow_index - m_lock->skeleton_flow_params.size() < m_lock->skin_flow_params.size())
             return std::next(m_lock->skin_flow_params.begin(), flow_index - m_lock->skeleton_flow_params.size())->first;
     }
-    this->fail("it returned lines of flow " + std::to_string(flow_index) + ", which the filler was not given");
+    throw_builtin_infill_failure(m_pattern, m_file,
+                                 "it returned lines of flow " + std::to_string(flow_index) + ", which the filler was not given");
 }
 
 orca_infill_status FillLibrary::run(int32_t call, const Surface &surface, const FillParams &params, BuiltinInfillOutput &out)
@@ -127,16 +126,7 @@ void FillLibrary::check(orca_infill_status status, const BuiltinInfillOutput &ou
         throw InfillFailedException();
     if (status == ORCA_INFILL_ERR_NOMEM)
         throw std::bad_alloc();
-    this->fail(status == ORCA_INFILL_ERR_STATE ? std::string("it runs under another scaling factor") :
-               status == ORCA_INFILL_ERR_EXCEPTION && ! out.error.empty() ? out.error :
-                                                                           "error " + std::to_string(status));
-}
-
-void FillLibrary::fail(const std::string &reason) const
-{
-    const InfillPatternDescriptor &pattern = infill_pattern(m_pattern);
-    throw SlicingError(format(_u8L("The infill pattern \"%1%\" of the pattern library %2% failed: %3%"),
-                              pattern.key != nullptr ? pattern.key : m_file.c_str(), m_file, reason));
+    throw_builtin_infill_failure(m_pattern, m_file, builtin_infill_failure_reason(status, out.error));
 }
 
 } // namespace Slic3r

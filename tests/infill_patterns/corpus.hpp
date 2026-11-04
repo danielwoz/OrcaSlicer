@@ -12,6 +12,7 @@
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/ExPolygon.hpp"
 #include "libslic3r/ExtrusionEntityCollection.hpp"
+#include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/PrintConfig.hpp"
@@ -20,7 +21,6 @@
 
 namespace Slic3r {
 
-class AdaptiveInfillField;
 namespace FillAdaptive { struct Octree; }
 namespace FillLightning { class Generator; }
 
@@ -104,12 +104,18 @@ public:
     const AdaptiveInfillField* field(AdaptiveInfillMode mode);
     FillLightning::Generator*  lightning();
 
+    // The slices and the box the fields are built over.
+    const std::vector<AdaptiveInfillField::Slice>& field_slices();
+    const BoundingBox&                             field_bbox();
+
     // Points the state members of a native filler at the state of the case.
     void attach(const Case &c, Fill &filler);
 
 private:
     struct Set;
     Set& current();
+    // current() with its fields built.
+    Set& fields();
     std::map<double, std::unique_ptr<Set>> m_sets;
 };
 

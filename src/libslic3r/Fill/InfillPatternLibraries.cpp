@@ -17,8 +17,10 @@
 #include "libslic3r_infill_patterns.h" // generated: ORCA_INFILL_PATTERN_LINKAGE_STATIC
 #include "libslic3r_version.h"
 #include "orca_infill_build_id.h"      // generated: ORCA_INFILL_BUILD_ID
+#include "../Exception.hpp"
 #include "../I18N.hpp"
 #include "../ParallelFor.hpp"
+#include "../PrintBase.hpp"
 #include "../Utils.hpp"
 #include "../format.hpp"
 #include "../libslic3r.h"
@@ -51,6 +53,8 @@ BuiltinInfillOutput& output(orca_infill_sink *sink) { return *reinterpret_cast<B
 
 // The log lines of the entry that runs on this thread, kept for the outcome of its load.
 thread_local std::string *t_entry_log = nullptr;
+// The message of the exception the prepare_state() that runs on this thread fails with, which the library logs.
+thread_local std::string *t_state_error = nullptr;
 
 boost::log::trivial::severity_level severity(int32_t level)
 {
@@ -132,7 +136,8 @@ int32_t ORCA_INFILL_CALL host_log_enabled(int32_t level) noexcept
     }
 }
 
-// The lines of a library, written as its pattern code writes them natively.
+// The lines of a library, written as its pattern code writes them natively. The last error line of a prepare_state() is
+// also the message of its failure.
 void ORCA_INFILL_CALL host_log(int32_t level, const char *message) noexcept
 {
     try {
@@ -142,6 +147,8 @@ void ORCA_INFILL_CALL host_log(int32_t level, const char *message) noexcept
             *t_entry_log += message != nullptr ? message : "";
             return;
         }
+        if (t_state_error != nullptr && level == ORCA_INFILL_LOG_ERROR)
+            *t_state_error = message != nullptr ? message : "";
         kit_log_write(severity(level), message != nullptr ? message : "");
     } catch (...) {
     }
@@ -504,6 +511,47 @@ std::string builtin_infill_library_error(InfillPattern row)
     if (binding == nullptr || binding->library != nullptr)
         return {};
     return format(_u8L("Infill pattern library %1% is missing or damaged (%2%). Reinstall OrcaSlicer."), binding->file, binding->error);
+}
+
+std::string builtin_infill_failure_reason(orca_infill_status status, const std::string &error)
+{
+    if (status == ORCA_INFILL_ERR_STATE)
+        return "it runs under another scaling factor";
+    return status == ORCA_INFILL_ERR_EXCEPTION && ! error.empty() ? error : "error " + std::to_string(status);
+}
+
+void throw_builtin_infill_failure(InfillPattern row, const std::string &file, const std::string &reason)
+{
+    const InfillPatternDescriptor &pattern = infill_pattern(row);
+    throw SlicingError(format(_u8L("The infill pattern \"%1%\" of the pattern library %2% failed: %3%"),
+                              pattern.key != nullptr ? pattern.key : file.c_str(), file, reason));
+}
+
+InfillObjectStatePtr prepare_builtin_infill_state(InfillPattern row, int32_t kind, const void *data,
+                                                  const std::function<void()> &throw_if_canceled)
+{
+    const InfillPatternBinding *binding = InfillPatternRegistry::binding(row);
+    assert(binding != nullptr);
+    if (binding == nullptr || binding->library == nullptr)
+        throw SlicingError(builtin_infill_library_error(row));
+    const orca_infill_builtin_library &library = *binding->library;
+    const orca_infill_state_input      input { sizeof(orca_infill_state_input), kind, data };
+    orca_infill_job                    job { throw_if_canceled };
+    void                              *raw    = nullptr;
+    std::string                        error;
+    std::string                       *outer  = std::exchange(t_state_error, &error);
+    const orca_infill_status           status = library.prepare_state(int32_t(row), &input, &job, &raw);
+    t_state_error = outer;
+    if (status == ORCA_INFILL_OK)
+        return raw == nullptr ? nullptr : std::make_shared<const InfillObjectState>(library, raw);
+    if (status == ORCA_INFILL_ERR_CANCELED) {
+        if (throw_if_canceled)
+            throw_if_canceled();
+        throw CanceledException();
+    }
+    if (status == ORCA_INFILL_ERR_NOMEM)
+        throw std::bad_alloc();
+    throw_builtin_infill_failure(row, binding->file, builtin_infill_failure_reason(status, error));
 }
 
 void shutdown_builtin_infill_patterns() { s_shut_down = true; }
