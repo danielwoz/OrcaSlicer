@@ -22,7 +22,8 @@ struct InfillPatternDescriptor;
 // LockRegionParam it was given, so that the instance computes what the class computes in libslic3r. The lines come
 // back in the order generated, with Fill::spacing, InfillFailedException and std::bad_alloc as the class leaves them;
 // any other failure is a SlicingError. fill_surface_extrusion() extrudes the lines of Locked Zag with the flows of its
-// LockRegionParam, and is Fill's for every other row, which calls back into fill_surface() and fill_surface_arachne().
+// LockRegionParam and the loops of concentric internal, which fills Fill::no_overlap_expolygons, and is Fill's for every
+// other row, which calls back into fill_surface() and fill_surface_arachne().
 class FillLibrary : public Fill
 {
 public:

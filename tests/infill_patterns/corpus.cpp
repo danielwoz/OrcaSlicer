@@ -10,6 +10,7 @@
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include "libslic3r/Fill/FillAdaptive.hpp"
+#include "libslic3r/Fill/FillConcentricInternal.hpp"
 #include "libslic3r/Fill/FillLibrary.hpp"
 #include "libslic3r/Fill/FillLightning.hpp"
 #include "libslic3r/Fill/FillRectilinear.hpp"
@@ -697,7 +698,7 @@ void add_concentric_callers(Builder &b)
         add_ironing(b, "ironing");
 }
 
-// FillConcentricInternal fills Fill::no_overlap_expolygons from fill_surface_extrusion() only.
+// Concentric internal fills only Fill::no_overlap_expolygons, through the extrusion call (concentric_internal_lines()).
 void add_concentric_internal(Builder &b)
 {
     auto internal = [](Case &c) { solid(c, stInternalSolid, erSolidInfill); };
@@ -1250,9 +1251,10 @@ void apply_members(const Case &c, Fill &filler)
 Output run(const Case &c, Fill &filler)
 {
     Output out;
-    // The Locked Zag filler of the slicer runs in its pattern library; the class itself has no extrusion call of its own,
-    // which FillLibrary::fill_surface_extrusion() makes of its lines.
-    auto *locked_zag = dynamic_cast<FillLockedZag *>(&filler);
+    // The Locked Zag and concentric internal fillers of the slicer run in their pattern libraries; the classes themselves
+    // have no extrusion call of their own, which FillLibrary::fill_surface_extrusion() makes of their lines.
+    auto *locked_zag          = dynamic_cast<FillLockedZag *>(&filler);
+    auto *concentric_internal = dynamic_cast<FillConcentricInternal *>(&filler);
     try {
         switch (c.call) {
         case Call::FillSurface: out.polylines = filler.fill_surface(&c.surface, c.params); break;
@@ -1270,7 +1272,10 @@ Output run(const Case &c, Fill &filler)
                     locked_zag->fill_surface_locked_zag(&c.surface, c.params, multi_width_polyline);
                 } catch (InfillFailedException &) {}
                 locked_zag->append_locked_zag_extrusions(std::move(multi_width_polyline), c.params, out.entities.entities);
-            } else
+            } else if (concentric_internal != nullptr)
+                concentric_internal->append_concentric_internal_extrusions(concentric_internal->concentric_internal_lines(c.params),
+                                                                           c.params, out.entities.entities);
+            else
                 filler.fill_surface_extrusion(&c.surface, c.params, out.entities.entities);
             break;
         }

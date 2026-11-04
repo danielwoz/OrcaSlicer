@@ -41,13 +41,10 @@
 #include "libslic3r/Fill/FillGyroid.hpp"
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
 #include "libslic3r/Fill/Fill3DHoneycomb.hpp"
-#include "libslic3r/Fill/FillConcentric.hpp"
-#include "libslic3r/Fill/FillConcentricInternal.hpp"
 #include "libslic3r/Fill/FillHoneycomb.hpp"
 #include "libslic3r/Fill/FillLibrary.hpp"
 #include "libslic3r/Fill/FillLightning.hpp"
 #include "libslic3r/Fill/FillPlanePath.hpp"
-#include "libslic3r/Fill/FillSpiralInset.hpp"
 #include "libslic3r/Fill/FillTpmsD.hpp"
 #include "libslic3r/Fill/FillTpmsFK.hpp"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
@@ -2557,12 +2554,9 @@ TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]
         {ipTpmsFK, typeid(FillTpmsFK)},
 #endif
         {ipGyroid, typeid(FillGyroid)},
-        {ipConcentric, typeid(FillConcentric)},
-        {ipSpiralInset, typeid(FillSpiralInset)},
         {ipHilbertCurve, typeid(FillHilbertCurve)},
         {ipArchimedeanChords, typeid(FillArchimedeanChords)},
-        {ipOctagramSpiral, typeid(FillOctagramSpiral)},
-        {ipConcentricInternal, typeid(FillConcentricInternal)}};
+        {ipOctagramSpiral, typeid(FillOctagramSpiral)}};
 
     auto filler_class = [](Fill *created) {
         const std::unique_ptr<Fill> filler(created);

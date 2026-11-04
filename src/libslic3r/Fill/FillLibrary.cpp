@@ -69,6 +69,12 @@ void FillLibrary::set_lock_region_param(const LockRegionParam &lock_param) { m_l
 
 void FillLibrary::fill_surface_extrusion(const Surface *surface, const FillParams &params, ExtrusionEntitiesPtr &out)
 {
+    if (m_pattern == ipConcentricInternal) {
+        BuiltinInfillOutput lines;
+        this->check(this->run(ORCA_INFILL_CALL_CONCENTRIC_INTERNAL, *surface, params, lines), lines);
+        this->append_concentric_internal_extrusions(lines.thick_polylines, params, out);
+        return;
+    }
     if (m_pattern != ipLockedZag) {
         Fill::fill_surface_extrusion(surface, params, out);
         return;

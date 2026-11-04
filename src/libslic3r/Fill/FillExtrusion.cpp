@@ -1,5 +1,5 @@
-// Fill::fill_surface_extrusion() and Fill::append_locked_zag_extrusions(): the extrusions of the lines a filler generates
-// for a surface, and their gap fill.
+// Fill::fill_surface_extrusion(), Fill::append_locked_zag_extrusions() and Fill::append_concentric_internal_extrusions():
+// the extrusions of the lines a filler generates for a surface, and their gap fill.
 // It reads the print object and region configurations, which the pattern code does not.
 #include <algorithm>
 #include <cstddef>
@@ -130,6 +130,25 @@ void Fill::append_locked_zag_extrusions(std::vector<std::pair<Polylines, Flow>> 
                 eec->entities[i]->set_reverse();
         }
     }
+}
+
+void Fill::append_concentric_internal_extrusions(const ThickPolylines &thick_polylines_out, const FillParams &params,
+                                                 ExtrusionEntitiesPtr &out) const
+{
+    ExtrusionEntityCollection *coll_nosort = new ExtrusionEntityCollection();
+    coll_nosort->no_sort = this->no_sort(); //can be sorted inside the pass
+
+    if (!thick_polylines_out.empty()) {
+        Flow new_flow = params.flow.with_spacing(float(this->spacing));
+        ExtrusionEntityCollection gap_fill;
+        variable_width(thick_polylines_out, params.extrusion_role, new_flow, gap_fill.entities);
+        coll_nosort->append(std::move(gap_fill.entities));
+    }
+
+    if (!coll_nosort->entities.empty())
+        out.push_back(coll_nosort);
+    else
+        delete coll_nosort;
 }
 
 // Orca: port of Bambu Studio's gap fill interleaving for fills printed in a fixed order, see docs/HLSD/travel-optimization.md.
