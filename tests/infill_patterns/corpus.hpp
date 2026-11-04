@@ -34,7 +34,8 @@ enum class Call : uint8_t {
     FillSurface, // Fill::fill_surface()
     FillArachne, // Fill::fill_surface_arachne()
     LockedZag,   // fill_surface_locked_zag() of FillLockedZag or of the FillLibrary of Locked Zag
-    Extrusion,   // Fill::fill_surface_extrusion(); for FillLockedZag the Locked Zag extrusions FillLibrary makes
+    Extrusion,   // Fill::fill_surface_extrusion(); for FillLockedZag and FillConcentricInternal the extrusions FillLibrary
+                 // makes of their lines
 };
 
 // The object state a case fills with. It is built from fixed inputs once per scaling factor.

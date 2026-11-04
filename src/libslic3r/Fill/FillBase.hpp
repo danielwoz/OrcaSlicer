@@ -230,6 +230,10 @@ public:
     // with that flow adjusted to Fill::spacing.
     void append_locked_zag_extrusions(std::vector<std::pair<Polylines, Flow>> &&multi_width_polyline, const FillParams &params,
                                       ExtrusionEntitiesPtr &out) const;
+    // The extrusions of concentric internal: the lines FillConcentricInternal::concentric_internal_lines() generated, as
+    // variable width paths of the flow adjusted to Fill::spacing.
+    void append_concentric_internal_extrusions(const ThickPolylines &thick_polylines_out, const FillParams &params,
+                                               ExtrusionEntitiesPtr &out) const;
 
 protected:
     Fill() :

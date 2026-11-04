@@ -80,10 +80,12 @@ private:
     using Filler = typename Row::Filler;
 
     static constexpr uint32_t served_calls = (1u << ORCA_INFILL_CALL_FILL_SURFACE) | (1u << ORCA_INFILL_CALL_FILL_ARACHNE) |
-                                             (1u << ORCA_INFILL_CALL_LOCKED_ZAG);
+                                             (1u << ORCA_INFILL_CALL_LOCKED_ZAG) | (1u << ORCA_INFILL_CALL_CONCENTRIC_INTERNAL);
     static_assert(Row::calls != 0 && (Row::calls & ~served_calls) == 0,
-                  "PatternEntry runs fill_surface(), fill_surface_arachne() and fill_surface_locked_zag()");
-    static constexpr bool locked_zag = (Row::calls & (1u << ORCA_INFILL_CALL_LOCKED_ZAG)) != 0;
+                  "PatternEntry runs fill_surface(), fill_surface_arachne(), fill_surface_locked_zag() and "
+                  "concentric_internal_lines()");
+    static constexpr bool locked_zag          = (Row::calls & (1u << ORCA_INFILL_CALL_LOCKED_ZAG)) != 0;
+    static constexpr bool concentric_internal = (Row::calls & (1u << ORCA_INFILL_CALL_CONCENTRIC_INTERNAL)) != 0;
     static_assert(Row::state_kinds == 0, "PatternEntry prepares no object state");
 
     static void ORCA_INFILL_CALL set_scaling_factor(double scaling_factor) noexcept { SCALING_FACTOR = scaling_factor; }
@@ -140,6 +142,13 @@ private:
                     host->set_spacing(sink, filler.spacing);
                     const orca_infill_status emitted = emit(host, sink, filler.lock_param, groups);
                     return emitted != ORCA_INFILL_OK ? emitted : status;
+                }
+            }
+            if constexpr (concentric_internal) {
+                if (request->call == ORCA_INFILL_CALL_CONCENTRIC_INTERNAL) {
+                    const ThickPolylines lines = filler.concentric_internal_lines(params);
+                    host->set_spacing(sink, filler.spacing);
+                    return emit(host, sink, lines);
                 }
             }
             const ThickPolylines lines = filler.fill_surface_arachne(&surface, params);
