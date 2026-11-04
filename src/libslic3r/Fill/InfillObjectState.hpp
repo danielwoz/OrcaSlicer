@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -29,9 +30,50 @@ struct InfillObjectState
 
 using InfillObjectStatePtr = std::shared_ptr<const InfillObjectState>;
 
+// Orca: One octree per body (see Layer::lslices_separated_component_ids), and one of the whole object
+// for objects of a single body or with a body that has none of its own. The library of row builds them.
+struct Octrees
+{
+    InfillPattern                     row;
+    InfillObjectStatePtr              object;
+    std::vector<InfillObjectStatePtr> bodies;
+
+    // A body without an octree, or body -1, uses the object's, or any body's when the object has none.
+    const InfillObjectState* get(int body) const
+    {
+        if (body >= 0 && size_t(body) < bodies.size() && bodies[body])
+            return bodies[body].get();
+        if (object)
+            return object.get();
+        for (const InfillObjectStatePtr &octree : bodies)
+            if (octree)
+                return octree.get();
+        return nullptr;
+    }
+};
+
+// Orca: The octrees of each line spacing the regions of an object fill with.
+struct RegionOctrees
+{
+    std::vector<Octrees> sets;
+    // Index into sets for each region, -1 for a region without adaptive or support cubic infill.
+    std::vector<int>     region_set;
+
+    // The octrees a filler of row fills region_id with, nullptr when the region has none of that row.
+    const Octrees *region(size_t region_id, InfillPattern row) const
+    {
+        if (region_id >= region_set.size() || region_set[region_id] < 0)
+            return nullptr;
+        const Octrees &set = sets[region_set[region_id]];
+        return set.row == row ? &set : nullptr;
+    }
+};
+
 // The object states of a print object, for the rows served by pattern libraries.
 struct InfillObjectStates
 {
+    // The octrees of adaptive and support cubic infill.
+    RegionOctrees octrees;
     // The adaptive infill field of each row and adaptive_infill_mode the regions slice; a field that came out empty is
     // left out, so that the row lays its regular pattern.
     std::vector<std::pair<std::pair<InfillPattern, AdaptiveInfillMode>, InfillObjectStatePtr>> fields;

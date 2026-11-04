@@ -2549,8 +2549,6 @@ TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]
     // The Fill class of each row libslic3r creates itself. A row a pattern library serves creates a FillLibrary, which
     // runs the class of the row in the library (tests/infill_patterns/test_builtin_equivalence.cpp).
     const std::map<InfillPattern, std::type_index> classes{
-        {ipAdaptiveCubic, typeid(FillAdaptive::Filler)},
-        {ipSupportCubic, typeid(FillAdaptive::Filler)},
         {ipLightning, typeid(FillLightning::Filler)}};
 
     auto filler_class = [](Fill *created) {

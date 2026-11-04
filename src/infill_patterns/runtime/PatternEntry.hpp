@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
+#include "libslic3r/Fill/FillAdaptive.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
 #include "libslic3r/Fill/Library/BuiltinMirror.hpp"
 #include "libslic3r/Fill/Library/orca_infill_builtin.h"
@@ -84,6 +85,30 @@ template<> struct ObjectState<1u << ORCA_INFILL_STATE_ADAPTIVE_FIELD>
     }
 
     static void attach(Fill &filler, const Type *state) { filler.adaptive_infill_field = state; }
+};
+
+// The octree of the adaptive and support cubic rows. FillAdaptive.hpp keeps Octree opaque, so the state owns it through
+// its deleter.
+template<> struct ObjectState<1u << ORCA_INFILL_STATE_OCTREE>
+{
+    struct Type
+    {
+        FillAdaptive::OctreePtr octree;
+    };
+    static constexpr uint32_t queries = 0;
+
+    static orca_infill_status prepare(int32_t, const void *data, const std::function<void()> &, std::unique_ptr<Type> &state)
+    {
+        const BuiltinMirror::OctreeMesh input = BuiltinMirror::to_octree_mesh(*static_cast<const orca_infill_octree_input*>(data));
+        // The cubes double in size from twice the line spacing until they cover the mesh, which needs a positive spacing.
+        if (! (input.line_spacing > 0.))
+            return ORCA_INFILL_ERR_INVALID;
+        state         = std::make_unique<Type>();
+        state->octree = FillAdaptive::build_octree(input.mesh, input.overhangs, input.line_spacing, input.support_overhangs_only);
+        return ORCA_INFILL_OK;
+    }
+
+    static void attach(Fill &filler, const Type *state) { filler.adapt_fill_octree = state != nullptr ? state->octree.get() : nullptr; }
 };
 
 // Row describes the row, as entry.cpp.in declares it:

@@ -657,7 +657,7 @@ private:
     void discover_horizontal_shells();
     void combine_infill();
     void _generate_support_material();
-    FillAdaptive::RegionOctrees prepare_adaptive_infill_data(
+    RegionOctrees prepare_adaptive_infill_data(
         const std::vector<std::pair<const Surface*, const Layer*>>& surfaces_w_layer) const;
     FillLightning::GeneratorPtr prepare_lightning_infill_data();
     void prepare_adaptive_infill_fields();
@@ -708,7 +708,6 @@ private:
     // so that next call to make_perimeters() performs a union() before computing loops
     bool                    				m_typed_slices = false;
 
-    FillAdaptive::RegionOctrees             m_adaptive_fill_octrees;
     std::vector<BoundingBox>                m_separated_body_bboxes;
     FillLightning::GeneratorPtr m_lightning_generator;
     AdaptiveInfillFields m_adaptive_infill_fields;

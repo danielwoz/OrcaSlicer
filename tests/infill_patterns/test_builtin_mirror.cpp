@@ -371,6 +371,50 @@ TEST_CASE("Built-in mirror: the slices of an adaptive infill field round trip, v
     CHECK(partial.mode == AdaptiveInfillMode::Disabled);
 }
 
+TEST_CASE("Built-in mirror: the mesh and the overhangs of an octree round trip, viewed in place", "[InfillPatterns][BuiltinMirror]")
+{
+    indexed_triangle_set mesh;
+    mesh.vertices = { stl_vertex(0.f, 0.f, 0.f), stl_vertex(10.5f, -0.25f, 1e-7f), stl_vertex(-3.f, 7.75f, 20.f), stl_vertex(1.f, 2.f, 3.f) };
+    mesh.indices  = { stl_triangle_vertex_indices(0, 1, 2), stl_triangle_vertex_indices(3, 2, 1) };
+    const std::vector<Vec3d> overhangs { Vec3d(0.1, 0.2, 12.), Vec3d(-4., 5.5, 12.), Vec3d(6., 3., 12.000001) };
+    const orca_infill_octree_input view = Mirror::octree_input(mesh, overhangs, 2.2, true);
+    CHECK(view.struct_size == sizeof(orca_infill_octree_input));
+    CHECK(static_cast<const void*>(view.vertices) == mesh.vertices.data());
+    CHECK(view.vertex_count == 4);
+    CHECK(static_cast<const void*>(view.indices) == mesh.indices.data());
+    CHECK(view.triangle_count == 2);
+    CHECK(static_cast<const void*>(view.overhangs) == overhangs.data());
+    CHECK(view.overhang_vertex_count == 3);
+    CHECK(view.line_spacing == 2.2);
+    CHECK(view.support_overhangs_only == 1);
+
+    const Mirror::OctreeMesh out = Mirror::to_octree_mesh(view);
+    CHECK(out.mesh.vertices == mesh.vertices);
+    CHECK(out.mesh.indices == mesh.indices);
+    CHECK(out.overhangs == overhangs);
+    CHECK(out.line_spacing == 2.2);
+    CHECK(out.support_overhangs_only);
+
+    // Nothing to view is no array; fields beyond struct_size read as zero.
+    const orca_infill_octree_input empty = Mirror::octree_input(indexed_triangle_set(), {}, 1.5, false);
+    CHECK(empty.vertices == nullptr);
+    CHECK(empty.indices == nullptr);
+    CHECK(empty.overhangs == nullptr);
+    const Mirror::OctreeMesh nothing = Mirror::to_octree_mesh(empty);
+    CHECK(nothing.mesh.vertices.empty());
+    CHECK(nothing.mesh.indices.empty());
+    CHECK(nothing.overhangs.empty());
+    CHECK(nothing.line_spacing == 1.5);
+    CHECK_FALSE(nothing.support_overhangs_only);
+    orca_infill_octree_input shorter = view;
+    shorter.struct_size = uint32_t(offsetof(orca_infill_octree_input, overhangs));
+    const Mirror::OctreeMesh partial = Mirror::to_octree_mesh(shorter);
+    CHECK(partial.mesh.vertices == mesh.vertices);
+    CHECK(partial.overhangs.empty());
+    CHECK(partial.line_spacing == 0.);
+    CHECK_FALSE(partial.support_overhangs_only);
+}
+
 TEST_CASE("Built-in mirror: LockRegionParam round trips in map order", "[InfillPatterns][BuiltinMirror]")
 {
     // Ordered by mm3_per_mm: thin, middle, wide.

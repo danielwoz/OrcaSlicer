@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -92,15 +93,17 @@ public:
     {
         if (c.state == State::None)
             return nullptr;
-        // Only the adaptive infill field is prepared here; a case of another kind needs its own preparation.
-        REQUIRE(c.state == State::Field);
-        const AdaptiveInfillMode mode = c.params.adaptive_infill_mode;
-        if (mode == AdaptiveInfillMode::Disabled)
+        // Only the adaptive infill field and the octrees are prepared here; a case of another kind needs its own
+        // preparation.
+        const bool octree = c.state == State::AdaptiveOctree || c.state == State::SupportOctree;
+        REQUIRE((octree || c.state == State::Field));
+        const AdaptiveInfillMode mode = octree ? AdaptiveInfillMode::Disabled : c.params.adaptive_infill_mode;
+        if (! octree && mode == AdaptiveInfillMode::Disabled)
             return nullptr;
-        const auto key = std::make_tuple(SCALING_FACTOR, c.pattern, mode);
+        const auto key = std::make_tuple(SCALING_FACTOR, c.pattern, c.state, mode);
         auto       it  = m_states.find(key);
         if (it == m_states.end())
-            it = m_states.emplace(key, this->prepare_field(c.pattern, mode)).first;
+            it = m_states.emplace(key, octree ? this->prepare_octree(c.pattern, c.state) : this->prepare_field(c.pattern, mode)).first;
         return it->second.get();
     }
 
@@ -111,11 +114,25 @@ public:
         return prepare_builtin_infill_state(row, ORCA_INFILL_STATE_ADAPTIVE_FIELD, &field, throw_if_canceled);
     }
 
+    // The octree of state, prepared by the library of row.
+    InfillObjectStatePtr prepare_octree(InfillPattern row, State state)
+    {
+        const orca_infill_octree_input input = octree_input(m_native, state);
+        return prepare_builtin_infill_state(row, ORCA_INFILL_STATE_OCTREE, &input, {});
+    }
+
+    // The C input of the native octree of state.
+    static orca_infill_octree_input octree_input(NativeStates &native, State state)
+    {
+        const NativeStates::OctreeInput input = native.octree_input(state);
+        return BuiltinMirror::octree_input(input.mesh, input.overhangs, input.line_spacing, input.support_overhangs_only);
+    }
+
     void clear() { m_states.clear(); }
 
 private:
-    NativeStates                                                                     &m_native;
-    std::map<std::tuple<double, InfillPattern, AdaptiveInfillMode>, InfillObjectStatePtr> m_states;
+    NativeStates                                                                            &m_native;
+    std::map<std::tuple<double, InfillPattern, State, AdaptiveInfillMode>, InfillObjectStatePtr> m_states;
 };
 
 Output run_native(const Case &c, NativeStates &states)
@@ -422,6 +439,80 @@ TEST_CASE("Pattern libraries prepare the adaptive infill field of their row", "[
     const Output plain = run_native(regular, native_states);
     CHECK_FALSE(difference(c, expected, plain).empty());
     CHECK(difference(regular, plain, run_library(regular, library_states)).empty());
+}
+
+TEST_CASE("Pattern libraries prepare the octree of their row", "[InfillPatterns][BuiltinEquivalence]")
+{
+    ScalingFactorGuard guard;
+    set_scaling_factor(SCALING_FACTOR_INTERNAL);
+    REQUIRE(InfillPatternRegistry::bound(ipAdaptiveCubic));
+    NativeStates  native_states;
+    LibraryStates library_states(native_states);
+    const orca_infill_builtin_library &library = *InfillPatternRegistry::binding(ipAdaptiveCubic)->library;
+    const Case &c = *std::find_if(cases().begin(), cases().end(), [](const Case &c) {
+        return c.pattern == ipAdaptiveCubic && c.scaling_factor == SCALING_FACTOR_INTERNAL && c.call == Call::FillSurface;
+    });
+    CAPTURE(c.name);
+    auto run_on = [&c](const InfillObjectState *state) {
+        const std::unique_ptr<Fill> filler(Fill::new_from_type(ipAdaptiveCubic));
+        apply_members(c, *filler);
+        filler->object_state = state;
+        return run(c, *filler);
+    };
+
+    // The library fills on the octrees it builds as the class does on the native ones. The overhangs and the support flag
+    // reach it: the octree densified below the overhang lays other lines.
+    Case support  = c;
+    support.state = State::SupportOctree;
+    const Output expected = run_native(c, native_states), expected_support = run_native(support, native_states);
+    REQUIRE(! expected.polylines.empty());
+    CHECK_FALSE(difference(c, expected, expected_support).empty());
+    const InfillObjectStatePtr octree         = library_states.prepare_octree(ipAdaptiveCubic, State::AdaptiveOctree);
+    const InfillObjectStatePtr support_octree = library_states.prepare_octree(ipAdaptiveCubic, State::SupportOctree);
+    REQUIRE(octree != nullptr);
+    REQUIRE(support_octree != nullptr);
+    CHECK(octree->library == &library);
+    CHECK(difference(c, expected, run_on(octree.get())).empty());
+    CHECK(difference(support, expected_support, run_on(support_octree.get())).empty());
+
+    // A filler reaches only the octrees of its own row.
+    RegionOctrees octrees;
+    octrees.sets.push_back({ ipAdaptiveCubic, octree, {} });
+    octrees.region_set = { -1, 0 };
+    CHECK(octrees.region(0, ipAdaptiveCubic) == nullptr);
+    CHECK(octrees.region(1, ipSupportCubic) == nullptr);
+    CHECK(octrees.region(2, ipAdaptiveCubic) == nullptr);
+    REQUIRE(octrees.region(1, ipAdaptiveCubic) != nullptr);
+    CHECK(octrees.region(1, ipAdaptiveCubic)->get(3) == octree.get());
+
+    // The library refuses an input of another row or kind, no input and a line spacing that is not positive, and
+    // prepares without a job on the calling thread.
+    const orca_infill_octree_input input = LibraryStates::octree_input(native_states, State::AdaptiveOctree);
+    const orca_infill_state_input  state_input { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_OCTREE, &input };
+    const orca_infill_state_input  field_input { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_ADAPTIVE_FIELD, &input };
+    int   stale = 0;
+    void *raw   = &stale;
+    CHECK(library.prepare_state(int32_t(ipSupportCubic), &state_input, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+    CHECK(raw == nullptr);
+    CHECK(library.prepare_state(int32_t(ipAdaptiveCubic), &field_input, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+    CHECK(library.prepare_state(int32_t(ipAdaptiveCubic), nullptr, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+    CHECK(library.prepare_state(int32_t(ipAdaptiveCubic), &state_input, nullptr, nullptr) == ORCA_INFILL_ERR_INVALID);
+    for (const double spacing : { 0., -2.2, std::nan("") }) {
+        CAPTURE(spacing);
+        orca_infill_octree_input      bad = input;
+        bad.line_spacing                  = spacing;
+        const orca_infill_state_input bad_input { sizeof(orca_infill_state_input), ORCA_INFILL_STATE_OCTREE, &bad };
+        CHECK(library.prepare_state(int32_t(ipAdaptiveCubic), &bad_input, nullptr, &raw) == ORCA_INFILL_ERR_INVALID);
+        CHECK(raw == nullptr);
+    }
+    CHECK(library.query_state == nullptr);
+    REQUIRE(library.prepare_state(int32_t(ipAdaptiveCubic), &state_input, nullptr, &raw) == ORCA_INFILL_OK);
+    REQUIRE(raw != nullptr);
+    const InfillObjectState serial(library, raw);
+    CHECK(difference(c, expected, run_on(&serial)).empty());
+
+    // So does the copy of the library linked into the executable, as ORCA_INFILL_PATTERN_LINKAGE=STATIC links it.
+    CHECK(difference(c, expected, run_linked(c, prepare_linked(ipAdaptiveCubic, state_input))).empty());
 }
 
 TEST_CASE("Pattern library fillers keep their state between calls", "[InfillPatterns][BuiltinEquivalence]")
