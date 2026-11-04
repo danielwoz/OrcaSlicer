@@ -592,7 +592,57 @@ void add_plane_path(Builder &b)
             solid(c, stTop, erTopSolidInfill);
             c.fill.calib_flowrate_topinfill_special_order = true;
         });
+        // The special order of the flow rate calibration applies to top surfaces left at the default fill order only.
+        b.add("calib-flow-outward", [](Case &c) {
+            solid(c, stTop, erTopSolidInfill);
+            c.params.fill_order = SurfaceFillOrder::Outward;
+            c.fill.calib_flowrate_topinfill_special_order = true;
+        });
+        b.add("calib-flow-solid", [](Case &c) {
+            solid(c, stInternalSolid, erSolidInfill);
+            c.fill.calib_flowrate_topinfill_special_order = true;
+        });
+    } else {
+        // Only Archimedean Chords prints the calibration surfaces in the special order.
+        b.add("calib-flow", [](Case &c) {
+            solid(c, stTop, erTopSolidInfill);
+            c.fill.calib_flowrate_topinfill_special_order = true;
+        });
     }
+    // Per model the pattern is centred on the box of the body of the surface, which separated infills move off the
+    // object's centre; per assembly on that box extended over every rotation.
+    b.add("top-each-model", [](Case &c) {
+        solid(c, stTop, erTopSolidInfill);
+        c.params.center_of_surface_pattern = CenterOfSurfacePattern::Each_Model;
+        c.fill.bounding_box                = BoundingBox(Point::new_scale(-4., -9.), Point::new_scale(9., 6.));
+        at_layer(c, 10);
+    });
+    b.add("bottom-each-assembly-shifted", [](Case &c) {
+        solid(c, stBottom, erBottomSurface);
+        c.surface.expolygon                = l_shape();
+        c.params.center_of_surface_pattern = CenterOfSurfacePattern::Each_Assembly;
+        c.fill.bounding_box.translate(Point::new_scale(2.5, 1.5));
+        at_layer(c, 0);
+    });
+}
+
+// The support bases of the pattern: SupportCommon fills them with a fresh FillParams of the support density, over the
+// 2 mm box it gives every support filler, and the organic tree supports place their tips along the lines of a fresh
+// filler, which has no box.
+void add_support_base(Builder &b)
+{
+    b.add("support-base", [](Case &c) {
+        minimal(c, 0., 0.42);
+        c.params.density    = float(0.42 / (2.5 + 0.42));
+        c.fill.bounding_box = BoundingBox(Point::new_scale(-1., -1.), Point::new_scale(1., 1.));
+    });
+    b.add("support-base-organic", [](Case &c) {
+        c.surface.expolygon = necklace();
+        minimal(c, 30., 0.42);
+        c.params.density    = scaled<float>(0.42) / (scaled<float>(0.42) + float(scaled<coord_t>(1.)));
+        c.fill.bounding_box = FillMembers().bounding_box;
+        c.fill.layer_id     = 14;
+    });
 }
 
 void add_tpms(Builder &b, const std::vector<AdaptiveInfillMode> &modes)
@@ -806,7 +856,10 @@ void add_row(std::vector<Case> &out, const Row &row)
         add_rectilinear(b);
         add_bad_flow(b);
         break;
-    case ipHoneycomb: add_bad_flow(b); break;
+    case ipHoneycomb:
+        add_bad_flow(b);
+        add_support_base(b);
+        break;
     case ipZigZag:
     case ipCrossZag: add_zag(b); break;
     case ipLockedZag:
@@ -840,6 +893,12 @@ void add_row(std::vector<Case> &out, const Row &row)
             at_layer(c, 24);
         });
         b.add("high", [](Case &c) { at_layer(c, 56); });
+        // The layer height sets how many layers an octahedral module spans.
+        b.add("layer-height", [](Case &c) {
+            c.params.layer_height = 0.12;
+            c.fill.layer_id       = 37;
+            c.fill.z              = 0.12 * 38.;
+        });
         break;
     case ipCrossHatch:
         b.add("transition-15", [](Case &c) { at_layer(c, 15); });

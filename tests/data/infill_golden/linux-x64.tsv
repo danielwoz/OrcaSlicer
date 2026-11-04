@@ -430,6 +430,8 @@ honeycomb/extrusion-solid	7e3a08e263be562e	18	1342
 honeycomb/extrusion-top	dde5682893f7956c	111	1321
 honeycomb/extrusion-second-bridge	2a92039bc594afbc	7	1678
 honeycomb/extrusion-bad-flow	441107e5cbed47b9	0	0
+honeycomb/support-base	e18cf65060d93e23	2	52
+honeycomb/support-base-organic	23d6ef755740326b	5	55
 honeycomb/scale-1e5	04068a5ae0ebe258	4	84
 honeycomb/scale-1e5-solid	02c41348f5068a57	2	1113
 honeycomb/scale-1e5-extrusion	0cbea744c8e9d4e5	52	1391
@@ -456,6 +458,7 @@ honeycomb/scale-1e5-extrusion	0cbea744c8e9d4e5	52	1391
 3dhoneycomb/extrusion-second-bridge	f54e0627dc6c5666	27	2330
 3dhoneycomb/complete-top	3bf6b925b68e6765	3	85
 3dhoneycomb/high	749ad6d0fd97de2b	3	85
+3dhoneycomb/layer-height	3bbecdb1389e1358	3	86
 3dhoneycomb/scale-1e5	835971f516921a82	3	86
 3dhoneycomb/scale-1e5-solid	c7224019301a423e	1	1529
 3dhoneycomb/scale-1e5-extrusion	57a62f2aabc1f9e5	94	2093
@@ -734,6 +737,9 @@ hilbertcurve/extrusion-top	bb3834ccda3dcd55	69	998
 hilbertcurve/extrusion-second-bridge	e40388c2744afb70	152	1500
 hilbertcurve/top-each-surface	2f1d73f208533489	52	949
 hilbertcurve/top-each-assembly-sparse	5e3551701399bff7	4	262
+hilbertcurve/calib-flow	9cbf9f3366b477da	51	1118
+hilbertcurve/top-each-model	30970ad6c9a48abc	51	1122
+hilbertcurve/bottom-each-assembly-shifted	2460f31cf004dd50	54	954
 hilbertcurve/scale-1e5	7198c429315f8bf4	2	73
 hilbertcurve/scale-1e5-solid	3581911047901aa7	52	949
 hilbertcurve/scale-1e5-extrusion	fb074ae351570cf6	304	1711
@@ -762,6 +768,10 @@ archimedeanchords/top-each-surface	0b54e8929f83c428	49	615
 archimedeanchords/top-each-assembly-sparse	950f289dc60a000d	5	298
 archimedeanchords/calib-flow	6d8fe0ebd5cf3b12	28	627
 archimedeanchords/extrusion-calib-flow	b1aa5f21bd1c1b3d	251	1129
+archimedeanchords/calib-flow-outward	dbf06b278343571a	28	627
+archimedeanchords/calib-flow-solid	e429dcb6e1ef1d4e	28	627
+archimedeanchords/top-each-model	8115ecc41ae20295	31	615
+archimedeanchords/bottom-each-assembly-shifted	f81bbc09958245e7	44	575
 archimedeanchords/extrusion-bad-flow	441107e5cbed47b9	0	0
 archimedeanchords/scale-1e5	9d5d7c33ad0ea105	1	124
 archimedeanchords/scale-1e5-solid	691fec7db88d93d7	49	615
@@ -789,6 +799,9 @@ octagramspiral/extrusion-top	d29d2283c27a2649	93	332
 octagramspiral/extrusion-second-bridge	6b8db09b8fd4ea88	144	435
 octagramspiral/top-each-surface	65f60ff7f3301c83	51	233
 octagramspiral/top-each-assembly-sparse	00b97fcefd0697a6	8	129
+octagramspiral/calib-flow	b0f5b4b0417b71f4	66	248
+octagramspiral/top-each-model	4316feaef1334815	65	237
+octagramspiral/bottom-each-assembly-shifted	f0d6ccf7924978d0	51	211
 octagramspiral/scale-1e5	63d9937179fe8375	1	50
 octagramspiral/scale-1e5-solid	b9394deb697e8c13	51	233
 octagramspiral/scale-1e5-extrusion	792e1a9dbcfbb585	314	802
