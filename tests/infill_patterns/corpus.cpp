@@ -677,6 +677,26 @@ void add_arachne(Builder &b)
     });
 }
 
+// The callers of the concentric patterns other than make_fills(), which set neither the layer configurations nor the
+// loop clipping: the support interfaces, whose fillers leave the layer undefined, and for concentric the ironing of top
+// surfaces and of support interfaces.
+void add_concentric_callers(Builder &b)
+{
+    // fill_expolygons_generate_paths() of SupportCommon: a fresh FillParams of the interface density.
+    b.add("support-interface", [](Case &c) {
+        minimal(c, 90., 0.42);
+        c.params.density    = 0.5f;
+        c.fill.bounding_box = object_bbox();
+    });
+    b.add("support-interface-solid", [](Case &c) {
+        c.surface.expolygon = perforated();
+        minimal(c, 0., 0.42);
+        c.fill.bounding_box = object_bbox();
+    });
+    if (b.row().id == ipConcentric)
+        add_ironing(b, "ironing");
+}
+
 // FillConcentricInternal fills Fill::no_overlap_expolygons from fill_surface_extrusion() only.
 void add_concentric_internal(Builder &b)
 {
@@ -724,6 +744,19 @@ void add_concentric_internal(Builder &b)
     b.add("sparse-role", Call::Extrusion, [](Case &c) {
         c.surface.expolygon = square();
         c.params.using_internal_flow = false;
+    });
+    // The narrow parts split_solid_surface() gives the pattern: a frame inside the perimeters and strips of a few lines.
+    b.add("narrow-frame", Call::Extrusion, [&](Case &c) {
+        internal(c);
+        c.surface.expolygon = ExPolygon(rectangle_mm(-6., -6., 6., 6.));
+        c.surface.expolygon.holes.emplace_back(hole(rectangle_mm(-4.9, -4.9, 4.9, 4.9)));
+        at_layer(c, 6);
+    });
+    b.add("narrow-strips", Call::Extrusion, [&](Case &c) {
+        internal(c);
+        Polygon strip = rectangle_mm(-5., -0.6, 5., 0.6);
+        strip.rotate(0.7);
+        c.fill.no_overlap_expolygons = { ExPolygon(rectangle_mm(-8., 6.5, 8., 7.4)), ExPolygon(strip) };
     });
 }
 
@@ -837,8 +870,12 @@ void add_row(std::vector<Case> &out, const Row &row)
     case ipConcentric:
         add_arachne(b);
         add_bad_flow(b);
+        add_concentric_callers(b);
         break;
-    case ipSpiralInset: add_arachne(b); break;
+    case ipSpiralInset:
+        add_arachne(b);
+        add_concentric_callers(b);
+        break;
     case ipArchimedeanChords:
         add_plane_path(b);
         add_bad_flow(b);

@@ -669,6 +669,10 @@ concentric/arachne-sliver	b192481bdf88d92b	1	5
 concentric/arachne-empty	2d18cd528c021707	0	0
 concentric/extrusion-arachne-top	7d0f7c0af03e2738	404	1658
 concentric/extrusion-bad-flow	441107e5cbed47b9	0	0
+concentric/support-interface	f0225df6330ad06c	8	54
+concentric/support-interface-solid	e48b6e9c0e5f8b32	27	215
+concentric/ironing	f1b73f3af90b4ffa	29	203
+concentric/support-ironing	463aec5fa6e158a2	53	265
 concentric/scale-1e5	30f8be8041061661	4	27
 concentric/scale-1e5-solid	c636f1e3bbc7669a	7	49
 concentric/scale-1e5-extrusion	03970dfb7fc727f6	96	393
@@ -702,6 +706,8 @@ spiralinset/arachne-clipping	a7104d89ffe47fde	1	96
 spiralinset/arachne-sliver	72099ca6f7b5ca49	1	5
 spiralinset/arachne-empty	2d18cd528c021707	0	0
 spiralinset/extrusion-arachne-top	45ea73fe5e6df96f	419	1736
+spiralinset/support-interface	d1db10daeeb2d603	5	56
+spiralinset/support-interface-solid	4310012549312c2a	18	215
 spiralinset/scale-1e5	4e683695cf051fea	4	28
 spiralinset/scale-1e5-solid	449c24eae2c64dc9	1	49
 spiralinset/scale-1e5-extrusion	4c5cd171f26d04da	85	390
@@ -825,4 +831,6 @@ concentricinternal/top	d1a5329763c60cad	30	169
 concentricinternal/wide-flow	b8341b551d852788	86	315
 concentricinternal/extrusion-bad-flow	441107e5cbed47b9	0	0
 concentricinternal/sparse-role	34ca582413c462d0	20	101
+concentricinternal/narrow-frame	0a2664a0d8b2d908	26	71
+concentricinternal/narrow-strips	b13f113200dacc35	3	12
 concentricinternal/scale-1e5	2add72d8b5bf10fc	59	308
