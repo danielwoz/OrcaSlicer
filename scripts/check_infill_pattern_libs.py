@@ -53,8 +53,8 @@ FORBIDDEN = [
 ]
 
 # Code of GMP or MPFR, which are DLLs on Windows. Of the shared sources only the exact planarity check of
-# Geometry/VoronoiUtilsCgal.cpp uses them, and no pattern calls it, so a link that drops the functions a library does not
-# reach leaves none of that code.
+# Geometry/VoronoiUtilsCgalIntersection.cpp uses them, and only the Arachne assertions call it (ARACHNE_DEBUG, off in
+# every build), so no pattern library links that code.
 EXACT_ARITHMETIC = (r"__gmp[a-z]*_\w|(?:^|_)mpfr_\w", "GMP or MPFR")
 
 # What a library exports besides its entry on Windows, where whatever a header declares __declspec(dllexport) is exported
@@ -73,12 +73,9 @@ IMPORTS = {
     "win32": [r"KERNEL32\.dll", r"VCRUNTIME140(_1)?\.dll", r"MSVCP140(_\d+)?\.dll", r"api-ms-win-crt-[\w-]+\.dll"],
 }
 
-# The further imports of the libraries of a Windows Debug build: the debug C and C++ runtimes, and GMP and MPFR
-# (EXACT_ARITHMETIC). That build compiles without function-level linking, so a library keeps all of an object it uses:
-# the exact planarity check of Geometry/VoronoiUtilsCgal.cpp comes with the angle check that validates the Voronoi
-# diagrams of Arachne.
+# The further imports of the libraries of a Windows Debug build: the debug C and C++ runtimes.
 DEBUG_IMPORTS = {
-    "win32": [r"VCRUNTIME140(_1)?D\.dll", r"MSVCP140(_\d+)?D\.dll", r"ucrtbased\.dll", r"libgmp-10\.dll", r"libmpfr-4\.dll"],
+    "win32": [r"VCRUNTIME140(_1)?D\.dll", r"MSVCP140(_\d+)?D\.dll", r"ucrtbased\.dll"],
 }
 
 
@@ -209,7 +206,7 @@ def main():
     read = {"linux": linux, "darwin": darwin, "win32": lambda path: win32(path, args.dumpbin)}[platform]
     allowed, forbidden = IMPORTS[platform], FORBIDDEN + [EXACT_ARITHMETIC]
     if args.config == "Debug" and platform in DEBUG_IMPORTS:
-        allowed, forbidden = allowed + DEBUG_IMPORTS[platform], FORBIDDEN
+        allowed = allowed + DEBUG_IMPORTS[platform]
 
     problems = []
     present = sorted(os.listdir(args.folder)) if os.path.isdir(args.folder) else []

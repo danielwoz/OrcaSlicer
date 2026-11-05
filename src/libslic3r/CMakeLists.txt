@@ -611,6 +611,7 @@ set(libslic3r_fillkit_sources
     Geometry/VoronoiUtils.hpp
     Geometry/VoronoiUtilsCgal.cpp
     Geometry/VoronoiUtilsCgal.hpp
+    Geometry/VoronoiUtilsCgalIntersection.cpp
     I18N.cpp
     I18N.hpp
     libslic3r.cpp
