@@ -2,15 +2,11 @@
 #include <CGAL/Simple_cartesian.h>
 #include <CGAL/Interval_nt.h>
 #include <CGAL/Cartesian_converter.h>
-#include <CGAL/Filtered_kernel.h>
-#include <CGAL/Kernel/Type_equality_wrapper.h>
 #include <CGAL/Filtered_predicate.h>
 #include <CGAL/enum.h>
 #include <CGAL/Kernel/global_functions_2.h>
 #include <boost/next_prior.hpp>
-#include <CGAL/Exact_predicates_exact_constructions_kernel.h>
-#include <CGAL/Arr_segment_traits_2.h>
-#include <CGAL/Surface_sweep_2_algorithms.h>
+#include <CGAL/MP_Float.h>
 #include <boost/variant/get.hpp>
 #include <iterator>
 #include <vector>
@@ -51,7 +47,6 @@ namespace impl {
     using EK  = CGAL::Simple_cartesian<CGAL::MP_Float>;
     using C2E = CGAL::Cartesian_converter<K, EK>;
     using C2F = CGAL::Cartesian_converter<K, FK>;
-    class Epick : public CGAL::Filtered_kernel_adaptor<CGAL::Type_equality_wrapper<K::Base<Epick>::Type, Epick>, true> {};
 
     template<typename K>
     inline typename K::Vector_2 calculate_parabolic_tangent_vector(
@@ -159,40 +154,6 @@ inline Linef make_linef(const VD::edge_type &edge)
 }
 
 [[maybe_unused]] inline bool is_equal(const VD::vertex_type &vertex_first, const VD::vertex_type &vertex_second) { return vertex_first.x() == vertex_second.x() && vertex_first.y() == vertex_second.y(); }
-
-// FIXME Lukas H.: Also includes parabolic segments.
-bool VoronoiUtilsCgal::is_voronoi_diagram_planar_intersection(const VD &voronoi_diagram)
-{
-    using CGAL_E_Point   = CGAL::Exact_predicates_exact_constructions_kernel::Point_2;
-    using CGAL_E_Segment = CGAL::Arr_segment_traits_2<CGAL::Exact_predicates_exact_constructions_kernel>::Curve_2;
-    auto to_cgal_point   = [](const VD::vertex_type &pt) -> CGAL_E_Point { return {pt.x(), pt.y()}; };
-
-    assert(std::all_of(voronoi_diagram.edges().cbegin(), voronoi_diagram.edges().cend(),
-                       [](const VD::edge_type &edge) { return edge.color() == 0; }));
-
-    std::vector<CGAL_E_Segment> segments;
-    segments.reserve(voronoi_diagram.num_edges());
-
-    for (const VD::edge_type &edge : voronoi_diagram.edges()) {
-        if (edge.color() != 0)
-            continue;
-
-        if (edge.is_finite() && edge.is_linear() && edge.vertex0() != nullptr && edge.vertex1() != nullptr &&
-            VoronoiUtils::is_finite(*edge.vertex0()) && VoronoiUtils::is_finite(*edge.vertex1())) {
-            segments.emplace_back(to_cgal_point(*edge.vertex0()), to_cgal_point(*edge.vertex1()));
-            edge.color(1);
-            assert(edge.twin() != nullptr);
-            edge.twin()->color(1);
-        }
-    }
-
-    for (const VD::edge_type &edge : voronoi_diagram.edges())
-        edge.color(0);
-
-    std::vector<CGAL_E_Point> intersections_pt;
-    CGAL::compute_intersection_points(segments.begin(), segments.end(), std::back_inserter(intersections_pt));
-    return intersections_pt.empty();
-}
 
 struct ParabolicSegment
 {
