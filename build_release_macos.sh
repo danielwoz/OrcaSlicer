@@ -315,6 +315,47 @@ function verify_python_runtime() {
     fi
 }
 
+# --- Built-in infill pattern libraries -----------------------------------------
+# The gate of the libraries in Contents/PlugIns/infill_patterns: it fails when a
+# library of the bundle's manifest is missing or lacks the slice of one of the
+# given architectures, and runs the packaged binary under each of them the host
+# can run, which must bind every library and slice a cube
+# (scripts/check_packaged_infill_patterns.sh).
+function verify_infill_patterns() {
+    local app="$1"
+    shift
+    local dir="$app/Contents/PlugIns/infill_patterns"
+    # A STATIC build links the libraries into the executable and ships neither the folder nor a manifest; the checks
+    # below then run without the manifest and the slices.
+    if [ -d "$dir" ]; then
+        local manifest="$app/Contents/Resources/infill_patterns/manifest.txt"
+        if [ ! -s "$manifest" ]; then
+            echo "ERROR: $(basename "$app") ships infill pattern libraries without a manifest" >&2
+            exit 1
+        fi
+        echo "  Verifying the infill pattern libraries in $(basename "$app")..."
+        python3 "$PROJECT_DIR/scripts/check_infill_pattern_libs.py" --manifest "$manifest" "$dir"
+        local file arch archs
+        while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            archs=" $(lipo -archs "$dir/$file") "
+            for arch in "$@"; do
+                if [[ "$archs" != *" $arch "* ]]; then
+                    echo "ERROR: $file has no $arch slice (it has$archs)" >&2
+                    exit 1
+                fi
+            done
+        done < "$manifest"
+    fi
+    for arch in "$@"; do
+        if arch "-$arch" /usr/bin/true 2>/dev/null; then
+            "$PROJECT_DIR/scripts/check_packaged_infill_patterns.sh" arch "-$arch" "$app/Contents/MacOS/OrcaSlicer"
+        else
+            echo "  This host cannot run $arch; the $arch slices are not run."
+        fi
+    done
+}
+
 function build_slicer() {
     # iterate over two architectures: x86_64 and arm64
     for _ARCH in x86_64 arm64; do
@@ -373,10 +414,16 @@ function build_slicer() {
             rm ./OrcaSlicer.app/Contents/Resources
             cp -R "$resources_path" ./OrcaSlicer.app/Contents/Resources
             relocate_python_runtime ./OrcaSlicer.app
+            # The manifest of the infill pattern libraries; codesign wants only code in Contents/PlugIns.
+            if [ -s ../infill_patterns/manifest.txt ]; then
+                mkdir -p ./OrcaSlicer.app/Contents/Resources/infill_patterns
+                cp ../infill_patterns/manifest.txt ./OrcaSlicer.app/Contents/Resources/infill_patterns/
+            fi
             # delete .DS_Store file
             find ./OrcaSlicer.app/ -name '.DS_Store' -delete
 
             verify_python_runtime ./OrcaSlicer.app
+            verify_infill_patterns ./OrcaSlicer.app "$_ARCH"
             
             # Copy OrcaSlicer_profile_validator.app if it exists
             if [ -f "../src$BUILD_DIR_CONFIG_SUBDIR/OrcaSlicer_profile_validator.app/Contents/MacOS/OrcaSlicer_profile_validator" ]; then
@@ -442,6 +489,7 @@ function build_universal() {
     lipo_dir "$UNIVERSAL_APP" "$X86_64_APP"
     echo "Universal OrcaSlicer.app created at $UNIVERSAL_APP"
     verify_python_runtime "$UNIVERSAL_APP"
+    verify_infill_patterns "$UNIVERSAL_APP" arm64 x86_64
 
     # Create universal binary for profile validator if it exists
     ARM64_VALIDATOR="$PROJECT_DIR/build/arm64/OrcaSlicer/OrcaSlicer_profile_validator.app"

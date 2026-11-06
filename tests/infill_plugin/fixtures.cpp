@@ -1,6 +1,7 @@
 // Infill plugins for the tests: broken, misbehaving or using the host services; the definition FIXTURE_<NAME> selects one.
 #include "orca_infill_sdk.hpp"
 
+#include <cstdlib>
 #include <stdexcept>
 
 #if defined(FIXTURE_WRONG_ABI)
@@ -37,6 +38,8 @@ extern "C" ORCA_INFILL_EXPORT int orca_not_an_entry() { return 0; }
 #define FIXTURE_POST 0
 #elif defined(FIXTURE_BAD_PARAM)
 #define FIXTURE_KEY "org.orcaslicer.test.badparam"
+#elif defined(FIXTURE_BUILTIN_ENTRY)
+#define FIXTURE_KEY "org.orcaslicer.test.builtin"
 #endif
 #ifndef FIXTURE_POST
 #define FIXTURE_POST ORCA_INFILL_POST_DEFAULT
@@ -98,5 +101,10 @@ struct Fixture
 } // namespace
 
 ORCA_INFILL_PLUGIN("OrcaSlicer test fixture", "1.0.0", Fixture)
+
+#if defined(FIXTURE_BUILTIN_ENTRY)
+// A plugin that also exports the entry of a built-in pattern library; the host calls neither entry.
+extern "C" ORCA_INFILL_EXPORT const void *ORCA_INFILL_CALL orca_infill_builtin_entry_v1(const void *) { std::abort(); }
+#endif
 
 #endif

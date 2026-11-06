@@ -40,16 +40,7 @@
 #include "libslic3r/Fill/FillAdaptive.hpp"
 #include "libslic3r/Fill/FillGyroid.hpp"
 #include "libslic3r/Fill/AdaptiveInfillField.hpp"
-#include "libslic3r/Fill/Fill3DHoneycomb.hpp"
-#include "libslic3r/Fill/FillConcentric.hpp"
-#include "libslic3r/Fill/FillConcentricInternal.hpp"
-#include "libslic3r/Fill/FillCrossHatch.hpp"
-#include "libslic3r/Fill/FillHoneycomb.hpp"
-#include "libslic3r/Fill/FillLightning.hpp"
-#include "libslic3r/Fill/FillLine.hpp"
-#include "libslic3r/Fill/FillPlanePath.hpp"
-#include "libslic3r/Fill/FillRectilinear.hpp"
-#include "libslic3r/Fill/FillSpiralInset.hpp"
+#include "libslic3r/Fill/FillLibrary.hpp"
 #include "libslic3r/Fill/FillTpmsD.hpp"
 #include "libslic3r/Fill/FillTpmsFK.hpp"
 #include "libslic3r/Fill/InfillPatternRegistry.hpp"
@@ -1035,6 +1026,8 @@ TEST_CASE("Spiral inset fill closes the gaps with variable width walls", "[Fill]
         filler->overlap             = 0.5 * spacing; // cancel the contraction, so both see the same surface
         filler->print_config        = &print_config;
         filler->print_object_config = &object_config;
+        filler->min_nozzle_diameter = *std::min_element(print_config.nozzle_diameter.values.begin(),
+                                                        print_config.nozzle_diameter.values.end());
         return filler;
     };
 
@@ -2333,8 +2326,20 @@ TEST_CASE("Adaptive TPMS infill of a region matches the infill of a larger regio
     };
     const ExPolygon region = circle(20.);
     const ExPolygon larger = circle(30.);
-    auto fill = [pattern, &field](const ExPolygon &expolygon, double z) {
-        std::unique_ptr<Fill> filler(Fill::new_from_type(pattern));
+    // The Fill classes themselves, which read the field directly; a pattern library builds a field of its own.
+    auto native_filler = [](InfillPattern pattern) -> std::unique_ptr<Fill> {
+        switch (pattern) {
+#if ORCA_INFILL_TPMSD
+        case ipTpmsD: return std::make_unique<FillTpmsD>();
+#endif
+#if ORCA_INFILL_TPMSFK
+        case ipTpmsFK: return std::make_unique<FillTpmsFK>();
+#endif
+        default: return std::make_unique<FillGyroid>();
+        }
+    };
+    auto fill = [pattern, &field, &native_filler](const ExPolygon &expolygon, double z) {
+        const std::unique_ptr<Fill> filler = native_filler(pattern);
         filler->spacing           = 0.45;
         filler->angle             = float(M_PI / 7.);
         filler->z                 = z;
@@ -2540,47 +2545,8 @@ TEST_CASE("Monotonic line top surfaces print their gap fill next to their lines 
 
 TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]")
 {
-    const std::map<InfillPattern, std::type_index> classes{
-        {ipMonotonic, typeid(FillMonotonic)},
-        {ipMonotonicLine, typeid(FillMonotonicLines)},
-        {ipRectilinear, typeid(FillRectilinear)},
-        {ipAlignedRectilinear, typeid(FillAlignedRectilinear)},
-        {ipZigZag, typeid(FillZigZag)},
-        {ipCrossZag, typeid(FillCrossZag)},
-        {ipLockedZag, typeid(FillLockedZag)},
-        // The type information of these classes is emitted with their first virtual function, in a file a build may
-        // leave out.
-#if ORCA_INFILL_LINE
-        {ipLine, typeid(FillLine)},
-#endif
-        {ipGrid, typeid(FillGrid)},
-        {ipTriangles, typeid(FillTriangles)},
-        {ipStars, typeid(FillStars)},
-        {ipCubic, typeid(FillCubic)},
-        {ipAdaptiveCubic, typeid(FillAdaptive::Filler)},
-        {ipQuarterCubic, typeid(FillQuarterCubic)},
-        {ipSupportCubic, typeid(FillAdaptive::Filler)},
-        {ipLightning, typeid(FillLightning::Filler)},
-        {ipHoneycomb, typeid(FillHoneycomb)},
-        {ip3DHoneycomb, typeid(Fill3DHoneycomb)},
-        {ipLateralHoneycomb, typeid(FillLateralHoneycomb)},
-        {ipLateralLattice, typeid(FillLateralLattice)},
-        {ipCrossHatch, typeid(FillCrossHatch)},
-#if ORCA_INFILL_TPMSD
-        {ipTpmsD, typeid(FillTpmsD)},
-#endif
-#if ORCA_INFILL_TPMSFK
-        {ipTpmsFK, typeid(FillTpmsFK)},
-#endif
-        {ipGyroid, typeid(FillGyroid)},
-        {ipConcentric, typeid(FillConcentric)},
-        {ipSpiralInset, typeid(FillSpiralInset)},
-        {ipHilbertCurve, typeid(FillHilbertCurve)},
-        {ipArchimedeanChords, typeid(FillArchimedeanChords)},
-        {ipOctagramSpiral, typeid(FillOctagramSpiral)},
-        {ipSupportBase, typeid(FillSupportBase)},
-        {ipConcentricInternal, typeid(FillConcentricInternal)}};
-
+    // Every row creates a FillLibrary, which runs the class of the row in its pattern library
+    // (tests/infill_patterns/test_builtin_equivalence.cpp).
     auto filler_class = [](Fill *created) {
         const std::unique_ptr<Fill> filler(created);
         REQUIRE(filler != nullptr);
@@ -2591,9 +2557,10 @@ TEST_CASE("Infill patterns create their filler classes", "[Fill][InfillRegistry]
         CAPTURE(int(pattern.id));
         const std::type_index created = filler_class(Fill::new_from_type(pattern.id));
         if (pattern.available()) {
-            const auto it = classes.find(pattern.id);
-            REQUIRE(it != classes.end());
-            CHECK(created == it->second);
+            REQUIRE(InfillPatternRegistry::binding(pattern.id) != nullptr);
+            CHECK(created == std::type_index(typeid(FillLibrary)));
+            const std::unique_ptr<Fill> filler(Fill::new_from_type(pattern.id));
+            CHECK(static_cast<const FillLibrary&>(*filler).pattern() == pattern.id);
         }
         if (! pattern.internal()) {
             CAPTURE(pattern.key);

@@ -1,10 +1,7 @@
 #ifndef slic3r_FillConcentricInternal_hpp_
 #define slic3r_FillConcentricInternal_hpp_
 
-#include "libslic3r/ExtrusionEntity.hpp"
 #include "FillBase.hpp"
-
-namespace Slic3r { class Surface; }
 
 namespace Slic3r {
 
@@ -12,7 +9,9 @@ class FillConcentricInternal : public Fill
 {
 public:
     ~FillConcentricInternal() override = default;
-    void fill_surface_extrusion(const Surface *surface, const FillParams &params, ExtrusionEntitiesPtr &out) override;
+    // The variable width loops of each of Fill::no_overlap_expolygons, which Fill::append_concentric_internal_extrusions()
+    // extrudes.
+    ThickPolylines concentric_internal_lines(const FillParams &params);
     bool is_self_crossing() override { return false; }
 
 protected:

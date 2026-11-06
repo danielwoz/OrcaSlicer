@@ -197,6 +197,17 @@ echo -n "[9/9] Generating Linux app..."
     fi
     cp -fl "${ORIGINAL_BINARY_LOCATION}" "$BIN_DIR/@SLIC3R_APP_CMD@"
 
+    # The built-in infill pattern libraries that CMake staged next to the binary go where the application looks for them
+    # in an AppImage ($APPDIR/lib/orca-slicer/infill_patterns). Every print is refused while one is missing, so the
+    # folder must hold exactly the files of the build's manifest (empty when the libraries are linked in) and its copy.
+    INFILL_PATTERN_MANIFEST="infill_patterns/manifest.txt"
+    INFILL_PATTERN_DIR=""
+    if [ -f "$INFILL_PATTERN_MANIFEST" ] && grep -q . "$INFILL_PATTERN_MANIFEST"; then
+        INFILL_PATTERN_DIR="$LIB_DIR/orca-slicer/infill_patterns"
+        copy_directory_if_present "$(dirname "${ORIGINAL_BINARY_LOCATION}")/infill_patterns" "$INFILL_PATTERN_DIR"
+        python3 "${REPO_ROOT}/scripts/check_infill_pattern_libs.py" --manifest "$INFILL_PATTERN_MANIFEST" --exact "$INFILL_PATTERN_DIR"
+    fi
+
     # Bundle the embedded Python runtime (interpreter + stdlib) that CMake staged
     # next to the binary. OrcaSlicer resolves PYTHONHOME at <resources_dir>/../lib/python,
     # which is $APPDIR/lib/python (resources_dir is $APPDIR/resources). Staging it here,
@@ -443,6 +454,10 @@ EOF
 
     if [ -x "${CHECK_SCRIPT}" ] && [ -z "${ORCA_SKIP_APPIMAGE_AUDIT}" ]; then
         "${CHECK_SCRIPT}" "$APPDIR" "$BIN_DIR/@SLIC3R_APP_CMD@"
+    fi
+    # The packaged binary finds and binds every pattern library.
+    if [ -n "$INFILL_PATTERN_DIR" ]; then
+        "$BIN_DIR/@SLIC3R_APP_CMD@" --check-infill-patterns
     fi
 # } &> $ROOT/Build.log # Capture all command output
 echo "done"

@@ -14,20 +14,7 @@
 #include <boost/algorithm/string/trim.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <boost/log/trivial.hpp>
-#include <boost/nowide/convert.hpp>
 #include <boost/nowide/cstdlib.hpp>
-
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
 
 #include "libslic3r_version.h"
 #include "../ClipperUtils.hpp"
@@ -36,6 +23,7 @@
 #include "../format.hpp"
 #include "FillPlugin.hpp"
 #include "InfillPatternRegistry.hpp"
+#include "SharedLibrary.hpp"
 
 namespace Slic3r {
 namespace {
@@ -44,69 +32,17 @@ namespace fs = boost::filesystem;
 
 // ---- Platform ----
 
-#ifdef _WIN32
-using Library = HMODULE;
-fs::path    path_from_utf8(const std::string &utf8) { return fs::path(boost::nowide::widen(utf8)); }
-std::string path_to_utf8(const fs::path &path) { return boost::nowide::narrow(path.wstring()); }
+using SharedLibrary::path_from_utf8;
+using SharedLibrary::path_to_utf8;
 
-std::string windows_error_message(DWORD code)
+// A broken plugin fails here; its symbols stay private to it.
+SharedLibrary::Handle open_library(const fs::path &path, std::string &error)
 {
-    wchar_t *buffer = nullptr;
-    const DWORD length = ::FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                                          nullptr, code, 0, reinterpret_cast<wchar_t*>(&buffer), 0, nullptr);
-    std::string message = length > 0 ? boost::nowide::narrow(buffer, size_t(length)) : "error " + std::to_string(code);
-    ::LocalFree(buffer);
-    boost::algorithm::trim(message);
-    return message;
-}
-
-// The plugin's own directory and the default directories are searched for its dependencies; never the current one.
-// A broken library or a missing dependency is reported as an error instead of a system message box.
-Library open_library(const fs::path &path, std::string &error)
-{
-    DWORD previous_mode = 0;
-    ::SetThreadErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX, &previous_mode);
-    Library     lib  = ::LoadLibraryExW(path.wstring().c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-    const DWORD code = ::GetLastError();
-    ::SetThreadErrorMode(previous_mode, nullptr);
+    SharedLibrary::Handle lib = SharedLibrary::open(path, error);
     if (lib == nullptr)
-        error = "cannot load the library: " + windows_error_message(code);
+        error = "cannot load the library: " + error;
     return lib;
 }
-void *find_symbol(Library lib, const char *name) { return reinterpret_cast<void*>(::GetProcAddress(lib, name)); }
-void  close_library(Library lib) { ::FreeLibrary(lib); }
-// Whether the library is loaded in this process, by anyone; it is not loaded by this call.
-bool  library_loaded(const fs::path &path)
-{
-    HMODULE module = nullptr;
-    return ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, path.wstring().c_str(), &module) != 0;
-}
-#else
-using Library = void*;
-fs::path    path_from_utf8(const std::string &utf8) { return fs::path(utf8); }
-std::string path_to_utf8(const fs::path &path) { return path.string(); }
-
-// Every symbol is resolved now, so a broken plugin fails here; its symbols stay private to it.
-Library open_library(const fs::path &path, std::string &error)
-{
-    Library lib = ::dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
-    if (lib == nullptr) {
-        const char *message = ::dlerror();
-        error = std::string("cannot load the library: ") + (message ? message : "unknown error");
-    }
-    return lib;
-}
-void *find_symbol(Library lib, const char *name) { return ::dlsym(lib, name); }
-void  close_library(Library lib) { ::dlclose(lib); }
-// Whether the library is loaded in this process, by anyone; it is not loaded by this call.
-bool  library_loaded(const fs::path &path)
-{
-    Library lib = ::dlopen(path.string().c_str(), RTLD_LAZY | RTLD_NOLOAD);
-    if (lib != nullptr)
-        ::dlclose(lib);
-    return lib != nullptr;
-}
-#endif
 
 bool is_plugin_file_name(const fs::path &path)
 {
@@ -126,7 +62,7 @@ bool                              s_disabled = false;
 std::set<fs::path>                s_scanned_dirs;
 std::set<fs::path>                s_seen_files;
 // Libraries whose entry ran; never unloaded, their entry may have started threads or registered atexit handlers.
-std::vector<Library>              s_libraries;
+std::vector<SharedLibrary::Handle> s_libraries;
 // Addresses stay valid while patterns are appended.
 std::deque<InfillPluginPattern>   s_patterns;
 // Every load that reported a plugin or an error, and the ones among them that reported an error.
@@ -421,13 +357,18 @@ void append_error(std::string &error, const std::string &message)
 }
 
 // Calls the entry of an opened library and registers its patterns into load. Returns false for a library without the
-// entry, which is closed again.
-bool register_plugin(Library lib, InfillPluginLoad &load)
+// entry, which is closed again. A library that carries built-in patterns is closed again without calling anything.
+bool register_plugin(SharedLibrary::Handle lib, InfillPluginLoad &load)
 {
-    const auto entry = reinterpret_cast<orca_infill_plugin_entry_v1_fn>(find_symbol(lib, ORCA_INFILL_ENTRY_V1));
+    if (SharedLibrary::symbol(lib, ORCA_INFILL_BUILTIN_ENTRY_V1) != nullptr) {
+        SharedLibrary::close(lib);
+        load.error = "a built-in pattern library outside the application folder; ignored";
+        return true;
+    }
+    const auto entry = reinterpret_cast<orca_infill_plugin_entry_v1_fn>(SharedLibrary::symbol(lib, ORCA_INFILL_ENTRY_V1));
     if (entry == nullptr) {
         // OrcaSlicer took nothing from the library, so it holds no reference into it.
-        close_library(lib);
+        SharedLibrary::close(lib);
         load.error = "not an infill plugin: it does not export " ORCA_INFILL_ENTRY_V1;
         return false;
     }
@@ -505,13 +446,13 @@ fs::path load_file(InfillPluginLoad &load)
     // A file loaded before reports neither a plugin nor an error.
     if (! s_seen_files.insert(canonical).second)
         return {};
-    Library lib = open_library(canonical, load.error);
+    SharedLibrary::Handle lib = open_library(canonical, load.error);
     if (lib == nullptr)
         return {};
     if (std::find(s_libraries.begin(), s_libraries.end(), lib) != s_libraries.end()) {
         // A library loaded before under another name, such as a hard link or a path spelt differently: the system
         // returned the loaded one with one more reference.
-        close_library(lib);
+        SharedLibrary::close(lib);
         return {};
     }
     return register_plugin(lib, load) ? fs::path() : canonical;
@@ -604,7 +545,8 @@ orca_infill_status call_infill_plugin(const InfillPluginPattern &pattern, const 
     } catch (...) {
     }
     t_generating = previous;
-    return status;
+    // The reserved codes belong to the built-in pattern libraries; a plugin that returns one broke the ABI rules.
+    return status == ORCA_INFILL_ERR_STATE || status == ORCA_INFILL_ERR_CANCELED ? ORCA_INFILL_ERR_EXCEPTION : status;
 }
 
 // ---- Loading ----
@@ -714,7 +656,7 @@ std::vector<InfillPluginLoad> load_infill_plugins(const std::vector<std::string>
                 out.emplace_back(std::move(load));
         }
         for (auto &[load, library] : without_entry)
-            if (library_loaded(library))
+            if (SharedLibrary::loaded(library))
                 BOOST_LOG_TRIVIAL(debug) << "Infill plugin directory " << dir << ": " << load.path << " is a library that another one loaded";
             else if (report(load))
                 out.emplace_back(std::move(load));

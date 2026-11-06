@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <boost/algorithm/string/trim_all.hpp>
 #include <cmath>
+#include <sstream>
 #include <string>
 #include "slic3r/GUI/OpenGLManager.hpp"
 #include <boost/filesystem/operations.hpp>
@@ -59,6 +60,7 @@
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/AppConfig.hpp"
+#include "libslic3r/Fill/InfillPatternLibraries.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/Preset.hpp"
 
@@ -456,7 +458,12 @@ wxString TroubleshootDialog::GetSysInfoAll()
           + "Memory    :  " + GetRAMinfo() + "RAM" + "\n"
           + "Renderer  :  " + GetGPUinfo() + "\n"
           + "Monitors  :  " + GetMONinfo();
-    return info;
+    // Orca: the built-in infill pattern libraries with their status and build id, without the folder, whose path may
+    // include the user's name.
+    std::ostringstream patterns;
+    print_builtin_infill_patterns(patterns, false);
+    info += "\n" + wxString::FromUTF8(patterns.str());
+    return info.Trim();
 };
 
 /*

@@ -26,6 +26,14 @@ add_library(test_common INTERFACE)
 target_compile_definitions(test_common INTERFACE TEST_DATA_DIR=R"\(${TEST_DATA_DIR}\)" PROFILES_DIR=R"\(${PROFILES_DIR}\)" CATCH_CONFIG_FAST_COMPILE)
 target_include_directories(test_common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Every test executable loads the built-in infill pattern libraries before its first test, from the folder they are
+# copied to for the tests (src/infill_patterns/CMakeLists.txt), as the application loads them at start-up.
+get_property(_infill_pattern_dir GLOBAL PROPERTY ORCA_INFILL_PATTERN_TEST_DIR)
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/common/$<CONFIG>/infill_pattern_libraries.h
+     CONTENT "#pragma once\n#define ORCA_TEST_INFILL_PATTERN_DIR \"${_infill_pattern_dir}\"\n#define ORCA_TEST_INFILL_PATTERN_SUFFIX \"${CMAKE_SHARED_MODULE_SUFFIX}\"\n")
+target_include_directories(test_common INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/common/$<CONFIG>)
+target_sources(test_common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/common/infill_patterns_listener.cpp)
+
 if (APPLE)
     target_link_libraries(test_common INTERFACE "-liconv -framework IOKit" "-framework CoreFoundation" -lc++)
 endif()
@@ -83,8 +91,10 @@ function(orcaslicer_copy_test_dlls)
     endif()
 endfunction()
 
-# Register Catch2 tags as CTest labels so `ctest -L`/`-LE` can filter by tag.
+# Register Catch2 tags as CTest labels so `ctest -L`/`-LE` can filter by tag. A test executable runs with the built-in
+# infill pattern libraries, so they are built first.
 function(orcaslicer_discover_tests TARGET)
+    add_dependencies(${TARGET} orca_infill_patterns)
     catch_discover_tests(${TARGET} ADD_TAGS_AS_LABELS)
 endfunction()
 
@@ -94,6 +104,8 @@ add_subdirectory(slic3rutils)
 add_subdirectory(fff_print)
 # Loads infill pattern plugins, which extend process-wide option lists; kept apart from the other suites.
 add_subdirectory(infill_plugin)
+# Runs every built-in infill pattern on a shared corpus of filler calls.
+add_subdirectory(infill_patterns)
 add_subdirectory(sla_print)
 add_subdirectory(filament_group)
 

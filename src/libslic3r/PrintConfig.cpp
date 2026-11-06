@@ -12779,6 +12779,12 @@ CLIActionsConfigDef::CLIActionsConfigDef()
     def->tooltip = L("This outputs the model\u2019s information.");
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("check_infill_patterns", coBool);
+    def->label = L("Check infill pattern libraries");
+    def->tooltip = L("Print the value, token, file, status and load time of every built-in infill pattern library, then "
+                     "exit with 0 only when every one is loaded.");
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("inspect_mesh", coBool);
     def->label = L("Inspect mesh (JSON to stdout)");
     def->tooltip = L("Print a JSON summary of each loaded object to stdout, then exit: its bounding boxes and the "

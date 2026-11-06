@@ -83,6 +83,7 @@
 #include "Model.hpp"
 #include "format.hpp"
 #include "LocalesUtils.hpp"
+#include "Fill/InfillPatternLibraries.hpp"
 #include "Fill/InfillPatternRegistry.hpp"
 #include "Fill/InfillPlugins.hpp"
 #include <float.h>
@@ -2022,6 +2023,15 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 
     if (extruders.empty())
         return { L("No extrusions under current settings.") };
+
+    // Orca: a built-in infill pattern whose pattern library is missing or damaged has nothing to slice it with, and a
+    // fallback would print differently: refuse every print until OrcaSlicer is reinstalled.
+    if (! InfillPatternRegistry::all_bound()) {
+        std::string message;
+        for (InfillPattern row : InfillPatternRegistry::unbound())
+            message += (message.empty() ? "" : "\n") + builtin_infill_library_error(row);
+        return { message };
+    }
 
     // Orca: an infill pattern this build leaves out is printed with its fallback; report where one is selected.
     if (! InfillPatternRegistry::all_available()) {

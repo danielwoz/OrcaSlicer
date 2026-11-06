@@ -9,7 +9,7 @@ set_target_properties(sample_infill_lines PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${
 set(_fixture_defines "")
 set(_fixture_targets "")
 foreach (_fixture WRONG_ABI NO_ENTRY BAD_KEY DUPLICATE_KEY CONNECT_WITHOUT_CLIP FAILS_ODD_LAYERS THROWS TOP_ONLY INSET BAD_PARAM
-                  DECLINES)
+                  DECLINES BUILTIN_ENTRY)
     string(TOLOWER ${_fixture} _name)
     if (_fixture STREQUAL "DECLINES")
         # Written in C, so the ABI header is compiled as C.

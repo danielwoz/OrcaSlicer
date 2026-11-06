@@ -38,6 +38,7 @@
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/PresetBundle.hpp"
+#include "libslic3r/Fill/InfillPatternLibraries.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/TriangleMesh.hpp"
@@ -450,6 +451,14 @@ int slice_all_printers(const std::string &vendor, const std::string &outdir)
 {
     install_slice_context_log_sink();
     PlaceholderParser::check_inactive_branches = true;
+
+    // The validator ships as a single file: the built-in infill pattern libraries are linked into it.
+    for (const BuiltinInfillLoad &load : bind_builtin_infill_patterns(linked_builtin_infill_patterns()))
+        if (! load.error.empty()) {
+            std::cout << "Infill pattern library " << load.file << ": " << load.error << std::endl;
+            std::cout << "Validation failed" << std::endl;
+            return 1;
+        }
 
     if (!outdir.empty()) {
         boost::system::error_code ec;

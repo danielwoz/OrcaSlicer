@@ -3,8 +3,6 @@
 #include "../ExPolygon.hpp"
 #include "../Surface.hpp"
 #include "../Geometry.hpp"
-#include "../Layer.hpp"
-#include "../Print.hpp"
 #include "../ShortestPath.hpp"
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/Point.hpp"
@@ -301,27 +299,6 @@ void OctreeDeleter::operator()(Octree *p) {
     delete p;
 }
 
-std::vector<double> adaptive_fill_line_spacing(const PrintObject &print_object)
-{
-    std::vector<double>        line_spacing(print_object.num_printing_regions(), 0.);
-    const std::vector<double> &nozzle_diameters               = print_object.print()->config().nozzle_diameter.values;
-    double                     max_nozzle_diameter            = *std::max_element(nozzle_diameters.begin(), nozzle_diameters.end());
-    double                     default_infill_extrusion_width = Flow::auto_extrusion_width(FlowRole::frInfill, float(max_nozzle_diameter));
-    for (size_t region_id = 0; region_id < line_spacing.size(); ++ region_id) {
-        const PrintRegionConfig &config = print_object.printing_region(region_id).config();
-        if (config.sparse_infill_density <= 0 || ! is_octree_infill_pattern(config.sparse_infill_pattern) ||
-            std::none_of(print_object.layers().begin(), print_object.layers().end(), [region_id](const Layer *layer) {
-                return region_id < layer->regions().size() && ! layer->regions()[region_id]->fill_surfaces.empty();
-            }))
-            continue;
-        double extrusion_width = config.sparse_infill_line_width.get_abs_value(max_nozzle_diameter);
-        if (extrusion_width == 0.)
-            extrusion_width = default_infill_extrusion_width;
-        line_spacing[region_id] = extrusion_width / ((config.sparse_infill_density / 100.0f) * 0.333333333f) * config.fill_multiline.value;
-    }
-    return line_spacing;
-}
-
 // Context used by generate_infill_lines() when recursively traversing an octree in a DDA fashion
 // (Digital Differential Analyzer).
 struct FillContext
@@ -362,18 +339,6 @@ struct FillContext
     // Final output
     std::vector<Line>                   output_lines;
 };
-
-static constexpr double octree_rot[3] = { 5.0 * M_PI / 4.0, Geometry::deg2rad(215.264), M_PI / 6.0 };
-
-Eigen::Quaterniond transform_to_world()
-{
-    return Eigen::AngleAxisd(octree_rot[2], Vec3d::UnitZ()) * Eigen::AngleAxisd(octree_rot[1], Vec3d::UnitY()) * Eigen::AngleAxisd(octree_rot[0], Vec3d::UnitX());
-}
-
-Eigen::Quaterniond transform_to_octree()
-{
-    return Eigen::AngleAxisd(- octree_rot[0], Vec3d::UnitX()) * Eigen::AngleAxisd(- octree_rot[1], Vec3d::UnitY()) * Eigen::AngleAxisd(- octree_rot[2], Vec3d::UnitZ());
-}
 
 #ifndef NDEBUG
 // Verify that the traversal order of the octree children matches the line direction,

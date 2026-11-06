@@ -74,7 +74,8 @@ private:
 
 // Factory of the plugin rows of InfillPatternRegistry.
 Fill* make_plugin_fill(const InfillPatternDescriptor &pattern);
-// Calls the pattern's generate(), appending what it emits to out.
+// Calls the pattern's generate(), appending what it emits to out. A status reserved for the built-in pattern libraries
+// is returned as ORCA_INFILL_ERR_EXCEPTION.
 orca_infill_status call_infill_plugin(const InfillPluginPattern &pattern, const orca_infill_request &request, Polylines &out);
 
 } // namespace Slic3r

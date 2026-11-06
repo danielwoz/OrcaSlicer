@@ -15004,9 +15004,9 @@ void Plater::priv::set_bed_shape(const Pointfs       &shape,
     //Orca: reduce resolution for large bed printer
     BoundingBoxf bed_size = get_extents(shape);
     if (bed_size.size().maxCoeff() <= LARGE_BED_THRESHOLD)
-        SCALING_FACTOR = SCALING_FACTOR_INTERNAL;
+        set_scaling_factor(SCALING_FACTOR_INTERNAL);
     else
-        SCALING_FACTOR = SCALING_FACTOR_INTERNAL_LARGE_PRINTER;
+        set_scaling_factor(SCALING_FACTOR_INTERNAL_LARGE_PRINTER);
 
     //BBS: add shape position
     Vec2d shape_position = partplate_list.get_current_shape_position();

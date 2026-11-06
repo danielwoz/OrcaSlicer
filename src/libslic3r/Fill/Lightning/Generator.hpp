@@ -6,6 +6,7 @@
 
 #include "libslic3r/BoundingBox.hpp"
 #include "Layer.hpp"
+#include "libslic3r/Fill/LightningParams.hpp"
 #include "libslic3r/Polygon.hpp"
 #include "libslic3r/libslic3r.h"
 
@@ -16,8 +17,6 @@
 
 namespace Slic3r 
 {
-class PrintObject;
-
 namespace FillLightning
 {
 
@@ -47,8 +46,10 @@ public:
      * This generator will pre-compute things in preparation of generating
      * Lightning Infill for the infill areas in that mesh. The infill areas must
      * already be calculated at this point.
+     * \param infill_outlines The infill areas of each layer of the mesh, as
+     * lightning_infill_outlines() gathers them.
      */
-    explicit Generator(const PrintObject &print_object, const std::function<void()> &throw_on_cancel_callback);
+    Generator(const GeneratorParams &params, const std::vector<Polygons> &infill_outlines, const std::function<void()> &throw_on_cancel_callback);
 
     /*!
      * Get a tree of paths generated for a certain layer of the mesh.
@@ -61,11 +62,14 @@ public:
      */
     const Layer& getTreesForLayer(const size_t& layer_id) const;
 
+    // The number of layers getTreesForLayer() has trees for.
+    size_t layer_count() const { return m_lightning_layers.size(); }
+
     std::vector<Polygons>& Overhangs() { return m_overhang_per_layer; }
 
     float infilll_extrusion_width() const { return m_infill_extrusion_width; }
 
-    Generator(PrintObject* m_object, std::vector<Polygons>& contours, std::vector<Polygons>& overhangs, const std::function<void()> &throw_on_cancel_callback, float density = 0.15);
+    Generator(const GeneratorParams &params, std::vector<Polygons>& contours, std::vector<Polygons>& overhangs, const std::function<void()> &throw_on_cancel_callback);
 
 protected:
     /*!
@@ -76,12 +80,12 @@ protected:
      * only when support is generated. For this pattern, we also need to
      * generate overhang areas for the inside of the model.
      */
-    void generateInitialInternalOverhangs(const PrintObject &print_object, const std::function<void()> &throw_on_cancel_callback);
+    void generateInitialInternalOverhangs(const std::vector<Polygons> &infill_outlines, const std::function<void()> &throw_on_cancel_callback);
 
     /*!
      * Calculate the tree structure of all layers.
      */
-    void generateTrees(const PrintObject &print_object, const std::function<void()> &throw_on_cancel_callback);
+    void generateTrees(const std::vector<Polygons> &infill_outlines, const std::function<void()> &throw_on_cancel_callback);
     void generateTreesforSupport(std::vector<Polygons>& contours, const std::function<void()> &throw_on_cancel_callback);
 
     float m_infill_extrusion_width;

@@ -10,9 +10,7 @@
 #include "Geometry.hpp"
 #include "CommonDefs.hpp"
 #include "PrintBase.hpp"
-#include "Fill/FillAdaptive.hpp"
-#include "Fill/FillLightning.hpp"
-#include "Fill/AdaptiveInfillField.hpp"
+#include "Fill/InfillObjectState.hpp"
 
 #include "BoundingBox.hpp"
 #include "ExtrusionEntityCollection.hpp"
@@ -90,18 +88,6 @@ enum SupportNecessaryType {
     Cantilever,
     LargeOverhang,
 };
-
-namespace FillAdaptive {
-    struct Octree;
-    struct OctreeDeleter;
-    using OctreePtr = std::unique_ptr<Octree, OctreeDeleter>;
-};
-
-namespace FillLightning {
-    class Generator;
-    struct GeneratorDeleter;
-    using GeneratorPtr = std::unique_ptr<Generator, GeneratorDeleter>;
-}; // namespace FillLightning
 
 // Print step IDs for keeping track of the print state.
 // The Print steps are applied in this order.
@@ -407,7 +393,8 @@ public:
     double                      max_z() const         { return m_max_z; }
     // Centering offset of the sliced mesh from the scaled and rotated mesh of the model.
     const Point& 			     center_offset() const  { return m_center_offset; }
-    const AdaptiveInfillField*       adaptive_infill_field(AdaptiveInfillMode mode) const { return m_adaptive_infill_fields[size_t(mode)].get(); }
+    // The object states of the rows served by pattern libraries (Fill::object_state).
+    const InfillObjectStates&        infill_states() const { return m_infill_states; }
 
     // BBS
     void generate_support_preview();
@@ -653,10 +640,10 @@ private:
     void discover_horizontal_shells();
     void combine_infill();
     void _generate_support_material();
-    FillAdaptive::RegionOctrees prepare_adaptive_infill_data(
+    RegionOctrees prepare_adaptive_infill_data(
         const std::vector<std::pair<const Surface*, const Layer*>>& surfaces_w_layer) const;
-    FillLightning::GeneratorPtr prepare_lightning_infill_data();
-    AdaptiveInfillFields prepare_adaptive_infill_fields() const;
+    InfillObjectStatePtr prepare_lightning_infill_data();
+    void prepare_adaptive_infill_fields();
 
     // BBS
     SupportNecessaryType is_support_necessary();
@@ -704,10 +691,8 @@ private:
     // so that next call to make_perimeters() performs a union() before computing loops
     bool                    				m_typed_slices = false;
 
-    FillAdaptive::RegionOctrees             m_adaptive_fill_octrees;
     std::vector<BoundingBox>                m_separated_body_bboxes;
-    FillLightning::GeneratorPtr m_lightning_generator;
-    AdaptiveInfillFields m_adaptive_infill_fields;
+    InfillObjectStates   m_infill_states;
 
     std::vector < VolumeSlices >            firstLayerObjSliceByVolume;
     std::vector<groupedVolumeSlices>        firstLayerObjSliceByGroups;
