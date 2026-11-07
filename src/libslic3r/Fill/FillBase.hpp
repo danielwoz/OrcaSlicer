@@ -35,6 +35,7 @@ namespace Slic3r {
 
 class Surface;
 class AdaptiveInfillField;
+struct InfillObjectState;
 enum InfillPattern : int;
 
 namespace FillAdaptive {
@@ -47,6 +48,7 @@ public:
     InfillFailedException() : Slic3r::RuntimeError("Infill failed") {}
 };
 
+// Mirrored for the pattern libraries by orca_infill_lock (Fill/Library/BuiltinMirror.cpp, which checks its size).
 struct LockRegionParam
 {
     LockRegionParam() {}
@@ -56,6 +58,8 @@ struct LockRegionParam
     std::map<Flow, ExPolygons>  skeleton_flow_params;
 };
 
+// Every field but config is mirrored for the pattern libraries by orca_infill_fill_params (Fill/Library/), whose
+// BuiltinMirror.cpp counts the fields: a new field needs a C field there.
 struct FillParams
 {
     bool        full_infill() const { return density > 0.9999f; }
@@ -139,6 +143,10 @@ static_assert(IsTriviallyCopyable<FillParams>::value, "FillParams class is not P
 class Fill
 {
 public:
+    // Every member is mirrored for the pattern libraries by orca_infill_fill_state or passed in a field of its own
+    // (Fill/Library/BuiltinMirror.cpp): a new member needs a C field there, a member of FillLayout, whose size check fails
+    // the build for a member that changes the size of Fill, and a value in tests/infill_patterns/test_builtin_mirror.cpp.
+
     // Index of the layer.
     size_t      layer_id;
     // Z coordinate of the top print surface, in unscaled coordinates
@@ -167,10 +175,21 @@ public:
     // Radial coordinate inside the object for the adaptive TPMS infill
     const AdaptiveInfillField* adaptive_infill_field = nullptr;
 
-    // PrintConfig and PrintObjectConfig are used by infills that use Arachne (Concentric and FillEnsuring).
-    // Orca: also used by gap fill function.
+    // The object state of a pattern served by its pattern library (Fill/InfillObjectState.hpp), in place of the two
+    // members above and of FillLightning::Filler::generator.
+    const InfillObjectState* object_state = nullptr;
+
+    // The configurations of the print and of the object, which make_fills() and the anchoring of bridges set. print_config
+    // is read only to derive min_nozzle_diameter (set_config_values() in Fill.cpp). print_object_config is read by
+    // make_fills(), by gap fill and by the flow rate calibration order of fill_surface_extrusion(), which needs it
+    // whenever top solid infill is extruded. Neither reaches the pattern code or a pattern library.
     const PrintConfig       *print_config        = nullptr;
     const PrintObjectConfig *print_object_config = nullptr;
+    // Values of these configurations for the fillers, which also reach a pattern library: the smallest nozzle diameter
+    // of the printer in mm (0 when unknown), which sizes the Arachne walls of the concentric patterns, and
+    // calib_flowrate_topinfill_special_order of the object.
+    double      min_nozzle_diameter = 0.;
+    bool        calib_flowrate_topinfill_special_order = false;
 
     // BBS: all no overlap expolygons in same layer
     ExPolygons  no_overlap_expolygons;
@@ -207,6 +226,14 @@ public:
     // BBS: this method is used to fill the ExtrusionEntityCollection.
     // It call fill_surface by default
     virtual void fill_surface_extrusion(const Surface *surface, const FillParams &params, ExtrusionEntitiesPtr &out);
+    // The extrusions of Locked Zag: the lines of each flow FillLockedZag::fill_surface_locked_zag() generated, extruded
+    // with that flow adjusted to Fill::spacing.
+    void append_locked_zag_extrusions(std::vector<std::pair<Polylines, Flow>> &&multi_width_polyline, const FillParams &params,
+                                      ExtrusionEntitiesPtr &out) const;
+    // The extrusions of concentric internal: the lines FillConcentricInternal::concentric_internal_lines() generated, as
+    // variable width paths of the flow adjusted to Fill::spacing.
+    void append_concentric_internal_extrusions(const ThickPolylines &thick_polylines_out, const FillParams &params,
+                                               ExtrusionEntitiesPtr &out) const;
 
 protected:
     Fill() :

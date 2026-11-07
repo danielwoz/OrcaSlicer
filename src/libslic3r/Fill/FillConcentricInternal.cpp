@@ -1,16 +1,12 @@
 #include "../ClipperUtils.hpp"
 #include "../ExPolygon.hpp"
-#include "../Surface.hpp"
-#include "../VariableWidth.hpp"
 #include "Arachne/WallToolPaths.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
-#include "libslic3r/ExtrusionEntity.hpp"
 #include "libslic3r/Polyline.hpp"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Polygon.hpp"
 #include "libslic3r/Arachne/utils/ExtrusionLine.hpp"
-#include "libslic3r/ExtrusionEntityCollection.hpp"
 
 #include "FillConcentricInternal.hpp"
 #include <cassert>
@@ -21,16 +17,11 @@
 #include <utility>
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/Flow.hpp"
-#include "libslic3r/PrintConfig.hpp"
-
-namespace Slic3r { class Surface; }
 
 namespace Slic3r {
 
-void FillConcentricInternal::fill_surface_extrusion(const Surface* surface, const FillParams& params, ExtrusionEntitiesPtr& out)
+ThickPolylines FillConcentricInternal::concentric_internal_lines(const FillParams& params)
 {
-    assert(this->print_config != nullptr && this->print_object_config != nullptr);
-
     ThickPolylines thick_polylines_out;
 
     for (size_t i = 0; i < this->no_overlap_expolygons.size(); ++i) {
@@ -43,7 +34,6 @@ void FillConcentricInternal::fill_surface_extrusion(const Surface* surface, cons
         coord_t                loops_count = std::max(bbox_size.x(), bbox_size.y()) / min_spacing + 1;
         Polygons               polygons = to_polygons(expolygon);
 
-        double min_nozzle_diameter = *std::min_element(print_config->nozzle_diameter.values.begin(), print_config->nozzle_diameter.values.end());
         Arachne::WallToolPathsParams input_params;
         input_params.min_bead_width = 0.85 * min_nozzle_diameter;
         input_params.min_feature_size = 0.25 * min_nozzle_diameter;
@@ -99,21 +89,7 @@ void FillConcentricInternal::fill_surface_extrusion(const Surface* surface, cons
         reorder_by_shortest_traverse(thick_polylines_out);
     }
 
-    ExtrusionEntityCollection *coll_nosort = new ExtrusionEntityCollection();
-    coll_nosort->no_sort = this->no_sort(); //can be sorted inside the pass
-
-    if (!thick_polylines_out.empty()) {
-        Flow new_flow = params.flow.with_spacing(float(this->spacing));
-        ExtrusionEntityCollection gap_fill;
-        variable_width(thick_polylines_out, params.extrusion_role, new_flow, gap_fill.entities);
-        coll_nosort->append(std::move(gap_fill.entities));
-    }
-
-    if (!coll_nosort->entities.empty())
-        out.push_back(coll_nosort);
-    else
-        delete coll_nosort;
-
+    return thick_polylines_out;
 }
 
 

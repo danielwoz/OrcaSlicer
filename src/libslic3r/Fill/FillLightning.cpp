@@ -1,5 +1,4 @@
 #include "../ClipperUtils.hpp"
-#include "../Print.hpp"
 #include "libslic3r/ExPolygon.hpp"
 #include "libslic3r/Fill/Lightning/Layer.hpp"
 #include "FillBase.hpp"
@@ -44,15 +43,6 @@ void Filler::_fill_surface_single(
     fill_lines = Slic3r::intersection_pl(std::move(fill_lines), expolygon);
 
     chain_or_connect_infill(std::move(fill_lines), expolygon, polylines_out, this->spacing, params);
-}
-
-void GeneratorDeleter::operator()(Generator *p) {
-    delete p;
-}
-
-GeneratorPtr build_generator(const PrintObject &print_object, const std::function<void()> &throw_on_cancel_callback)
-{
-    return GeneratorPtr(new Generator(print_object, throw_on_cancel_callback));
 }
 
 } // namespace Slic3r::FillAdaptive

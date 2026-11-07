@@ -11,15 +11,13 @@
 #include <utility>
 #include <vector>
 
-#include <tbb/blocked_range.h>
-#include <tbb/parallel_for.h>
-
 #include "../BoundingBox.hpp"
 #include "../ClipperUtils.hpp"
 #include "../ExPolygon.hpp"
 #include "FillBase.hpp"
 #include "../Execution/ExecutionTBB.hpp"
 #include "../MarchingSquares.hpp"
+#include "../ParallelFor.hpp"
 #include "../Point.hpp"
 #include "../Polygon.hpp"
 #include "../Polyline.hpp"
@@ -89,11 +87,11 @@ void distance_transform_axis(std::vector<float> &grid, const Vec3i32 &size, int 
     const int    a1     = (axis + 1) % 3;
     const int    a2     = (axis + 2) % 3;
     const size_t stride = axis == 0 ? 1 : axis == 1 ? size_t(size.x()) : size_t(size.x()) * size.y();
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, size_t(size[a1]) * size[a2]), [&](const tbb::blocked_range<size_t> &range) {
+    parallel_for(0, int64_t(size[a1]) * size[a2], 1, [&](int64_t begin, int64_t end) {
         std::vector<float>  f(n), d(n);
         std::vector<int>    v(n);
         std::vector<double> s(n + 1);
-        for (size_t line = range.begin(); line < range.end(); ++line) {
+        for (size_t line = size_t(begin); line < size_t(end); ++line) {
             Vec3i32 idx;
             idx[axis]          = 0;
             idx[a1]            = int(line % size[a1]);
@@ -232,8 +230,8 @@ AdaptiveInfillField::AdaptiveInfillField(const std::vector<Slice> &slices, const
     const size_t       sy = size_t(m_size.x());
     const size_t       sz = sy * m_size.y();
     std::vector<float> depth(sz * m_size.z(), 0.f);
-    tbb::parallel_for(tbb::blocked_range<int>(0, m_size.z()), [&](const tbb::blocked_range<int> &range) {
-        for (int k = range.begin(); k < range.end(); ++k) {
+    parallel_for(0, m_size.z(), 1, [&](int64_t begin, int64_t end) {
+        for (int k = int(begin); k < int(end); ++k) {
             const double z  = m_origin.z() + k * m_cell;
             auto         it = std::lower_bound(slices.begin(), slices.end(), z, [](const Slice &s, double z) { return s.top_z < z; });
             if (it != slices.end() && z > it->bottom_z)
@@ -312,8 +310,8 @@ AdaptiveInfillField::AdaptiveInfillField(const std::vector<Slice> &slices, const
         while (!peaks.empty()) {
             const size_t      front = peaks.front();
             std::vector<char> joins(peaks.size(), 0);
-            tbb::parallel_for(tbb::blocked_range<size_t>(1, peaks.size()), [&](const tbb::blocked_range<size_t> &range) {
-                for (size_t k = range.begin(); k < range.end(); ++k)
+            parallel_for(1, int64_t(peaks.size()), 1, [&](int64_t begin, int64_t end) {
+                for (size_t k = size_t(begin); k < size_t(end); ++k)
                     if (!necked(front, peaks[k]))
                         joins[k] = std::sqrt(depth[peaks[k]]) >= std::sqrt(depth[front]) - 1.f ? 1 : 2;
             });
@@ -382,8 +380,8 @@ AdaptiveInfillField::AdaptiveInfillField(const std::vector<Slice> &slices, const
             values = std::move(smoothed);
         }
     };
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, m_lobes.size()), [&](const tbb::blocked_range<size_t> &range) {
-        for (size_t l = range.begin(); l < range.end(); ++l) {
+    parallel_for(0, int64_t(m_lobes.size()), 1, [&](int64_t begin, int64_t end) {
+        for (size_t l = size_t(begin); l < size_t(end); ++l) {
             const int   id   = lobe_body[l];
             const Body &body = m_bodies[id];
             Lobe       &lobe = m_lobes[l];

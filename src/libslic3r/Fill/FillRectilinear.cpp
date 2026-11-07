@@ -4035,49 +4035,4 @@ void FillLockedZag::fill_surface_locked_zag (const Surface *                    
     generate_for_different_flow(this->lock_param.skin_flow_params, skin_lines);
 }
 
-void FillLockedZag::fill_surface_extrusion(const Surface *surface, const FillParams &params, ExtrusionEntitiesPtr &out)
-{
-    Polylines polylines;
-    ThickPolylines thick_polylines;
-    std::vector<std::pair<Polylines, Flow>> multi_width_polyline;
-    try {
-        this->fill_surface_locked_zag(surface, params, multi_width_polyline);
-    }
-    catch (InfillFailedException&) {}
-
-    if (!thick_polylines.empty() || !multi_width_polyline.empty()) {
-        // Save into layer.
-        ExtrusionEntityCollection* eec = nullptr;
-        out.push_back(eec = new ExtrusionEntityCollection());
-        // Only concentric fills are not sorted.
-        eec->no_sort = this->no_sort();
-        size_t idx   = eec->entities.size();
-        {
-            for (std::pair<Polylines, Flow> &poly_with_flow: multi_width_polyline) {
-                // calculate actual flow from spacing (which might have been adjusted by the infill
-                // pattern generator)
-                double flow_mm3_per_mm = poly_with_flow.second.mm3_per_mm();
-                double flow_width      = poly_with_flow.second.width();
-                if (params.using_internal_flow) {
-                    // if we used the internal flow we're not doing a solid infill
-                    // so we can safely ignore the slight variation that might have
-                    // been applied to f->spacing
-                } else {
-                    Flow new_flow   = poly_with_flow.second.with_spacing(this->spacing);
-                    flow_mm3_per_mm = new_flow.mm3_per_mm();
-                    flow_width      = new_flow.width();
-                }
-            extrusion_entities_append_paths(
-                eec->entities, std::move(poly_with_flow.first),
-                params.extrusion_role,
-                flow_mm3_per_mm, float(flow_width), poly_with_flow.second.height());
-            }
-        }
-        if (!params.can_reverse) {
-            for (size_t i = idx; i < eec->entities.size(); i++)
-                eec->entities[i]->set_reverse();
-        }
-    }
-}
-
 } // namespace Slic3r

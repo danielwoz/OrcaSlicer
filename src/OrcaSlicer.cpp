@@ -105,6 +105,9 @@
 #include "libslic3r/Platform.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/Fill/InfillPatternRegistry.hpp"
+#include "libslic3r/Fill/InfillPatternLibraries.hpp"
+#include "libslic3r/Fill/InfillPlugins.hpp"
 #include "libslic3r/SLAPrint.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/Format/AMF.hpp"
@@ -1332,6 +1335,15 @@ int CLI::run(int argc, char **argv)
         return CLI_INVALID_PARAMS;
     }
     BOOST_LOG_TRIVIAL(info) << "finished setup params, argc="<< argc << std::endl;
+    // Orca: --check-infill-patterns reports the built-in infill pattern libraries and exits, with 0 only when every one
+    // is bound.
+    if (std::find(m_actions.begin(), m_actions.end(), "check_infill_patterns") != m_actions.end()) {
+        print_builtin_infill_patterns(boost::nowide::cout);
+        boost::nowide::cout.flush();
+        const bool all_bound = InfillPatternRegistry::all_bound();
+        shutdown_builtin_infill_patterns();
+        return all_bound ? 0 : 1;
+    }
     std::string temp_path = per_user_temp_dir(wxFileName::GetTempDir().utf8_str().data(), per_user_temp_id());
     // Some consumers write into the temp root directly, so create it up front.
     try {
@@ -1521,6 +1533,9 @@ int CLI::run(int argc, char **argv)
 #endif // SLIC3R_GUI
     }
 
+    // Orca: no infill plugin loads from here on, so configurations may be read on other threads.
+    InfillPatternRegistry::seal();
+
     // Setup logging for CLI
     const ConfigOptionInt* opt_loglevel = m_config.opt<ConfigOptionInt>("debug");
     if (opt_loglevel) {
@@ -1533,6 +1548,9 @@ int CLI::run(int argc, char **argv)
     if (opt_logfile) {
         set_logging_file(opt_logfile->value);
     }
+    // Orca: the infill pattern libraries and plugins loaded before the log was set up.
+    log_builtin_infill_pattern_loads();
+    log_infill_plugin_loads();
 
     global_begin_time = (long long)Slic3r::Utils::get_current_time_utc();
     BOOST_LOG_TRIVIAL(warning) << boost::format("cli mode, Current OrcaSlicer Version %1%")%SoftFever_VERSION;
@@ -7043,9 +7061,10 @@ int CLI::run(int argc, char **argv)
                         else if (!warnings.empty()) {
                             for (const auto& w : warnings) {
                                 BOOST_LOG_TRIVIAL(warning) << "got warnings: "<< w.string << std::endl;
-                                if (w.type == STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE) {
+                                if (w.type == STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE || w.type == STRING_EXCEPT_INFILL_PLUGIN_PARAMS) {
                                     boost::nowide::cerr << "warning: " << w.string << std::endl;
-                                    cli_record_warning(sliced_info, "infill_pattern_unavailable",
+                                    cli_record_warning(sliced_info,
+                                                       w.type == STRING_EXCEPT_INFILL_PATTERN_UNAVAILABLE ? "infill_pattern_unavailable" : "infill_plugin_params",
                                                        nlohmann::json{{"plate_id", index + 1}, {"key", w.opt_key}, {"text", w.string}});
                                 }
                             }
@@ -8145,6 +8164,7 @@ int CLI::run(int argc, char **argv)
     boost::nowide::cout.flush();
     boost::nowide::cerr.flush();
 
+    shutdown_builtin_infill_patterns();
     return 0;
 }
 
@@ -8205,6 +8225,22 @@ bool CLI::setup(int argc, char **argv)
     set_local_dir((path_resources / "i18n").string());
     set_sys_shapes_dir((path_resources / "shapes").string());
     set_custom_gcodes_dir((path_resources / "custom_gcodes").string());
+
+    // Orca: the built-in infill patterns come from the pattern libraries next to the application, whatever the infill
+    // plugin options say. A missing or damaged library leaves its pattern unbound, and Print::validate() then refuses
+    // every print.
+    for (const BuiltinInfillLoad &load : load_builtin_infill_patterns(builtin_infill_pattern_folders(path_to_binary)))
+        if (! load.error.empty())
+            boost::nowide::cerr << "error: infill pattern library " << load.file << ": " << load.error << std::endl;
+
+    // Orca: the patterns of infill plugins are values of the pattern options, so the plugins load before the command
+    // line is parsed. The GUI adds the plugins of its data directory before it loads presets.
+    if (const InfillPluginStartup startup = infill_plugin_startup(argc, argv, path_to_binary); startup.disabled)
+        disable_infill_plugins();
+    else
+        for (const InfillPluginLoad &load : load_infill_plugins(startup.dirs))
+            if (! load.error.empty())
+                boost::nowide::cerr << "warning: infill plugin " << load.path << ": " << load.error << std::endl;
 
     // Parse all command line options into a DynamicConfig.
     // If any option is unsupported, print usage and abort immediately.

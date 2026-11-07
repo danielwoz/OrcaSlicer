@@ -32,9 +32,10 @@
 #include "Utils.hpp"
 #include "Fill/FillAdaptive.hpp"
 #include "Fill/Fill.hpp"
-#include "Fill/FillLightning.hpp"
 #include "Fill/AdaptiveInfillField.hpp"
+#include "Fill/InfillPatternLibraries.hpp"
 #include "Fill/InfillPatternRegistry.hpp"
+#include "Fill/Library/BuiltinMirror.hpp"
 #include "format.hpp"
 #include "AABBTreeIndirect.hpp"
 #include "AABBTreeLines.hpp"
@@ -87,7 +88,7 @@
 #include <tbb/concurrent_unordered_map.h>
 #include "ExtrusionEntityCollection.hpp"
 #include "Fill/FillBase.hpp"
-#include "Fill/Lightning/Generator.hpp"
+#include "Fill/LightningParams.hpp"
 #include "SurfaceCollection.hpp"
 #include "TriangleMesh.hpp"
 #include "BeltBrim.hpp"
@@ -825,7 +826,7 @@ void PrintObject::infill()
             [this](const tbb::blocked_range<size_t>& range) {
                 for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++ layer_idx) {
                     m_print->throw_if_canceled();
-                    m_layers[layer_idx]->make_fills(&m_adaptive_fill_octrees, this->m_lightning_generator.get());
+                    m_layers[layer_idx]->make_fills(&m_infill_states.octrees, m_infill_states.lightning.get());
                 }
             }
         );
@@ -1167,7 +1168,7 @@ static std::vector<indexed_triangle_set> split_mesh_by_body(const PrintObject &o
     return bodies;
 }
 
-FillAdaptive::RegionOctrees PrintObject::prepare_adaptive_infill_data(
+RegionOctrees PrintObject::prepare_adaptive_infill_data(
     const std::vector<std::pair<const Surface *, const Layer *>> &surfaces_w_layer) const
 {
     using namespace FillAdaptive;
@@ -1179,15 +1180,18 @@ FillAdaptive::RegionOctrees PrintObject::prepare_adaptive_infill_data(
     octrees.region_set.assign(line_spacing.size(), -1);
     for (size_t region_id = 0; region_id < line_spacing.size(); ++ region_id)
         if (line_spacing[region_id] > 0.) {
-            const std::pair<double, bool> spacing(line_spacing[region_id], this->printing_region(region_id).config().sparse_infill_pattern == ipSupportCubic);
+            const InfillPattern           pattern = this->printing_region(region_id).config().sparse_infill_pattern.value;
+            const std::pair<double, bool> spacing(line_spacing[region_id], pattern == ipSupportCubic);
             const auto                    it = std::find(spacings.begin(), spacings.end(), spacing);
             octrees.region_set[region_id]    = int(it - spacings.begin());
-            if (it == spacings.end())
+            if (it == spacings.end()) {
                 spacings.push_back(spacing);
+                // The pattern library of the row the region slices builds the octrees of the set.
+                octrees.sets.push_back({ sliced_infill_pattern(pattern).id });
+            }
         }
     if (spacings.empty() || this->layers().empty())
         return {};
-    octrees.sets.resize(spacings.size());
 
     indexed_triangle_set mesh = this->model_object()->raw_indexed_triangle_set();
     // Rotate mesh and build octree on it with axis-aligned (standart base) cubes.
@@ -1252,15 +1256,18 @@ FillAdaptive::RegionOctrees PrintObject::prepare_adaptive_infill_data(
             m_print->throw_if_canceled();
             const auto [set, body] = to_build[i];
             const bool object      = body == num_bodies;
+            const orca_infill_octree_input input = BuiltinMirror::octree_input(object ? mesh : body_meshes[body],
+                                                                               object ? overhangs.front() : body_overhangs[body],
+                                                                               spacings[set].first, spacings[set].second);
             (object ? octrees.sets[set].object : octrees.sets[set].bodies[body]) =
-                build_octree(object ? mesh : body_meshes[body], object ? overhangs.front() : body_overhangs[body], spacings[set].first,
-                             spacings[set].second);
+                prepare_builtin_infill_state(octrees.sets[set].row, ORCA_INFILL_STATE_OCTREE, &input,
+                                             [this]() { m_print->throw_if_canceled(); });
         }
     });
     return octrees;
 }
 
-FillLightning::GeneratorPtr PrintObject::prepare_lightning_infill_data()
+InfillObjectStatePtr PrintObject::prepare_lightning_infill_data()
 {
     bool has_lightning_infill = false;
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id)
@@ -1268,21 +1275,36 @@ FillLightning::GeneratorPtr PrintObject::prepare_lightning_infill_data()
             has_lightning_infill = true;
             break;
         }
+    if (! has_lightning_infill)
+        return {};
 
-    return has_lightning_infill ? FillLightning::build_generator(std::as_const(*this), [this]() -> void { this->throw_if_canceled(); }) : FillLightning::GeneratorPtr();
+    // The pattern library of the lightning row builds the generator from the parameters and the outlines of this object.
+    const std::function<void()>         throw_if_canceled = [this]() -> void { this->throw_if_canceled(); };
+    const std::vector<Polygons>         outlines          = FillLightning::lightning_infill_outlines(*this, throw_if_canceled);
+    const BuiltinMirror::LightningInput input(FillLightning::lightning_infill_params(*this), outlines);
+    return prepare_builtin_infill_state(ipLightning, ORCA_INFILL_STATE_LIGHTNING, &input.get(), throw_if_canceled);
 }
 
-AdaptiveInfillFields PrintObject::prepare_adaptive_infill_fields() const
+void PrintObject::prepare_adaptive_infill_fields()
 {
-    AdaptiveInfillFields fields;
+    m_infill_states.fields.clear();
+    // A field is built for every mode a region grades below 100 %; every graded region of the mode reads it. The pattern
+    // library of each row the regions slice in the mode builds the field of that row.
     std::array<bool, size_t(AdaptiveInfillMode::Count)> modes{};
+    std::vector<std::pair<InfillPattern, AdaptiveInfillMode>> fields;
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id)
         if (const PrintRegionConfig &config = this->printing_region(region_id).config();
-            config.sparse_infill_density > 0 && config.sparse_infill_density < 100 && is_adaptive_infill_pattern(config.sparse_infill_pattern))
-            modes[size_t(config.adaptive_infill_mode.value)] = true;
+            config.sparse_infill_density > 0 && is_adaptive_infill_pattern(config.sparse_infill_pattern)) {
+            const AdaptiveInfillMode mode = config.adaptive_infill_mode.value;
+            if (config.sparse_infill_density < 100)
+                modes[size_t(mode)] = true;
+            const std::pair<InfillPattern, AdaptiveInfillMode> key(sliced_infill_pattern(config.sparse_infill_pattern).id, mode);
+            if (std::find(fields.begin(), fields.end(), key) == fields.end())
+                fields.push_back(key);
+        }
     modes[size_t(AdaptiveInfillMode::Disabled)] = false;
     if (std::find(modes.begin(), modes.end(), true) == modes.end() || m_layers.empty())
-        return fields;
+        return;
 
     std::vector<AdaptiveInfillField::Slice> slices;
     slices.reserve(m_layers.size());
@@ -1292,16 +1314,17 @@ AdaptiveInfillFields PrintObject::prepare_adaptive_infill_fields() const
         bbox.merge(get_extents(layer->lslices));
     }
     if (!bbox.defined)
-        return fields;
-    for (size_t mode = 0; mode < modes.size(); ++mode) {
-        if (!modes[mode])
+        return;
+    const BuiltinMirror::FieldInput input(slices, bbox);
+    for (const auto &[row, mode] : fields) {
+        if (!modes[size_t(mode)])
             continue;
-        // Without a field, the infill falls back to the regular pattern.
-        auto field = std::make_unique<AdaptiveInfillField>(slices, bbox, AdaptiveInfillMode(mode), [this]() { m_print->throw_if_canceled(); });
-        if (!field->empty())
-            fields[mode] = std::move(field);
+        // An empty field gives no state, and the infill falls back to the regular pattern.
+        const orca_infill_field_input field = input.get(mode);
+        if (InfillObjectStatePtr state = prepare_builtin_infill_state(row, ORCA_INFILL_STATE_ADAPTIVE_FIELD, &field,
+                                                                      [this]() { m_print->throw_if_canceled(); }))
+            m_infill_states.fields.push_back({{row, mode}, std::move(state)});
     }
-    return fields;
 }
 
 void PrintObject::clear_layers()
@@ -1707,6 +1730,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "infill_overhang_angle") {
             steps.emplace_back(posInfill);
         } else if (opt_key == "sparse_infill_pattern"
+                   || opt_key == "infill_plugin_params"
                    || opt_key == "adaptive_infill_mode"
                    || opt_key == "adaptive_infill_interior_density"
                    || opt_key == "adaptive_infill_gradient"
@@ -3338,7 +3362,7 @@ void PrintObject::bridge_over_infill()
         });
 
         // Use the modified surfaces to generate expanded lightning anchors
-        this->m_lightning_generator = this->prepare_lightning_infill_data();
+        this->m_infill_states.lightning = this->prepare_lightning_infill_data();
 
         // And now restore carefully the original surfaces, again using move to avoid reallocation and preserving the validity of the
         // pointers in surface candidates
@@ -3362,8 +3386,8 @@ void PrintObject::bridge_over_infill()
             }
         }
 
-        this->m_adaptive_fill_octrees = this->prepare_adaptive_infill_data(surfaces_w_layer);
-        this->m_adaptive_infill_fields    = this->prepare_adaptive_infill_fields();
+        this->m_infill_states.octrees = this->prepare_adaptive_infill_data(surfaces_w_layer);
+        this->prepare_adaptive_infill_fields();
 
         std::vector<size_t> layers_to_generate_infill;
         for (const auto &pair : surfaces_by_layer) {
@@ -3379,8 +3403,8 @@ void PrintObject::bridge_over_infill()
             for (size_t job_idx = r.begin(); job_idx < r.end(); job_idx++) {
                 size_t lidx = layers_to_generate_infill[job_idx];
                 infill_lines.at(
-                    lidx) = po->get_layer(lidx)->generate_sparse_infill_polylines_for_anchoring(&po->m_adaptive_fill_octrees,
-                                                                                                po->m_lightning_generator.get());
+                    lidx) = po->get_layer(lidx)->generate_sparse_infill_polylines_for_anchoring(&po->m_infill_states.octrees,
+                                                                                                po->m_infill_states.lightning.get());
             }
         });
 #ifdef DEBUG_BRIDGE_OVER_INFILL

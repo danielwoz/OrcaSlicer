@@ -83,7 +83,9 @@
 #include "Model.hpp"
 #include "format.hpp"
 #include "LocalesUtils.hpp"
+#include "Fill/InfillPatternLibraries.hpp"
 #include "Fill/InfillPatternRegistry.hpp"
+#include "Fill/InfillPlugins.hpp"
 #include <float.h>
 
 #include <algorithm>
@@ -2022,6 +2024,15 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
     if (extruders.empty())
         return { L("No extrusions under current settings.") };
 
+    // Orca: a built-in infill pattern whose pattern library is missing or damaged has nothing to slice it with, and a
+    // fallback would print differently: refuse every print until OrcaSlicer is reinstalled.
+    if (! InfillPatternRegistry::all_bound()) {
+        std::string message;
+        for (InfillPattern row : InfillPatternRegistry::unbound())
+            message += (message.empty() ? "" : "\n") + builtin_infill_library_error(row);
+        return { message };
+    }
+
     // Orca: an infill pattern this build leaves out is printed with its fallback; report where one is selected.
     if (! InfillPatternRegistry::all_available()) {
         auto warn_unavailable = [&add_warning](const ConfigBase &config, const ObjectBase *object) {
@@ -2048,6 +2059,29 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                 warn_unavailable(volume->config.get(), object);
             for (const auto &range : model_object.layer_config_ranges)
                 warn_unavailable(range.second.get(), object);
+        }
+    }
+
+    // Orca: report infill plugin parameters that are ignored or corrected.
+    if (InfillPatternRegistry::has_runtime_patterns()) {
+        std::set<std::string> messages;
+        for (const PrintObject *object : m_objects)
+            for (size_t i = 0; i < object->num_printing_regions(); ++ i) {
+                const PrintRegionConfig &config = object->printing_region(i).config();
+                for (InfillPattern pattern : { config.sparse_infill_pattern.value, config.top_surface_pattern.value,
+                                               config.bottom_surface_pattern.value, config.internal_solid_infill_pattern.value })
+                    if (infill_pattern(pattern).plugin()) {
+                        std::vector<std::string> pattern_messages;
+                        infill_plugin_param_values(pattern, config.infill_plugin_params.value, &pattern_messages);
+                        messages.insert(pattern_messages.begin(), pattern_messages.end());
+                    }
+            }
+        for (const std::string &message : messages) {
+            StringObjectException w;
+            w.string  = message;
+            w.opt_key = "infill_plugin_params";
+            w.type    = STRING_EXCEPT_INFILL_PLUGIN_PARAMS;
+            add_warning(std::move(w));
         }
     }
 

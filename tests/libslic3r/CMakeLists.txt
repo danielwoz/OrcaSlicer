@@ -110,6 +110,8 @@ endif()
 # libslic3r links Draco privately; test_drc.cpp encodes its own fixtures.
 find_package(Draco REQUIRED)
 target_link_libraries(${_TEST_NAME}_tests test_common libslic3r draco::draco Catch2::Catch2WithMain)
+# test_adaptive_infill_field.cpp, test_fill_plane_path.cpp and test_lightning.cpp test pattern code itself.
+orca_link_infill_pattern_objects(${_TEST_NAME}_tests)
 target_include_directories(${_TEST_NAME}_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 if (SLIC3R_PCH AND NOT SLIC3R_SYNTAXONLY)
     add_precompiled_header(${_TEST_NAME}_tests ${CMAKE_SOURCE_DIR}/src/libslic3r/pchheader.hpp FORCEINCLUDE)
